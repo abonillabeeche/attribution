@@ -17,10 +17,12 @@ import pytest
 import attribution_lib
 from attribution_lib.events import EventManager
 from attribution_lib.exceptions import InvalidRuleParams, RuleAcceptsNoParamsError
+from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rules_engine import (
     CascadeScope,
     CollectorRule,
     DuplicateRuleError,
+    ExtractorRule,
     FilterPriority,
     FilterRule,
     OutcomePriority,
@@ -219,6 +221,35 @@ def test_failed_load_restores_symptom_predicates(tmp_path):
     assert engine.symptom_predicates == {}
 
 
+def test_explicit_empty_accumulator_source_filters_override_rule_sources(tmp_path):
+    rule_file = tmp_path / "empty_accumulator_sources.py"
+    rule_file.write_text(
+        "\n".join(
+            [
+                "from attribution_lib.rules_engine import ExtractorAccumulator, ObservationSource, extractor_accumulator_def",
+                "",
+                "rule_sources = {ObservationSource.APPLOG}",
+                "",
+                "@extractor_accumulator_def('ExplicitEmpty', 'trigger', source_filters=set())",
+                "class ExplicitEmpty(ExtractorAccumulator):",
+                "    def process_line(self, source): pass",
+                "    @property",
+                "    def is_consuming(self): return False",
+                "    def finalize(self): return []",
+                "",
+                "@extractor_accumulator_def('Omitted', 'trigger')",
+                "class Omitted(ExplicitEmpty): pass",
+            ]
+        )
+    )
+
+    engine = RuleEngine()
+    engine.load(str(rule_file))
+
+    assert engine.extractor_accumulator_rules["ExplicitEmpty"].source_filters == frozenset()
+    assert engine.extractor_accumulator_rules["Omitted"].source_filters == frozenset({ObservationSource.APPLOG})
+
+
 # Filter priority ordering tests
 class TestFilterPriorityOrdering:
     """Tests for the filter rule priority/ordering system."""
@@ -292,6 +323,21 @@ class TestFilterPriorityOrdering:
 
         with pytest.raises(DuplicateRuleError, match="Duplicate rule 'Dup'"):
             engine.register_rule(self._make_rule("Dup", FilterPriority.MID))
+
+    def test_duplicate_name_across_rule_types_raises(self):
+        """A name registered as one rule type cannot be reused as a different type."""
+        engine = RuleEngine()
+        engine.register_rule(
+            ExtractorRule(
+                name="Shared",
+                author="test",
+                location=RuleLocation("first.py", 7),
+                match_re=r"x",
+                processor=lambda groups, hostname, source, context: [],
+            )
+        )
+        with pytest.raises(DuplicateRuleError, match="first at first.py:7"):
+            engine.register_rule(self._make_rule("Shared", FilterPriority.MID))
 
     def test_backward_compatible_default_priority(self):
         """Existing rules without explicit priority preserve registration order."""
