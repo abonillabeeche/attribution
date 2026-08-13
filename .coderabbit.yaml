@@ -1,0 +1,5 @@
+# Repository-specific override
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
