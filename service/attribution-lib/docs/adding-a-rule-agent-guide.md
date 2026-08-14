@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 # Agent Guide: Add a New Attribution Rule
 
 Use this procedure to add an Attribution Library rule with a minimal, evidence-backed diff.
@@ -169,7 +179,7 @@ Run the complete Attribution Library gate from the repository root.
 Run Ruff only when the change includes Python.
 
 ```bash
-uv run ruff format --config ruff.toml
+uv run ruff format --check --config ruff.toml
 uv run ruff check --config ruff.toml
 ```
 
