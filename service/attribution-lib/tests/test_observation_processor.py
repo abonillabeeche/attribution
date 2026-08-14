@@ -16,8 +16,8 @@ from attribution_lib.rule_types.definitions import (
     RuleContext,
     RuleLocation,
 )
+from attribution_lib.rule_types.extractor import ExtractorEngine
 from attribution_lib.rule_types.observation import ObservationProcessor
-from attribution_lib.rules_engine import RuleEngine
 from attribution_lib.sources import Source
 
 
@@ -56,18 +56,16 @@ def test_overlapping_accumulator_instances_are_preserved():
                 )
             ]
 
-    engine = RuleEngine()
-    engine.register_rule(
-        ExtractorAccumulatorRule(
-            name="overlap",
-            author="test",
-            location=RuleLocation(__file__, 0),
-            match_re="start",
-            factory=RecordingAccumulator,
-            source_filters=frozenset({ObservationSource.APPLOG}),
-        )
+    rule = ExtractorAccumulatorRule(
+        name="overlap",
+        author="test",
+        location=RuleLocation(__file__, 0),
+        match_re="start",
+        factory=RecordingAccumulator,
+        source_filters=frozenset({ObservationSource.APPLOG}),
     )
-    engine.finalize()
+    engine = ExtractorEngine(accumulator_rules={rule.name: rule})
+    engine.build_matcher()
     emitted = []
     processor = ObservationProcessor(
         engine=engine,
@@ -92,7 +90,7 @@ def test_overlapping_accumulator_instances_are_preserved():
 
 def test_processing_requires_an_initialized_matcher():
     processor = ObservationProcessor(
-        engine=RuleEngine(),
+        engine=ExtractorEngine(),
         source_type=ObservationSource.APPLOG,
         context=RuleContext(),
         event_adder=lambda *_args: None,

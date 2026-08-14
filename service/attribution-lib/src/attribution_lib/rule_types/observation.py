@@ -12,7 +12,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import Optional, Protocol
 
 from loguru import logger
 
@@ -22,13 +22,30 @@ from attribution_lib.resources import get_single_node
 from attribution_lib.rule_types.definitions import (
     ExtractorAccumulator,
     ExtractorAccumulatorRule,
+    ExtractorRule,
     RuleContext,
     RuleId,
+    TwoStageSourceMatcher,
 )
 from attribution_lib.sources import Source
 
-if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RuleEngine
+
+class ExtractorSource(Protocol):
+    """What an ObservationProcessor needs from whatever supplies its rules.
+
+    Structural rather than nominal so the processor does not care whether it
+    is handed the coordinator or the extractor sub-engine.
+    """
+
+    @property
+    def extractor_rules(self) -> dict[RuleId, ExtractorRule]: ...
+
+    @property
+    def extractor_accumulator_rules(self) -> dict[RuleId, ExtractorAccumulatorRule]: ...
+
+    @property
+    def matcher(self) -> Optional[TwoStageSourceMatcher]: ...
+
 
 _SOFT_LINE_LIMIT = 100
 _ACTIVE_COUNT_WARN = 10
@@ -56,7 +73,7 @@ class ObservationProcessor:
     - Active count high-water mark: warns once if too many active
     """
 
-    engine: "RuleEngine"
+    engine: ExtractorSource
     source_type: ObservationSource
     context: RuleContext
     event_adder: Callable
