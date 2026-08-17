@@ -179,7 +179,9 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# A tenant report still removes the node from service, so classify it as Fail InfraHW.
+# A tenant report is the initiating repair request: the tenant marks the host
+# faulty and asks the CSP to remove/repair it. When a correlated provider
+# termination is also present, this initiating cause is the primary symptom.
 outcome_symptom(
     "CSP Event Tenant Reported As Faulty",
     outcome="Fail InfraHW",
@@ -190,7 +192,9 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# Provider-initiated host maintenance terminated the VM.
+# Provider host-maintenance termination is the resulting CSP action. It is
+# primary by itself, but supporting evidence when paired with a tenant report
+# for the same job/node (resolved by CspEventPrecedenceAndCascades).
 outcome_symptom(
     "CSP Event Terminated by CSP",
     outcome="Fail InfraHW",
