@@ -12,24 +12,75 @@ its affiliates is strictly prohibited.
 
 # Add a New Attribution Rule
 
-Use this guide to add an extractor rule to the NVIDIA Attribution Library.
-An extractor rule recognizes evidence in one observation and emits a structured event that later stages use to produce a diagnosis.
+## What Is an Attribution Rule?
+
+An attribution rule tells the rules engine how to interpret a repeatable piece of workload evidence.
+For example, a rule can say: when an application log reports a particular checkpoint error, record that error against the node that produced the message.
+Rules turn source-specific logs, metrics, and infrastructure events into consistent facts that the engine can compare and combine into a diagnosis.
+
+This guide focuses on **extractor rules**.
+An extractor is a first-stage rule that recognizes raw evidence and emits a structured event: an internal record of the matched fact and where it came from.
+Later rule stages can correlate or suppress these events, turn them into symptoms (stable labels for recognized evidence), and help select the final outcome.
+
+Adding a rule here means changing the checked-in bundled rule catalog and shipping that change with the Attribution Service.
+It is not a rule uploaded at runtime through an API or user interface.
+During private preview, the bundled rules are not a supported customer extension point.
+
+## Why Add a Rule?
+
+The engine can recognize only the evidence patterns represented in its rule catalog.
+Add or extend an extractor rule when available workload evidence contains a reliable pattern that the catalog does not yet represent correctly.
+Common reasons include:
+
+- A new application, driver, platform, or software version reports a known failure with a previously unseen log or metric signature.
+- A signal describes a new symptom that Attribution should retain when it determines affected nodes or the final diagnosis.
+- A later correlation rule needs a structured event that is not currently extracted.
+
+A rule is not always the right change.
+If evidence is not reaching the Service, add or modify the connector that collects and submits it.
+If the Service cannot parse the submitted source or format, add support for that input instead.
+Extend an existing rule when the new input has the same meaning and output as evidence it already handles.
+
+## Key Terms
+
+- **Observation:** One submission of related evidence plus context describing its source, format, time interval, timezone, and associated resources, such as nodes. An observation can contain application-log lines, syslog entries, Prometheus samples, or cloud-provider events.
+- **Observation source:** The kind of evidence in an observation, such as `APPLOG`, `SYSLOG`, `NODE_METRICS`, or `CSP_EVENT`. Extractor rules declare which sources they accept.
+- **Observation entry:** One item within an observation, such as one log line or metric sample. Most extractors evaluate entries individually.
+- **Extractor rule:** A rule that looks for a pattern in observation entries and emits a structured event when it matches. A simple extractor can be declarative TOML, where the pattern and output are configuration data. More complex processing can use Python referenced from TOML.
+- **Event:** An internal record created from matched evidence. It carries a type and payload together with provenance such as the timestamp, affected resources, matching log line or metric sample, observation context, and credited rule.
+- **Symptom:** A stable label for recognized evidence, such as `checkpoint permission denied`. Bad-node and interesting-node events carry symptoms so different raw inputs can be compared consistently.
+- **Bad-node event:** Evidence that associates a symptom with a node suspected of contributing to the workload failure.
+- **Interesting-node event:** Node-associated evidence retained as context that does not, by itself, mark the node as bad.
+- **Generic event:** A typed fact with an arbitrary payload for later rules to consume. It does not directly emit a bad-node or interesting-node symptom.
+- **Symptom registry:** The list of known symptom prefixes and metadata that tells later stages whether a symptom can influence the outcome or suppress less useful symptoms caused by the same failure.
+- **Outcome or verdict:** The final workload-level diagnosis selected after the engine combines and refines the available evidence.
+
+## How an Extractor Rule Fits into Attribution
+
+At a high level, evidence moves through this pipeline:
+
+`raw evidence` → `observations` → `extractor rules` → `structured events` → `filter rules` → `symptoms linked to nodes` → `refiner rules` → `outcome`
+
+For example, an `APPLOG` observation might contain hundreds of lines from one workload.
+If one entry says `checkpoint save failed: Permission denied`, an extractor can emit a bad-node event with the symptom `checkpoint permission denied`.
+The event retains the matching line, affected node, and rule name as provenance.
+Later stages combine that symptom with other evidence and decide whether it contributes to the final diagnosis.
+
+The concrete processing flow is:
+
+1. A client, commonly the Blueprint after a connector collects evidence, submits an observation and its context to the Attribution Service.
+2. The library converts the observation into source-specific entries and applies rules that accept that source.
+3. A matching extractor emits a bad-node event, an interesting-node event, or a generic event.
+4. Filter rules correlate or suppress structured events before the engine turns them into node symptoms.
+5. Refiner rules combine symptoms, change whether they implicate a node, or discard redundant evidence. They use the symptom registry's vocabulary and metadata where needed.
+6. The remaining evidence determines the final attribution result while retaining the provenance chain that supports it.
+
+At startup, `setup_rules()` loads every top-level `*.py` and `*.toml` file under `src/attribution_lib/bundled_rules/`.
+Files ending in `*.test.toml` are test data and are not loaded as production rules.
+You do not need to add a declarative rule to a separate registration list.
 
 This guide assumes that you are comfortable editing Python and TOML, but that you have not worked in this codebase.
 Run all commands from `service/attribution-lib` unless a command states otherwise.
-
-## Understand the Rule Flow
-
-The Attribution Library processes a new extractor rule through the following flow.
-
-1. `setup_rules()` loads every top-level `*.py` and `*.toml` file under `src/attribution_lib/bundled_rules/`.
-2. The rule matches observations from one or more declared sources, such as `APPLOG`, `SYSLOG`, or `NODE_METRICS`.
-3. The rule emits a bad-node event, an interesting-node event, or a generic event.
-4. A bad-node or interesting-node event carries a symptom string and credited rule name.
-5. The symptom registry resolves that string and supplies outcome and cascade metadata.
-
-Files ending in `*.test.toml` are test data and are not loaded as production rules.
-You do not need to add a declarative rule to a separate registration list.
 
 ## Gather the Required Evidence
 
