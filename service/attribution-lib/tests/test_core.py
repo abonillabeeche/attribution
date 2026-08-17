@@ -1800,6 +1800,36 @@ class TestSingleNodeNodeFail:
         assert source.rule == "slurm_failed_node_field"
         assert result.failed_node_resolution == "slurm_failed_node_field"
 
+    def test_explicit_failed_node_provenance_takes_priority_over_inference(self, event_stream, simple_job_factory):
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            failed_node="node-b",
+        )
+        stream = event_stream("test-job")
+        bad_node_result = calculate_bad_nodes(event_stream=stream, job_info=job_info)
+        inferred_source = job_info.source("NODE_FAILnode-a", "single_allocated_node_inference")
+        bad_node_result.my_bad_nodes.add(
+            ["node-a"],
+            SourceSet.new_one(self._NODE_FAILURE_SYMPTOM, inferred_source),
+        )
+
+        result = attribute(
+            event_stream=stream,
+            job_info=job_info,
+            bad_node_result=bad_node_result,
+            extract_job_metadata_from_logfile=False,
+        )
+
+        surviving_rules = {
+            source.rule
+            for node_group in result.bad_nodes_attr.my_bad_nodes.attributions.values()
+            if self._NODE_FAILURE_SYMPTOM in node_group.symptoms()
+            for source in node_group.attributions[self._NODE_FAILURE_SYMPTOM]
+        }
+        assert surviving_rules == {"single_allocated_node_inference", "slurm_failed_node_field"}
+        assert result.failed_node_resolution == "slurm_failed_node_field"
+
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
         job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"])
         assert job_info.failed_node is None or job_info.failed_node == ""
