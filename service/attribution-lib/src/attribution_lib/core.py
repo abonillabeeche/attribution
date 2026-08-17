@@ -24,6 +24,7 @@ from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import Source as ObservationSource
@@ -293,7 +294,33 @@ class AttributionResult:
     outcome_attr: SourceSet[OutcomeAttribution] = field(default_factory=lambda: SourceSet(OutcomeAttribution()))
     cancelled_by: Optional[str] = None
     event_stream: EventStream
+    failed_node_resolution: Optional[str] = None
     collectors: dict[str, Any] = field(default_factory=dict)
+
+
+def _resolve_failed_node_provenance(my_bad_nodes: JobNodeAttributions) -> Optional[str]:
+    """Return provenance for a surviving scheduler node-failure attribution.
+
+    Args:
+        my_bad_nodes: Final per-node attributions after outcome refiners.
+
+    Returns:
+        The stable provenance value, or ``None`` when no scheduler node-failure
+        attribution survives.
+    """
+    known_resolutions = {resolution.value for resolution in FailedNodeResolution}
+    resolutions: set[str] = set()
+    for node_group in my_bad_nodes.attributions.values():
+        if "Node failure reported by slurm" not in node_group.attributions:
+            continue
+        sources = node_group.attributions["Node failure reported by slurm"]
+        resolutions.update(source.rule for source in sources if source.rule in known_resolutions)
+
+    if FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value in resolutions:
+        return FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value
+    if FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value in resolutions:
+        return FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value
+    return None
 
 
 def calculate_symptoms(
@@ -388,6 +415,8 @@ def attribute(
         bad_node_result=bad_node_result,
         recorder=recorder,
     )
+
+    result.failed_node_resolution = _resolve_failed_node_provenance(result.bad_nodes_attr.my_bad_nodes)
 
     if run_collectors:
         result.collectors = attribution_lib.get_rules_engine().run_collectors(event_stream, job_info, rule_params)

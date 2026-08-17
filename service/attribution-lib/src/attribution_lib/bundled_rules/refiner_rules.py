@@ -24,6 +24,7 @@ from common.refiner_helpers import (
 from loguru import logger
 
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeholders
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
 from attribution_lib.job_info import NVRX_TAG, JobInfo
@@ -62,6 +63,8 @@ declare_event_types(
 declare_rule_names(
     "raw keywords",
     "remap SingleGPU_XID->XID",
+    FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+    FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
 )
 
 _REFINER_BASE = FilterPriority.FINAL
@@ -517,16 +520,18 @@ def scheduler_node_failure_refiner(context: RefinerContext):
     if job_info.state != "NODE_FAIL":
         return
 
-    failed_node_by_slurm = job_info.failed_node
-    if (failed_node_by_slurm is None or failed_node_by_slurm == "") and len(job_info.nodes) == 1:
+    failed_node = job_info.failed_node
+    resolution = FailedNodeResolution.SLURM_FAILED_NODE_FIELD
+    if (failed_node is None or failed_node == "") and len(job_info.nodes) == 1:
         # slurmdb did not record which node failed; on a single-node job the
         # sole allocated node is necessarily the one that failed.
-        failed_node_by_slurm = job_info.nodes[0]
+        failed_node = job_info.nodes[0]
+        resolution = FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE
     # explicit checks so an empty string can't attribute to a node-less key
-    if failed_node_by_slurm is not None and failed_node_by_slurm != "":
-        source = job_info.source(job_info.state + failed_node_by_slurm, "Node failure reported by slurm")
+    if failed_node is not None and failed_node != "":
+        source = job_info.source(job_info.state + failed_node, resolution.value)
         attr = SourceSet.new_one("Node failure reported by slurm", source)
-        my_bad_nodes.add([failed_node_by_slurm], attr)
+        my_bad_nodes.add([failed_node], attr)
 
 
 @refiner_def(

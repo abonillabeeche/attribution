@@ -11,14 +11,17 @@ from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import attribution_lib
 import pytest
+from common.refiner_helpers import _get_earliest_watchdog_source
+
+import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_outcome_reclassification_rules
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
 from attribution_lib.core import (
     AttributionResult,
     CalcBadNodesAttributionResult,
+    attribute,
     calculate_bad_nodes,
     calculate_symptoms,
 )
@@ -35,7 +38,6 @@ from attribution_lib.symptoms import (
     translate_and_prune_node_attributions,
 )
 from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
-from common.refiner_helpers import _get_earliest_watchdog_source
 from test_support.helpers import create_source_set, make_node_to_ranks
 
 
@@ -1759,6 +1761,16 @@ class TestSingleNodeNodeFail:
         calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=result.my_bad_nodes)
         return result.my_bad_nodes
 
+    def _attribution_result(self, event_stream, job_info):
+        stream = event_stream("test-job")
+        bad_node_result = calculate_bad_nodes(event_stream=stream, job_info=job_info)
+        return attribute(
+            event_stream=stream,
+            job_info=job_info,
+            bad_node_result=bad_node_result,
+            extract_job_metadata_from_logfile=False,
+        )
+
     def test_single_node_nodefail_no_failed_node_attributes_sole_node(self, event_stream, simple_job_factory):
         job_info = simple_job_factory(state="NODE_FAIL", nodes=["example-batch-node-00985"])
         assert job_info.failed_node is None or job_info.failed_node == ""
@@ -1768,6 +1780,25 @@ class TestSingleNodeNodeFail:
         assert "example-batch-node-00985" in my_bad_nodes.attributions
         assert self._NODE_FAILURE_SYMPTOM in my_bad_nodes["example-batch-node-00985"].symptoms()
         assert "" not in my_bad_nodes.attributions
+
+        source = next(iter(my_bad_nodes["example-batch-node-00985"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "single_allocated_node_inference"
+
+        result = self._attribution_result(event_stream, job_info)
+        assert result.failed_node_resolution == "single_allocated_node_inference"
+
+    def test_nodefail_with_failed_node_records_scheduler_field_provenance(self, event_stream, simple_job_factory):
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            failed_node="node-b",
+        )
+
+        result = self._attribution_result(event_stream, job_info)
+
+        source = next(iter(result.bad_nodes_attr.my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "slurm_failed_node_field"
+        assert result.failed_node_resolution == "slurm_failed_node_field"
 
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
         job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"])
@@ -1779,3 +1810,6 @@ class TestSingleNodeNodeFail:
             self._NODE_FAILURE_SYMPTOM not in my_bad_nodes[node].symptoms() for node in my_bad_nodes.attributions
         )
         assert "" not in my_bad_nodes.attributions
+
+        result = self._attribution_result(event_stream, job_info)
+        assert result.failed_node_resolution is None
