@@ -14,8 +14,7 @@ its affiliates is strictly prohibited.
 
 ## Scope: Extractor Rules
 
-NVIDIA Attribution does not have one rule type called an "attribution rule."
-Its rules engine has several stages with distinct rule types: extractors recognize input evidence, filters correlate or suppress the resulting events, and refiners adjust symptoms and attribution state in phases before and after outcome selection.
+NVIDIA Attribution's rules engine has several stages with distinct rule types: extractors recognize input evidence, filters correlate or suppress the resulting events, and refiners adjust symptoms and attribution state in phases before and after outcome selection.
 This guide covers only **extractor rules**.
 
 An extractor is a first-stage rule that recognizes a repeatable piece of workload evidence and emits a structured event.
@@ -79,6 +78,9 @@ The concrete processing flow is:
 At startup, `setup_rules()` loads every top-level `*.py` and `*.toml` file under `src/attribution_lib/bundled_rules/`.
 Files ending in `*.test.toml` are test data and are not loaded as production rules.
 You do not need to add a declarative rule to a separate registration list.
+
+This guide is the canonical workflow for adding extractor rules.
+The [`bundled_rules` README](../src/attribution_lib/bundled_rules/README.md) is a focused reference for the symptom registry and links back to this workflow.
 
 This guide assumes that you are comfortable editing Python and TOML, but that you have not worked in this codebase.
 Run all commands from `service/attribution-lib` unless a command states otherwise.
@@ -144,7 +146,8 @@ expect = "none"
 ```
 
 The enclosing TOML file normally provides file-level `author` and `sources` values.
-If you create a new file, set `author` to the person or team that owns and maintains the rule; use `author = "NVIDIA Attribution team"` only for rules owned by that team.
+If you create a new file, set `author` to the contributor identity that should appear in the rule inventory, such as your name, GitHub handle, team, or organization.
+External contributors must not use `author = "NVIDIA Attribution team"`; NVIDIA maintainers use that value only when their team accepts ownership and ongoing maintenance of the rule.
 Declare the required `sources` by enum member name.
 The available member names are defined by `Source` in `src/attribution_lib/observation/inbound.py`.
 

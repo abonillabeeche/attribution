@@ -128,7 +128,7 @@ expect = "none"
 Apply these constraints while editing.
 
 - Inherit file-level `author` and `sources` values when editing an existing TOML file.
-- When creating a file, set `author` to the person or team that owns and maintains the rule; use `author = "NVIDIA Attribution team"` only for rules owned by that team. Use enum member names such as `sources = ["APPLOG"]`.
+- When creating a file, set `author` to the contributor's name, GitHub handle, team, or organization. Never assign `author = "NVIDIA Attribution team"` for an external contributor; use it only when NVIDIA maintainers accept ownership and ongoing maintenance. Use enum member names such as `sources = ["APPLOG"]`.
 - Use named regular-expression captures and reference them with `{name}` only where the emitted template needs them.
 - Omit `derived_rule` when provenance should use the extractor name. Set it only to preserve an established provenance slug or to give generated family rows distinct credited rules.
 - Do not use `untested` to bypass ordinary inline branch coverage.
