@@ -6,13 +6,10 @@ from contextlib import contextmanager
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
-from attribution_lib.declarative.context import _using_rule_loader
+from attribution_lib.declarative.context import _using_rule_loader, rows
 from attribution_lib.declarative.errors import LoadError
-from attribution_lib.rules_engine import (
-    RuleIngestionError,
-    RuleLoader,
-    rows,
-)
+from attribution_lib.exceptions import RuleIngestionError
+from attribution_lib.rules_engine import RuleLoader
 
 
 @contextmanager

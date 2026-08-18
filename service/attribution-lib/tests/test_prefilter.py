@@ -15,52 +15,43 @@ import textwrap
 import pytest
 
 import attribution_lib
-import attribution_lib.exceptions
 from attribution_lib.declarative.errors import RegistrationError
 from attribution_lib.declarative.loader import load_toml_rules
+from attribution_lib.exceptions import RuleIngestionError, UninitializedRuleEngineError
 from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.rules_engine import _PRE_FILTERS, PreFilterSpec, RuleLoader, register_pre_filter
+from attribution_lib.prefilters import PreFilterSpec, register_pre_filter
+from attribution_lib.rules_engine import RuleLoader
 
 
 @pytest.fixture
-def clean_registry():
-    """Run the test against an empty registry, then restore whatever was there before."""
-    saved = dict(_PRE_FILTERS)
-    _PRE_FILTERS.clear()
-    yield
-    _PRE_FILTERS.clear()
-    _PRE_FILTERS.update(saved)
+def active_loader():
+    with RuleLoader() as loader:
+        yield loader
 
 
-@pytest.fixture
-def initialized_lib(monkeypatch):
-    """Stand in for a completed setup_rules() without paying to load the bundled rules."""
-    monkeypatch.setattr(attribution_lib, "initialized", True)
-
-
-@pytest.mark.usefixtures("clean_registry", "initialized_lib")
 class TestPreFilterRegistration:
-    def test_register_and_get_pre_filter(self):
+    def test_register_and_get_pre_filter(self, active_loader, monkeypatch):
         spec = PreFilterSpec(
             include_terms=["error", "fatal"],
             exclude_terms=["debug"],
         )
         register_pre_filter(ObservationSource.APPLOG, spec)
+        monkeypatch.setattr(attribution_lib, "_rules_engine", active_loader.build())
         result = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
         assert result is not None
         assert result.include_terms == ["error", "fatal"]
         assert result.exclude_terms == ["debug"]
 
-    def test_get_pre_filter_unregistered_source_returns_empty_spec(self):
+    def test_get_pre_filter_unregistered_source_returns_empty_spec(self, active_loader):
         register_pre_filter(ObservationSource.APPLOG, PreFilterSpec(include_terms=["error"]))
-        assert attribution_lib.get_pre_filter(ObservationSource.SYSLOG) == PreFilterSpec()
+        assert active_loader.build().get_pre_filter(ObservationSource.SYSLOG) == PreFilterSpec()
 
     def test_get_pre_filter_raises_when_setup_rules_never_ran(self, monkeypatch):
-        monkeypatch.setattr(attribution_lib, "initialized", False)
-        with pytest.raises(attribution_lib.exceptions.UninitializedRuleEngineError):
+        monkeypatch.setattr(attribution_lib, "_rules_engine", None)
+        with pytest.raises(UninitializedRuleEngineError):
             attribution_lib.get_pre_filter(ObservationSource.APPLOG)
 
-    def test_multiple_registrations_merge(self):
+    def test_multiple_registrations_merge(self, active_loader):
         register_pre_filter(
             ObservationSource.UFMLOG,
             PreFilterSpec(include_terms=["term1"], exclude_terms=["exc1"]),
@@ -69,14 +60,14 @@ class TestPreFilterRegistration:
             ObservationSource.UFMLOG,
             PreFilterSpec(include_terms=["term2"], exclude_terms=["exc2"]),
         )
-        result = attribution_lib.get_pre_filter(ObservationSource.UFMLOG)
+        result = active_loader.build().get_pre_filter(ObservationSource.UFMLOG)
         assert result is not None
         assert "term1" in result.include_terms
         assert "term2" in result.include_terms
         assert "exc1" in result.exclude_terms
         assert "exc2" in result.exclude_terms
 
-    def test_registration_copies_lists(self):
+    def test_registration_copies_lists(self, active_loader):
         """Registration should copy, not alias, the input lists."""
         original = ["term1"]
         register_pre_filter(
@@ -84,8 +75,20 @@ class TestPreFilterRegistration:
             PreFilterSpec(include_terms=original),
         )
         original.append("term2")
-        result = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
+        result = active_loader.build().get_pre_filter(ObservationSource.APPLOG)
         assert "term2" not in result.include_terms
+
+    def test_registration_requires_an_active_loader(self):
+        with pytest.raises(RuleIngestionError, match="No active rule loader"):
+            register_pre_filter(ObservationSource.APPLOG, PreFilterSpec())
+
+    def test_loaders_do_not_share_pre_filters(self):
+        first = RuleLoader()
+        second = RuleLoader()
+        first.register_pre_filter(ObservationSource.APPLOG, PreFilterSpec(include_terms=["error"]))
+
+        assert ObservationSource.APPLOG in first.pre_filters
+        assert second.pre_filters == {}
 
 
 class TestBundledPrefilterRegistration:
@@ -93,8 +96,7 @@ class TestBundledPrefilterRegistration:
 
     These tests guard against migration mistakes where a prefilter file stops
     being loaded (e.g. a missing import, a renamed file, a bad TOML section).
-    setup_class re-runs setup_rules(force=True) so unit tests in this file
-    that clear _PRE_FILTERS don't affect these integration tests.
+    setup_class re-runs setup_rules(force=True) to install a freshly built engine.
     """
 
     @classmethod
@@ -124,18 +126,15 @@ class TestBundledPrefilterRegistration:
 
     def test_registered_sources_complete(self):
         """Fail if a source gains or loses a prefilter unexpectedly."""
-        from attribution_lib.rules_engine import _PRE_FILTERS
-
-        assert set(_PRE_FILTERS) == {
+        assert set(attribution_lib.get_rules_engine().pre_filters) == {
             ObservationSource.APPLOG,
             ObservationSource.UFMLOG,
             ObservationSource.HEALTH_CHECK,
         }
 
 
-@pytest.mark.usefixtures("clean_registry", "initialized_lib")
 class TestTomlPrefilterLoading:
-    def _load(self, toml_text: str) -> None:
+    def _load(self, toml_text: str) -> RuleLoader:
         loader = RuleLoader()
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="wb", delete=False) as f:
             f.write(textwrap.dedent(toml_text).encode())
@@ -144,37 +143,38 @@ class TestTomlPrefilterLoading:
             load_toml_rules(loader, path)
         finally:
             os.unlink(path)
+        return loader
 
     def test_include_exclude_registered(self):
-        self._load("""
+        loader = self._load("""
             sources = ["APPLOG"]
             [prefilter]
             include = ["error", "fatal"]
             exclude = ["debug", "info"]
         """)
-        result = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
+        result = loader.build().get_pre_filter(ObservationSource.APPLOG)
         assert "error" in result.include_terms
         assert "fatal" in result.include_terms
         assert "debug" in result.exclude_terms
         assert "info" in result.exclude_terms
 
     def test_prefilter_inherits_file_sources(self):
-        self._load("""
+        loader = self._load("""
             sources = ["UFMLOG"]
             [prefilter]
             include = ["Link went down"]
         """)
-        result = attribution_lib.get_pre_filter(ObservationSource.UFMLOG)
+        result = loader.build().get_pre_filter(ObservationSource.UFMLOG)
         assert "Link went down" in result.include_terms
 
     def test_prefilter_overrides_sources(self):
-        self._load("""
+        loader = self._load("""
             sources = ["APPLOG"]
             [prefilter]
             sources  = ["UFMLOG"]
             include  = ["node is Down"]
         """)
-        result = attribution_lib.get_pre_filter(ObservationSource.UFMLOG)
+        result = loader.build().get_pre_filter(ObservationSource.UFMLOG)
         assert "node is Down" in result.include_terms
 
     def test_prefilter_invalid_source_raises(self):
@@ -194,8 +194,29 @@ class TestTomlPrefilterLoading:
 
     def test_no_prefilter_section_is_fine(self):
         """A TOML file with no [prefilter] section should not register anything."""
-        _PRE_FILTERS.clear()
-        self._load("""
+        loader = self._load("""
             sources = ["APPLOG"]
         """)
-        assert len(_PRE_FILTERS) == 0
+        assert loader.pre_filters == {}
+
+
+def test_failed_rule_load_rolls_back_specs(tmp_path):
+    rule_file = tmp_path / "failing_rules.py"
+    rule_file.write_text(
+        textwrap.dedent("""
+            from attribution_lib.observation.inbound import Source
+            from attribution_lib.rules import MetricSpec, PreFilterSpec, register_metric_spec, register_pre_filter
+
+            register_pre_filter(Source.APPLOG, PreFilterSpec(include_terms=["error"]))
+            register_metric_spec(Source.NODE_METRICS, MetricSpec(thresholds={"m1": {}}))
+            raise RuntimeError("fail after registration")
+        """),
+        encoding="utf-8",
+    )
+    loader = RuleLoader()
+
+    with pytest.raises(RuntimeError, match="fail after registration"):
+        loader.load(str(rule_file))
+
+    assert loader.pre_filters == {}
+    assert loader.metric_specs == {}

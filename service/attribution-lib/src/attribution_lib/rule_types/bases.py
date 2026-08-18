@@ -97,6 +97,10 @@ class LoaderBase(Generic[R]):
         """Return the rule registered under ``name``, or None if absent."""
         return self.rules.get(name)
 
+    def extra_rules(self) -> Mapping[RuleId, Rule]:
+        """Additional rules beyond ``self.rules`` held by this loader."""
+        return {}
+
     def snapshot(self) -> dict[str, Any]:
         """Capture every field a load may mutate, for rollback on failure."""
         return {"rules": dict(self.rules)}
@@ -110,10 +114,6 @@ class LoaderBase(Generic[R]):
     def declarative_emit_store(self) -> Optional[dict[str, str]]:
         """Return this loader's declarative_emit dict, or None if it has no such concept."""
         return None
-
-    def extra_rules(self) -> Mapping[RuleId, Rule]:
-        """Additional rules beyond self.rules (e.g. extractor-accumulator rules)."""
-        return {}
 
 
 class OrderedSubEngine(SubEngineBase[R], Generic[R, P]):

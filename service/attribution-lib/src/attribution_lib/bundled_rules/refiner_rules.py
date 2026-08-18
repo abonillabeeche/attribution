@@ -29,7 +29,7 @@ from attribution_lib.hooks import multihooks, singlehooks
 from attribution_lib.job_info import NVRX_TAG, JobInfo
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
 from attribution_lib.outcome import OutcomeAttribution
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     FilterPriority,
     RefinerContext,
     declare_event_types,

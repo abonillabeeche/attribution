@@ -7,7 +7,8 @@ from attribution_lib.declarative import load_toml_rules
 from attribution_lib.declarative.errors import FinalizeError, RegistrationError, UnknownKeyError
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import ExtractorRule, RuleContext, RuleLoader
+from attribution_lib.rule_types.definitions import ExtractorRule, RuleContext
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
 
@@ -38,7 +39,7 @@ untested = "coverage exercised in test_cases_coverage"
     assert rule.match_re == " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
     assert rule.source_filters == frozenset({ObsSource.SYSLOG})
     # Registered on the loader under the same path @extractor_def uses.
-    assert loader.extractor_rules["SyslogGspFailure"] is rule
+    assert loader.rules["SyslogGspFailure"] is rule
 
 
 def test_file_level_tags_land_on_the_registered_rule(tmp_path):
@@ -718,5 +719,5 @@ untested = "validation"
     loader = RuleLoader()
     with pytest.raises(UnknownKeyError):
         load_toml_rules(loader, _write(tmp_path, text))
-    assert loader.extractor_rules == {}
+    assert loader.rules == {}
     assert loader.declarative_ctx.const_values == {}

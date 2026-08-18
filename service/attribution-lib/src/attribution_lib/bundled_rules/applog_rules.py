@@ -37,7 +37,7 @@ from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.rule_helpers import _bad
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     EventTriple,
     ExtractorAccumulator,
     RuleContext,

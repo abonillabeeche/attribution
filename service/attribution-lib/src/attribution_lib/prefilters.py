@@ -8,26 +8,17 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Per-source pre-filter and metric specifications registered by rule files.
+"""Pre-filter and metric specifications declared by Python rule files.
 
-Deliberately a leaf: this module imports nothing from ``attribution_lib``
-beyond ``exceptions`` and ``observation.inbound``, and never the package
-itself. ``attribution_lib/__init__.py`` imports ``get_pre_filter`` and
-``get_metric_spec`` from here, so anything this module pulls in is pulled in
-before the package finishes initializing.
-
-That constraint is what keeps the package acyclic. These lived in
-``rules_engine`` and dragged the whole engine into every ``import
-attribution_lib``, which in turn made ``utils`` (via ``import
-attribution_lib``) a transitive importer of the engine, so ``declarative``
-modules could not import their own dependencies at module scope.
+The specifications themselves are plain values. Registration delegates to the
+active ``RuleLoader``; runtime lookup belongs to the built ``RuleEngine``.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeAlias, Union
 
-from attribution_lib.exceptions import UninitializedRuleEngineError
+from attribution_lib.declarative.context import _require_rule_loader
 from attribution_lib.observation.inbound import Source as ObservationSource
 
 if TYPE_CHECKING:
@@ -54,40 +45,13 @@ class MetricSpec:
     thresholds: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-_PRE_FILTERS: dict[ObservationSource, PreFilterSpec] = {}
-_METRIC_SPECS: dict[ObservationSource, MetricSpec] = {}
-
-
 def register_pre_filter(source: ObservationSource, spec: PreFilterSpec) -> None:
-    """Register pre-filter spec for an observation source. Multiple calls merge."""
-    if source in _PRE_FILTERS:
-        existing = _PRE_FILTERS[source]
-        existing.include_terms.extend(spec.include_terms)
-        existing.exclude_terms.extend(spec.exclude_terms)
-        existing.callables.extend(spec.callables)
-    else:
-        _PRE_FILTERS[source] = PreFilterSpec(
-            include_terms=list(spec.include_terms),
-            exclude_terms=list(spec.exclude_terms),
-            callables=list(spec.callables),
-        )
+    """Register a pre-filter specification on the active loader."""
+    loader = _require_rule_loader("registering a pre-filter")
+    loader.register_pre_filter(source, spec)
 
 
 def register_metric_spec(source: ObservationSource, spec: MetricSpec) -> None:
-    """Register metric spec for an observation source. Multiple calls merge."""
-    if source in _METRIC_SPECS:
-        _METRIC_SPECS[source].thresholds.update(spec.thresholds)
-    else:
-        _METRIC_SPECS[source] = MetricSpec(thresholds=dict(spec.thresholds))
-
-
-def get_pre_filter(source: ObservationSource) -> PreFilterSpec:
-    """Return the registered pre-filter spec for source, or an empty spec if it has none."""
-    return _PRE_FILTERS.get(source, PreFilterSpec())
-
-
-def get_metric_spec(source: ObservationSource) -> MetricSpec:
-    """Return metric spec for source. Raises if not registered."""
-    if source not in _METRIC_SPECS:
-        raise UninitializedRuleEngineError(f"No metric spec registered for {source.name}. Was setup_rules() called?")
-    return _METRIC_SPECS[source]
+    """Register a metric specification on the active loader."""
+    loader = _require_rule_loader("registering a metric specification")
+    loader.register_metric_spec(source, spec)

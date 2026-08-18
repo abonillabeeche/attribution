@@ -19,7 +19,8 @@ from pathlib import Path
 
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleLoader
+from attribution_lib.rule_types.definitions import RuleContext
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
 FIX = Path(__file__).parent / "fixtures" / "record_table_project.toml"

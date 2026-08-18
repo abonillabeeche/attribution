@@ -13,7 +13,7 @@ from http import HTTPStatus
 
 import pytest
 from attribution_lib import get_rules_engine
-from attribution_lib.rules_engine import CollectorRule, RuleLocation
+from attribution_lib.rules import CollectorRule, RuleLocation
 from jsonschema import Draft202012Validator, ValidationError
 
 from tests.conftest import make_up_attributor_info
@@ -41,7 +41,7 @@ def _assert_runtime_envelope(app, response) -> dict:
 
 
 @pytest.fixture
-def no_params_collector_rule():
+def no_params_collector_rule(monkeypatch):
     name = "Test.ValidationEnvelopeNoParams"
     rule = CollectorRule(
         name=name,
@@ -52,15 +52,9 @@ def no_params_collector_rule():
         params_model=None,
     )
     engine = get_rules_engine()
-    previous_rule = engine.collector_rules.get(name)
-    engine.collector_rules[name] = rule
-    try:
-        yield name
-    finally:
-        if previous_rule is None:
-            engine.collector_rules.pop(name, None)
-        else:
-            engine.collector_rules[name] = previous_rule
+    get_rule = engine.get_rule
+    monkeypatch.setattr(engine, "get_rule", lambda rule_id: rule if rule_id == name else get_rule(rule_id))
+    yield name
 
 
 def test_openapi_422_operations_use_runtime_envelope(app):
