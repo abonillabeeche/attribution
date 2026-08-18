@@ -10,9 +10,10 @@ without an express license agreement from NVIDIA CORPORATION or
 its affiliates is strictly prohibited.
 -->
 
-# Agent Guide: Add a New Attribution Rule
+# Agent Guide: Add a New Extractor Rule
 
-Use this procedure to add an Attribution Library rule with a minimal, evidence-backed diff.
+Use this procedure to add an extractor rule to the NVIDIA Attribution rules engine with a minimal, evidence-backed diff.
+Do not apply it to filter, refiner, collector, or other rule types; use their nearest implementation and tests instead.
 This procedure permits local repository edits and local verification only.
 Do not push a branch, create a pull request, or perform another remote write unless the user explicitly requests it.
 
@@ -23,9 +24,9 @@ Read [`adding-a-rule.md`](adding-a-rule.md) before using this procedure for the 
 
 Complete the task only when all of the following statements are true.
 
-- The new rule has a unique, stable name and uses the correct observation source.
-- A focused test failed before implementation and passes after implementation.
-- Declarative branch coverage, when applicable, and runtime behavior are both tested.
+- The new extractor has a unique, stable name and uses the correct observation source.
+- An appropriate focused test demonstrates the new behavior and passes; a specialized test failed before implementation when that test-first path was applicable.
+- An ordinary declarative extractor has complete co-located cases, and a separate behavior test exists only when the inline case schema cannot express the required assertion.
 - Every emitted symptom resolves through the symptom registry with approved metadata.
 - The complete Attribution Library test gate passes, and the diff contains no unrelated changes.
 
@@ -35,8 +36,8 @@ Inspect the checkout before editing.
 
 ```bash
 git status --short --branch
-rg -n -F 'distinctive input text' src/attribution_lib/bundled_rules
-rg -n -F 'proposed symptom text' src/attribution_lib/bundled_rules/symptom_defaults.py
+grep -R -n -F 'distinctive input text' src/attribution_lib/bundled_rules
+grep -n -F 'proposed symptom text' src/attribution_lib/bundled_rules/symptom_defaults.py
 ```
 
 Preserve all pre-existing user changes.
@@ -56,6 +57,8 @@ In particular, do not infer whether evidence is `bad_node` or `interesting_node`
 ## Step 2: Select the Implementation Path
 
 Use the smallest path that implements the required behavior.
+The standalone `docs/declarative-grammar.md` referenced by the loader is not currently present in this repository.
+Before authoring new declarative syntax, treat the accepted keys in [`declarative/loader.py`](../src/attribution_lib/declarative/loader.py) and the emission forms in [`declarative/emit.py`](../src/attribution_lib/declarative/emit.py) as the authoritative grammar definitions.
 
 1. Use a declarative leaf for one fixed `bad_node`, `interesting_node`, or `generic_event` emission.
 2. Use `pick_one`, `try_all`, `catalog_lookup`, or `family` only when the requested control flow directly requires that form.
@@ -69,12 +72,14 @@ For a Python processor, register a module-level function with `@rule_processor("
 Reference it from a TOML `[[extractor]]` through `processor = "namespace:name"` and declare every possible `derived_rules` and `derived_event_types` value.
 Follow the nearest processor and its tests rather than introducing a new abstraction.
 
-## Step 3: Add a Failing Runtime Test
+## Step 3: Choose the Test Layer
 
-Prefer a case in an existing top-level `*.test.toml` file when an existing runner can express the behavior.
+For an ordinary declarative extractor, use co-located `[[extractor.cases]]` as the primary test layer.
+Add the matching, near-miss, and branch cases with the extractor in Step 4; the production catalog loader executes and validates them.
+
+Use an existing top-level `*.test.toml` file for a Python-based extractor or a special compound or parity scenario that an existing data runner supports.
 The available runner schemas are defined in `tests/rule_data_runner.py` and executed by `tests/test_rule_data.py`.
-
-For example, add an application-log case with the following shape.
+For example, a case for the `applog_single_line` runner has this shape:
 
 ```toml
 [[cases]]
@@ -88,14 +93,17 @@ expected_rule = "ApplogCheckpointPermissionDenied"
 Use a co-located `*_test.py` module under `src/attribution_lib/bundled_rules/tests/` when TOML cannot express the assertion.
 Use shared fixtures from `test_support/` instead of importing test helpers from `tests/`.
 
-Run only the new behavior test and confirm that it fails for the expected missing-rule behavior.
+When using a `*.test.toml` or Python behavior test, run only the new behavior test before implementation and confirm that it fails for the expected missing-rule behavior.
+Replace `YOUR_DISTINCTIVE_TEST_TOKEN` with a distinctive token from the new test description.
 
 ```bash
-uv run --frozen pytest -n 4 tests/test_rule_data.py -q -k checkpoint
+test_token='YOUR_DISTINCTIVE_TEST_TOKEN'
+uv run --frozen pytest -n 4 tests/test_rule_data.py -q -k "$test_token"
 ```
 
-Do not continue if the test passes before the implementation.
+Do not continue with a specialized test that passes before the implementation.
 Find whether an existing rule already handles the case or whether the test failed to select the intended case.
+For an ordinary declarative extractor, record that the co-located cases will be validated after the extractor is added; do not create a duplicate `*.test.toml` case solely to manufacture a pre-implementation failure.
 
 ## Step 4: Implement the Minimal Rule
 
@@ -120,9 +128,9 @@ expect = "none"
 Apply these constraints while editing.
 
 - Inherit file-level `author` and `sources` values when editing an existing TOML file.
-- Set `author = "NVIDIA Attribution team"` and enum member names such as `sources = ["APPLOG"]` when creating a file.
+- When creating a file, set `author` to the person or team that owns and maintains the rule; use `author = "NVIDIA Attribution team"` only for rules owned by that team. Use enum member names such as `sources = ["APPLOG"]`.
 - Use named regular-expression captures and reference them with `{name}` only where the emitted template needs them.
-- Omit `derived_rule` when provenance should use the extractor name.
+- Omit `derived_rule` when provenance should use the extractor name. Set it only to preserve an established provenance slug or to give generated family rows distinct credited rules.
 - Do not use `untested` to bypass ordinary inline branch coverage.
 
 For `when`, include inline cases that make the expression both true and false.
@@ -144,7 +152,7 @@ Do not edit the legacy `RegisteredSymptoms` enum.
 Do not copy outcome metadata from a textually similar symptom unless checked-in behavior or an accepted design decision establishes the same semantics.
 Stop and request the missing decision when `outcome`, `OutcomePriority`, `doc`, `hw_cause`, or cascade behavior is not established.
 
-## Step 6: Reach Green on the Focused Test
+## Step 6: Reach Green on Focused Validation
 
 Load the production catalog to catch TOML syntax, duplicate names, invalid sources, invalid regular expressions, unresolved expressions, incomplete inline coverage, and symptom declaration errors.
 
@@ -152,13 +160,16 @@ Load the production catalog to catch TOML syntax, duplicate names, invalid sourc
 uv run --frozen python -c 'from attribution_lib.core import setup_rules; setup_rules()'
 ```
 
-Run the focused runtime test again.
+If Step 3 required a `*.test.toml` behavior test, run it again.
+Replace `YOUR_DISTINCTIVE_TEST_TOKEN` with the distinctive token from that new test description.
 
 ```bash
-uv run --frozen pytest -n 4 tests/test_rule_data.py -q -k checkpoint
+test_token='YOUR_DISTINCTIVE_TEST_TOKEN'
+uv run --frozen pytest -n 4 tests/test_rule_data.py -q -k "$test_token"
 ```
 
-If the test uses a co-located Python module, run that exact module instead.
+Skip this pytest command for an ordinary declarative extractor whose behavior is fully covered by the co-located cases already validated during catalog loading.
+If the specialized test uses a co-located Python module, run that exact module instead.
 Fix the implementation, not the expected result, unless source evidence proves that the expectation was wrong.
 
 ## Step 7: Verify the Catalog and Full Suite
@@ -167,7 +178,8 @@ Capture the loaded rule inventory.
 
 ```bash
 uv run --frozen python scripts/rule_inventory.py dump -o /tmp/attribution-rules.json
-rg -n 'ApplogCheckpointPermissionDenied' /tmp/attribution-rules.json
+rule_name='YOUR_NEW_RULE_NAME'
+grep -n -F "$rule_name" /tmp/attribution-rules.json
 ```
 
 Inspect the inventory entry and verify the rule name, source, matcher, author, tags, form, and emit or processor definition.
