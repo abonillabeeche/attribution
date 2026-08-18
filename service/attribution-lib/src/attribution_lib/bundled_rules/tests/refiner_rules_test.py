@@ -992,6 +992,36 @@ class TestCspEventPrecedenceAndCascades:
         assert "System is powering down" in symptoms
         assert "error: pyxis" in symptoms
 
+    def test_completed_process_keeps_termination_and_discards_csp_cascades(self, stream, obs_ctx, job_info):
+        cascades = ["System is powering down", "error: pyxis"]
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            self._TENANT_REPORTED,
+            self._TERMINATED,
+            *cascades,
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._TENANT_REPORTED, self._TERMINATED, *cascades]},
+        )
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED not in symptoms
+        assert symptoms[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in symptoms
+        assert self._TENANT_REPORTED not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in bad_nodes["node01"]
+        for cascade in cascades:
+            assert cascade not in symptoms
+            assert symptoms[cascade].has_interesting()
+            assert cascade not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[cascade].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TERMINATED
+
 
 class TestCancellationResolution:
     def test_terminate_discards_cancelled(self, stream, obs_ctx, job_info):
