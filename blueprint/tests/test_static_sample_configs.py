@@ -11,10 +11,10 @@ SAMPLE_MANIFEST = SAMPLE_DATA_DIR / "sample-jobs.json"
 BASELINE_LAST_JOB_NUMBER = 100
 BASELINE_JOB_COUNT = 98
 REPEAT_SAMPLE_JOB_COUNT = 20
-XID31_ROOT_JOB_COUNT = 18
+XID31_ROOT_JOB_COUNT = 20
 TOTAL_JOB_COUNT = BASELINE_JOB_COUNT + REPEAT_SAMPLE_JOB_COUNT
 REPEAT_OFFENDER_NODE = "node-0101"
-PRIORITIZED_NODE_FAILURE_WORKLOADS = {"workload-0101", "workload-0111"}
+NODE_FAILURE_WITH_XID31_WORKLOADS = {"workload-0101", "workload-0111"}
 XID31_PATTERN = re.compile(r"Xid \(PCI:[^)]*\): 31|XID-31|XID 31", re.IGNORECASE)
 DISALLOWED_SAMPLE_PATTERNS = {
     "Job failed": re.compile(r"\bjob failed\b", re.IGNORECASE),
@@ -182,14 +182,14 @@ def test_static_quickstart_samples_include_manifest_evidence():
         assert str(job["evidence_marker"]) in text
 
 
-def test_static_quickstart_prioritizes_slurm_node_failures_over_xid31():
-    """Slurm node failures should remain the root cause when XID-31 is also present."""
+def test_static_quickstart_prioritizes_xid31_over_slurm_node_failures():
+    """XID-31 should remain the root cause when a Slurm node failure is also present."""
     jobs_by_id = {str(job["id"]): job for job in _sample_manifest_jobs()}
 
-    for workload in PRIORITIZED_NODE_FAILURE_WORKLOADS:
+    for workload in NODE_FAILURE_WITH_XID31_WORKLOADS:
         job = jobs_by_id[workload]
-        assert job["root_cause_symptom"] == "Node failure reported by slurm"
-        assert job["expected_outcome"] == "Fail InfraHW"
+        assert job["root_cause_symptom"] == "XID-31"
+        assert job["expected_outcome"] == "Fail MultiCategory"
         assert XID31_PATTERN.search(_workload_sample_text(workload)) is not None
 
 
@@ -234,7 +234,7 @@ def test_static_quickstart_samples_include_xid31_repeat_offender_demo():
     assert len(users) == XID31_ROOT_JOB_COUNT
     assert len(attempt_ids) == XID31_ROOT_JOB_COUNT
     assert len(elapsed_minutes) == XID31_ROOT_JOB_COUNT
-    assert node_counts == Counter({count: 2 for count in range(2, 11)})
+    assert node_counts == Counter({count: 2 for count in range(1, 11)})
 
 
 def test_static_quickstart_samples_identify_specific_responsible_nodes():

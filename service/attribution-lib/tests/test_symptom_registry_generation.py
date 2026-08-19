@@ -108,6 +108,7 @@ def test_slurm_node_failure_yields_to_epilog_non_response_in_any_order():
         assert match is not None
         assert match.matched_prefix == epilog_non_response
         assert match.outcome == "Fail InfraHW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
 
 
 def test_wandb_error_maps_to_low_priority_fail_user():

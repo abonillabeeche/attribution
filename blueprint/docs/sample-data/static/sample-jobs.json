@@ -38299,8 +38299,8 @@
     },
     {
       "id": "workload-0101",
-      "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "Node failure reported by slurm",
+      "expected_outcome": "Fail MultiCategory",
+      "root_cause_symptom": "XID-31",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0101"
@@ -38494,8 +38494,8 @@
     },
     {
       "id": "workload-0111",
-      "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "Node failure reported by slurm",
+      "expected_outcome": "Fail MultiCategory",
+      "root_cause_symptom": "XID-31",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0101"
