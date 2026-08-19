@@ -20,7 +20,7 @@ from attribution_lib.exceptions import (
     SymptomValidationError,
     UnknownSymptomError,
 )
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     OutcomePriority,
@@ -41,9 +41,9 @@ from attribution_lib.symptoms.registry_generation import (
 
 
 def _load_committed_symptom_defaults() -> list[SymptomDeclaration]:
-    engine = RuleEngine()
-    engine.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
-    return list(engine.symptom_declarations)
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    return list(loader.symptom_declarations)
 
 
 def _load_committed_registry():
@@ -548,26 +548,24 @@ def test_cascade_only_noop_declaration_is_valid_registry_metadata(tmp_path):
         """
 from dataclasses import replace
 
-from attribution_lib.exceptions import RuleIngestionError
-from attribution_lib.rules_engine import _get_caller_location, _rules_engine
+from attribution_lib.declarative.context import _require_rule_loader
+from attribution_lib.rules_engine import _get_caller_location
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 
 
 def _register_prefix(declaration: SymptomDeclaration) -> None:
-    engine = _rules_engine.get(None)
-    if engine is None:
-        raise RuleIngestionError("No active rules engine when declaring prefix symptom")
-    engine.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
+    loader = _require_rule_loader("declaring prefix symptom")
+    loader.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
 
 
 _register_prefix(SymptomDeclaration(prefix="noop-only", cascade_noop=True))
 """,
         encoding="utf-8",
     )
-    engine = RuleEngine()
-    engine.load(str(defaults_file))
+    loader = RuleLoader()
+    loader.load(str(defaults_file))
 
-    registry = registry_from_declarations(engine.symptom_declarations)
+    registry = registry_from_declarations(loader.symptom_declarations)
 
     assert registry.metadata_for("noop-only") is not None
     assert registry.cascade_discards_for("noop-only") == []
