@@ -571,7 +571,7 @@ outcome_symptom(
 outcome_symptom(
     "Node failure reported by slurm",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.MEDIUM,
     doc="node-failure-reported-by-slurm",
     cascade_discards=("Stopping nvidia-imex.service",),
 )
