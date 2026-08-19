@@ -505,15 +505,13 @@ def test_cascade_only_noop_declaration_is_valid_registry_metadata(tmp_path):
         """
 from dataclasses import replace
 
-from attribution_lib.exceptions import RuleIngestionError
-from attribution_lib.rules_engine import _get_caller_location, _rules_engine
+from attribution_lib.declarative.context import _require_rules_engine
+from attribution_lib.rules_engine import _get_caller_location
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 
 
 def _register_prefix(declaration: SymptomDeclaration) -> None:
-    engine = _rules_engine.get(None)
-    if engine is None:
-        raise RuleIngestionError("No active rules engine when declaring prefix symptom")
+    engine = _require_rules_engine("declaring prefix symptom")
     engine.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
 
 

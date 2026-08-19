@@ -47,13 +47,9 @@ from attribution_lib.declarative.families import stamp_family
 from attribution_lib.declarative.lifecycle import LIFECYCLE_INJECTIONS, LIFECYCLE_PREDICATES
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.rules_engine import (
-    ExtractorRule,
-    PreFilterSpec,
-    RuleLocation,
-    normalize_tags,
-    register_pre_filter,
-)
+from attribution_lib.prefilters import PreFilterSpec, register_pre_filter
+from attribution_lib.rule_types.definitions import ExtractorRule, RuleLocation
+from attribution_lib.rule_types.registration import normalize_tags
 
 if TYPE_CHECKING:
     from attribution_lib.rules_engine import Rule, RuleEngine, RuleId

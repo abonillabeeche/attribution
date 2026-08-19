@@ -1,28 +1,29 @@
-"""Tests for the @rows record-table provider seam (Plan 5d, Task 1)."""
+"""Tests for ``@rows`` record-table providers."""
 
 import textwrap
+from contextlib import contextmanager
 
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rules_engine
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.rules_engine import (
     RuleEngine,
     RuleIngestionError,
-    _rules_engine,
     rows,
 )
 
 
+@contextmanager
 def _with_engine():
     engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+    with _using_rules_engine(engine):
+        yield engine
 
 
 def test_provider_registers_str_coerced_keys():
-    engine, token = _with_engine()
-    try:
+    with _with_engine() as engine:
 
         @rows("xid")
         def _x():
@@ -33,13 +34,10 @@ def test_provider_registers_str_coerced_keys():
             "74": {"nice_name": "NVLink Error"},
         }
         assert _x()[63]["nice_name"] == "GSP RPC Timeout"  # returned unchanged
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_duplicate_table_name_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_engine():
 
         @rows("xid")
         def _a():
@@ -50,20 +48,15 @@ def test_duplicate_table_name_is_error():
             @rows("xid")
             def _b():
                 return {2: {"nice_name": "b"}}
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_provider_must_return_dict():
-    engine, token = _with_engine()
-    try:
+    with _with_engine():
         with pytest.raises(RuleIngestionError, match="must return a dict"):
 
             @rows("bad")
             def _bad():
                 return [(1, {"nice_name": "x"})]
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_no_active_engine_is_error():
@@ -80,15 +73,12 @@ def test_fresh_engine_starts_empty():
 
 def _load(tmp_path, toml_text, register=None):
     engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    with _using_rules_engine(engine):
         if register:
             register()  # register @rows providers on this engine (mimics a sibling .py)
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
         return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_catalog_lookup_over_provider_record_table(tmp_path):
@@ -145,8 +135,8 @@ def test_provider_table_name_collides_with_inline_rows(tmp_path):
 
 
 def test_record_project_own_derived_rule_is_declared(tmp_path):
-    # A record project with its OWN derived_rule and no lookup derived_rule must be
-    # declared (the Plan 3 gap). No lookup derived_rule here.
+    # A record project with its own derived_rule and no lookup-derived rule must
+    # still declare that derived rule.
     def register():
         @rows("t")
         def _t():

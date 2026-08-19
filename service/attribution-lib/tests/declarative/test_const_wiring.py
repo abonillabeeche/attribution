@@ -1,4 +1,4 @@
-"""The const namespace reaches compiled closures (Plan 5b, Task 3)."""
+"""The const namespace reaches compiled closures."""
 
 import textwrap
 import types
@@ -6,10 +6,11 @@ import types
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rules_engine
 from attribution_lib.declarative.emit import compile_element
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine, _rules_engine, const
+from attribution_lib.rules_engine import RuleContext, RuleEngine, const
 from attribution_lib.sources import Source
 
 
@@ -38,15 +39,12 @@ def test_const_absent_default_is_unaffected(dummy_ctx):
 
 def _load(tmp_path, toml_text, register=None):
     engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    with _using_rules_engine(engine):
         if register:
             register()
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
         return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_rule_using_provider_const_loads(tmp_path):

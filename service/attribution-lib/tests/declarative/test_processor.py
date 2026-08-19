@@ -1,42 +1,40 @@
-"""Tests for the @rule_processor seam (Plan 5e, Task 1)."""
+"""Tests for ``@rule_processor`` registration."""
 
 import textwrap
+from contextlib import contextmanager
 
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rules_engine
 from attribution_lib.declarative.emit import compile_processor
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.rules_engine import (
     RuleEngine,
     RuleIngestionError,
-    _rules_engine,
     rule_processor,
 )
 
 
+@contextmanager
 def _with_engine():
     engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+    with _using_rules_engine(engine):
+        yield engine
 
 
 def test_register_and_retrieve():
-    engine, token = _with_engine()
-    try:
+    with _with_engine() as engine:
 
         @rule_processor("applog:pushrecv")
         def _p(groups, node, source, ctx):
             return []
 
         assert engine.rule_processors["applog:pushrecv"] is _p
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_duplicate_ns_name_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_engine():
 
         @rule_processor("applog:dup")
         def _a(groups):
@@ -47,8 +45,6 @@ def test_duplicate_ns_name_is_error():
             @rule_processor("applog:dup")
             def _b(groups):
                 return []
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_no_active_engine_is_error():
@@ -100,15 +96,12 @@ def test_processor_groups_only():
 
 def _load(tmp_path, toml_text, register=None):
     engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    with _using_rules_engine(engine):
         if register:
             register()
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
         return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_processor_stanza_registers_and_declares(tmp_path):
