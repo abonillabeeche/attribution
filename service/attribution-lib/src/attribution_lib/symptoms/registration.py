@@ -12,7 +12,7 @@
 
 from typing import Optional
 
-from attribution_lib.declarative.context import _optional_rules_engine, _require_rules_engine
+from attribution_lib.declarative.context import _optional_rule_loader, _require_rule_loader
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.rule_types.registration import _get_caller_location
 from attribution_lib.symptoms.declarations import (
@@ -68,8 +68,8 @@ def outcome_symptom(
     """
     if doc == "":
         raise RuleIngestionError(f"outcome_symptom({prefix!r}) requires a non-empty doc anchor")
-    engine = _require_rules_engine("declaring outcome symptom")
-    engine.register_symptom_declaration(
+    loader = _require_rule_loader("declaring outcome symptom")
+    loader.register_symptom_declaration(
         SymptomDeclaration(
             prefix=prefix,
             outcome=outcome,
@@ -88,21 +88,21 @@ def outcome_symptom(
 
 
 def symptom_predicate(func: SymptomPredicate) -> SymptomPredicate:
-    """Register a conditional-discard predicate onto the active engine.
+    """Register a conditional-discard predicate onto the active loader.
 
     Init-scoped like the symptom-declaration decorators: it attaches the callable
-    to whichever :class:`RuleEngine` is loading the rule file, keyed by the function
+    to whichever :class:`RuleLoader` is loading the rule file, keyed by the function
     name that ``conditional_discards`` references. Unlike ``known_symptom``, this may
     also run when the predicate module is imported directly for its function objects
-    (e.g. unit tests), where no engine is loading; that is a no-op, since registration
+    (e.g. unit tests), where no loader is active; that is a no-op, since registration
     only matters during a rule load.
     """
-    engine = _optional_rules_engine()
-    if engine is not None:
+    loader = _optional_rule_loader()
+    if loader is not None:
         # getattr rather than func.__name__: the parameter is typed as a Callable alias,
         # which is not guaranteed a __name__ by strict type checkers.
         name: str = getattr(func, "__name__")
-        engine.register_symptom_predicate(name, func)
+        loader.register_symptom_predicate(name, func)
     return func
 
 
@@ -122,8 +122,8 @@ def known_symptom(
             dynamic symptom variants (such as "RuntimeError").
         dag_discard: Projection behavior when the DAG discards this symptom.
     """
-    engine = _require_rules_engine("declaring known symptom")
-    engine.register_symptom_declaration(
+    loader = _require_rule_loader("declaring known symptom")
+    loader.register_symptom_declaration(
         SymptomDeclaration(
             prefix=prefix,
             category=category,
@@ -156,8 +156,8 @@ def cascade_symptom(
         resolve_contains: Any raw symptom id containing this substring resolves to
             this prefix.
     """
-    engine = _require_rules_engine("declaring cascade symptom")
-    engine.register_symptom_declaration(
+    loader = _require_rule_loader("declaring cascade symptom")
+    loader.register_symptom_declaration(
         SymptomDeclaration(
             prefix=prefix,
             cascade_discards=cascade_discards,

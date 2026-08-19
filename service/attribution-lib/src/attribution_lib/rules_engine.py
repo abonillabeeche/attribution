@@ -8,32 +8,27 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import glob
 import hashlib
 import importlib.util
 import sys
-from collections.abc import Callable, Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Generator, Iterable, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import (
     dataclass,
-    fields as dc_fields,
 )
 from datetime import datetime
-from itertools import groupby
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Optional, cast
 
-from loguru import logger
-from pydantic import ValidationError
-
-from attribution_lib.decision_trace_recorder import DecisionRecorder, NodeSymptomSnapshot, snapshot_bad_nodes
+from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.declarative.context import (  # noqa: F401 (re-exported public API)
     _EXPR_HELPER_RESERVED,
     EXPR_HELPER_INJECTED_PARAMS,
-    _NamespaceProvider,
-    _ProviderDecorator,
+    DeclarativeContext,
     _using_module_globals,
-    _using_rules_engine,
+    _using_rule_loader,
     const,
     expr_helper,
     rows,
@@ -42,8 +37,6 @@ from attribution_lib.declarative.context import (  # noqa: F401 (re-exported pub
 from attribution_lib.events import EventStream
 from attribution_lib.exceptions import (
     DuplicateRuleError,
-    InvalidRuleParams,
-    RuleAcceptsNoParamsError,
     RuleIngestionError,
     UnknownResourceError,
     UnknownRuleTypeError,
@@ -58,29 +51,29 @@ from attribution_lib.prefilters import (  # noqa: F401 (re-exported public API)
     MetricSpec,
     PreFilterCallable,
     PreFilterSpec,
-    get_metric_spec,
-    get_pre_filter,
     register_metric_spec,
     register_pre_filter,
 )
+from attribution_lib.rule_types.bases import (  # noqa: F401 (re-exported public API)
+    _RULE_TYPE_REGISTRY,
+    LoaderBase,
+    SubEngineBase,
+)
+from attribution_lib.rule_types.bootstrap import load_builtin_rule_types
+from attribution_lib.rule_types.collector import CollectorEngine
 from attribution_lib.rule_types.definitions import (  # noqa: F401 (re-exported public API)
     CollectorContext,
-    CollectorFormatter,
-    CollectorProcessor,
     CollectorRule,
     EventTriple,
     ExecutionContext,
     ExtractionContext,
     ExtractorAccumulator,
     ExtractorAccumulatorRule,
-    ExtractorProcessor,
     ExtractorRule,
     FilterContext,
     FilterPriority,
-    FilterProcessor,
     FilterRule,
     RefinerContext,
-    RefinerProcessor,
     RefinerRule,
     Rule,
     RuleContext,
@@ -88,7 +81,6 @@ from attribution_lib.rule_types.definitions import (  # noqa: F401 (re-exported 
     RuleLocation,
     RuleParameters,
     RuleParamsBase,
-    TwoStageSourceMatcher,
 )
 from attribution_lib.rule_types.observation import ObservationProcessor  # noqa: F401 (re-exported)
 from attribution_lib.rule_types.registration import (  # noqa: F401 (re-exported public API)
@@ -117,323 +109,127 @@ from attribution_lib.symptoms.registration import (  # noqa: F401 (re-exported p
 )
 
 
-class RefinerEntry(NamedTuple):
-    """A refiner rule with its execution metadata."""
+@dataclass(frozen=True, slots=True)
+class RuleDeclarations:
+    """Everything a load pass declares that is not itself a Rule."""
 
-    priority: int
-    sequence: int
-    name: str
-    processor: "RefinerProcessor"
-
-
-@dataclass
-class _LoadSnapshot:
-    """Snapshot of all RuleEngine fields that may be mutated during load.
-
-    Field names match the corresponding RuleEngine attribute names exactly so
-    capture() and restore() can iterate dc_fields() without a name mapping.
-    The special fields ``_pre_filters`` and ``_metric_specs`` capture the module-level
-    ``_PRE_FILTERS`` and ``_METRIC_SPECS`` dicts (not engine attributes) and are
-    handled explicitly in capture/restore.
-    """
-
-    const_values: dict
-    extractor_rules: dict
-    filter_rules: dict
-    extractor_accumulator_rules: dict
-    refiner_rules: dict
-    collector_rules: dict
-    declared_rule_names: set
-    declared_event_types: set
-    declarative_emit: dict
-    record_tables: dict
-    expr_helpers: dict
-    expr_helper_injections: dict
-    rule_processors: dict
-    symptom_declarations: list
-    symptom_predicates: dict
-    _filter_execution_order: list
-    _refiner_execution_order: list
-    _filters_sorted: bool
-    _filters_by_phase: dict
-    _refiners_sorted: bool
-    _refiners_by_phase: dict
-    matcher: object  # Optional[TwoStageSourceMatcher]; copied by reference (immutable identity)
-    _pre_filters: dict  # snapshot of the module-level _PRE_FILTERS
-    _metric_specs: dict  # snapshot of the module-level _METRIC_SPECS
-
-    @classmethod
-    def capture(cls, e: "RuleEngine") -> "_LoadSnapshot":
-        copy: dict[str, Any] = {}
-        for f in dc_fields(cls):
-            if f.name == "_pre_filters":
-                copy["_pre_filters"] = {
-                    k: PreFilterSpec(
-                        include_terms=list(v.include_terms),
-                        exclude_terms=list(v.exclude_terms),
-                        callables=list(v.callables),
-                    )
-                    for k, v in _PRE_FILTERS.items()
-                }
-            elif f.name == "_metric_specs":
-                copy["_metric_specs"] = {k: MetricSpec(thresholds=dict(v.thresholds)) for k, v in _METRIC_SPECS.items()}
-            else:
-                v = getattr(e, f.name)
-                copy[f.name] = type(v)(v) if isinstance(v, (dict, list, set)) else v
-        return cls(**copy)
-
-    def restore(self, e: "RuleEngine") -> None:
-        for f in dc_fields(self):
-            if f.name == "_pre_filters":
-                _PRE_FILTERS.clear()
-                _PRE_FILTERS.update(self._pre_filters)
-            elif f.name == "_metric_specs":
-                _METRIC_SPECS.clear()
-                _METRIC_SPECS.update(self._metric_specs)
-            else:
-                setattr(e, f.name, getattr(self, f.name))
+    rule_names: frozenset[str]
+    event_types: frozenset[str]
+    symptoms: tuple[SymptomDeclaration, ...]
+    predicates: Mapping[str, SymptomPredicate]
 
 
 class RuleEngine:
-    """Execute rules against sources"""
+    """Execution coordinator. Built by RuleLoader.build(), then read-only.
 
-    def __init__(self) -> None:
-        self.extractor_rules: dict[RuleId, ExtractorRule] = {}
-        self.filter_rules: dict[RuleId, FilterRule] = {}
-        self.extractor_accumulator_rules: dict[RuleId, ExtractorAccumulatorRule] = {}
-        self.refiner_rules: dict[RuleId, RefinerRule] = {}
-        self.collector_rules: dict[RuleId, CollectorRule] = {}
-        self.declarative_emit: dict[str, str] = {}
-        self.declared_rule_names: set[str] = set()
-        self.declared_event_types: set[str] = set()
-        self.expr_helpers: dict[str, "Callable[..., object]"] = {}
-        self.const_values: dict[str, object] = {}
-        self.record_tables: dict[str, dict] = {}
-        self.rule_processors: dict[str, "Callable[..., object]"] = {}
-        self.expr_helper_injections: dict[str, frozenset] = {}
-        self.symptom_declarations: list[SymptomDeclaration] = []
-        self.symptom_predicates: dict[str, SymptomPredicate] = {}
-        self.matcher: Optional[TwoStageSourceMatcher] = None
-        self._filter_execution_order: list[tuple[int, int, FilterProcessor]] = []
-        self._filters_sorted: bool = True
-        self._filters_by_phase: dict[int, list[FilterProcessor]] = {}
-        self._refiner_execution_order: list[RefinerEntry] = []
-        self._refiners_sorted: bool = True
-        self._refiners_by_phase: dict[int, list[tuple[str, RefinerProcessor]]] = {}
+    Holds one sub-engine per registered rule type and fans execute() out to
+    whichever claims the context. Nothing here mutates after construction, so
+    the derived views are computed once.
+    """
+
+    def __init__(self, sub_engines: list[SubEngineBase], declarations: RuleDeclarations) -> None:
+        self._engines = sub_engines
+        self.declarations = declarations
+
+        combined: dict[RuleId, Rule] = {}
+        names: set[str] = set()
+        by_type: dict[type, dict[RuleId, Rule]] = {}
+        for engine in sub_engines:
+            for store in (engine.rules, engine.extra_rules()):
+                for rule_id, rule in store.items():
+                    combined[rule_id] = rule
+                    by_type.setdefault(type(rule), {})[rule_id] = rule
+            names.update(engine.rules.keys())
+            names.update(engine.extra_rule_names())
+        self._rules = combined
+        self._by_type = by_type
+        self._all_rule_names = names | set(declarations.rule_names)
+
+    # -- Declarations ------------------------------------------------------
+
+    @property
+    def declared_rule_names(self) -> set[str]:
+        return set(self.declarations.rule_names)
+
+    @property
+    def declared_event_types(self) -> set[str]:
+        return set(self.declarations.event_types)
+
+    @property
+    def symptom_declarations(self) -> list[SymptomDeclaration]:
+        return list(self.declarations.symptoms)
+
+    @property
+    def symptom_predicates(self) -> dict[str, SymptomPredicate]:
+        return dict(self.declarations.predicates)
+
+    # -- Rule views (computed once in __init__) ----------------------------
 
     @property
     def rules(self) -> dict[RuleId, Rule]:
-        """Combined view of all rules (for backward compatibility)."""
-        all_rules: dict[RuleId, Rule] = {}
-        all_rules.update(self.extractor_rules)
-        all_rules.update(self.filter_rules)
-        all_rules.update(self.extractor_accumulator_rules)
-        all_rules.update(self.refiner_rules)
-        all_rules.update(self.collector_rules)
-        return all_rules
+        return self._rules
 
     @property
     def all_rule_names(self) -> set[str]:
-        """All known rule names: registered rules + explicitly declared synthetic names."""
-        return set(self.rules.keys()) | self.declared_rule_names
+        return self._all_rule_names
 
     @property
     def all_event_types(self) -> set[str]:
-        """All declared event type names."""
-        return set(self.declared_event_types)
+        return set(self.declarations.event_types)
 
-    def register_rule(self, rule: Rule) -> None:
-        """Register a rule, dispatching to correct storage based on type."""
-        if isinstance(rule, ExtractorRule):
-            self._register_extractor(rule)
-        elif isinstance(rule, FilterRule):
-            self._register_filter(rule)
-        elif isinstance(rule, ExtractorAccumulatorRule):
-            self._register_extractor_accumulator(rule)
-        elif isinstance(rule, RefinerRule):
-            self._register_refiner(rule)
-        elif isinstance(rule, CollectorRule):
-            self._register_collector(rule)
-        else:
-            raise UnknownRuleTypeError(f"Unknown rule type: {type(rule)}")
+    def rules_of_type(self, rule_type_: type) -> dict[RuleId, Rule]:
+        """Every registered rule of exactly ``rule_type_``."""
+        return self._by_type.get(rule_type_, {})
 
-    def register_symptom_declaration(self, declaration: SymptomDeclaration) -> None:
-        """Register declarative symptom metadata loaded from a rule module."""
-        for existing in self.symptom_declarations:
-            if existing.prefix != declaration.prefix or existing.scope is not declaration.scope:
+    @property
+    def extractor_rules(self) -> "dict[RuleId, ExtractorRule]":
+        return cast("dict[RuleId, ExtractorRule]", self.rules_of_type(ExtractorRule))
+
+    @property
+    def extractor_accumulator_rules(self) -> "dict[RuleId, ExtractorAccumulatorRule]":
+        return cast("dict[RuleId, ExtractorAccumulatorRule]", self.rules_of_type(ExtractorAccumulatorRule))
+
+    @property
+    def filter_rules(self) -> "dict[RuleId, FilterRule]":
+        return cast("dict[RuleId, FilterRule]", self.rules_of_type(FilterRule))
+
+    @property
+    def refiner_rules(self) -> "dict[RuleId, RefinerRule]":
+        return cast("dict[RuleId, RefinerRule]", self.rules_of_type(RefinerRule))
+
+    @property
+    def collector_rules(self) -> "dict[RuleId, CollectorRule]":
+        return cast("dict[RuleId, CollectorRule]", self.rules_of_type(CollectorRule))
+
+    # -- Execution ---------------------------------------------------------
+
+    def execute(self, context: ExecutionContext) -> None:
+        """Fan out to every sub-engine claiming this context type.
+
+        A context nothing claims is an error, not a silent no-op: it means a
+        rule type is missing from the registry.
+        """
+        claimed = False
+        for engine in self._engines:
+            if engine.handles(context) is False:
                 continue
-            if existing == declaration:
-                return
-            existing_location = existing.location if existing.location is not None else RuleLocation("unknown", 0)
-            new_location = declaration.location if declaration.location is not None else RuleLocation("unknown", 0)
-            raise RuleIngestionError(
-                f"Conflicting symptom declaration for {declaration.prefix!r}: "
-                f"first at {existing_location.file}:{existing_location.line}, "
-                f"conflict at {new_location.file}:{new_location.line}"
+            claimed = True
+            engine.execute(context)
+        if claimed is False:
+            raise UnknownRuleTypeError(
+                f"No sub-engine handles {type(context).__name__}; a rule type may be unregistered"
             )
-        self.symptom_declarations.append(declaration)
 
-    def register_symptom_predicate(self, name: str, predicate: SymptomPredicate) -> None:
-        """Register a conditional-discard predicate under ``name`` for this engine.
-
-        Cascade rules reference the predicate by name in ``conditional_discards``;
-        the compiled registry resolves the name to this callable.
-        """
-        existing = self.symptom_predicates.get(name)
-        if existing is not None and existing is not predicate:
-            raise RuleIngestionError(f"Conflicting symptom predicate registered for {name!r}")
-        self.symptom_predicates[name] = predicate
-
-    def _check_duplicate(self, name: RuleId, location: RuleLocation) -> None:
-        """Check for duplicate rule names across all rule types."""
-        for store in (
-            self.extractor_rules,
-            self.filter_rules,
-            self.extractor_accumulator_rules,
-            self.refiner_rules,
-            self.collector_rules,
-        ):
-            existing = store.get(name)
-            if existing is not None:
-                raise DuplicateRuleError(
-                    f"Duplicate rule '{name}': "
-                    f"first at {existing.location.file}:{existing.location.line}, "
-                    f"duplicate at {location.file}:{location.line}"
-                )
-
-    def _register_extractor(self, rule: ExtractorRule) -> None:
-        """Register an extractor rule."""
-        self._check_duplicate(rule.name, rule.location)
-        self.matcher = None  # Invalidate matcher
-        self.extractor_rules[rule.name] = rule
-
-    def _register_filter(self, rule: FilterRule) -> None:
-        """Register a filter rule."""
-        self._check_duplicate(rule.name, rule.location)
-        self.filter_rules[rule.name] = rule
-        self._filter_execution_order.append((rule.priority, len(self._filter_execution_order), rule.processor))
-        self._filters_sorted = False
-
-    def _register_extractor_accumulator(self, rule: ExtractorAccumulatorRule) -> None:
-        """Register an extractor-accumulator rule."""
-        self._check_duplicate(rule.name, rule.location)
-        self.matcher = None  # Invalidate matcher
-        self.extractor_accumulator_rules[rule.name] = rule
-
-    def _register_refiner(self, rule: RefinerRule) -> None:
-        """Register a refiner rule."""
-        self._check_duplicate(rule.name, rule.location)
-        self.refiner_rules[rule.name] = rule
-        self._refiner_execution_order.append(
-            RefinerEntry(rule.priority, len(self._refiner_execution_order), rule.name, rule.processor)
-        )
-        self._refiners_sorted = False
-
-    def _register_collector(self, rule: CollectorRule) -> None:
-        """Register a collector rule."""
-        self._check_duplicate(rule.name, rule.location)
-        self.collector_rules[rule.name] = rule
-
-    def run_collectors(
+    def observation_processor(
         self,
+        source_type: ObservationSource,
+        job_info: JobInfo,
         event_stream: EventStream,
-        job_info: "JobInfo",
-        rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
-    ) -> dict[str, Any]:
-        """Run all registered collectors and merge their digest outputs.
-
-        Each collector's formatter returns a dict of digest key-value pairs.
-        Duplicate keys across collectors are logged as errors (first value kept).
-        """
-        params_by_rule = rule_params or {}
-        digest: dict[str, Any] = {}
-        for rule_id, rule in self.collector_rules.items():
-            try:
-                params = self.parse_collector_params(rule, params_by_rule.get(rule_id))
-                result = rule.process(event_stream, job_info, params)
-            except Exception:
-                logger.opt(exception=True).error(f"Collector '{rule_id}' failed")
-                continue
-            for key, value in result.items():
-                if key in digest:
-                    logger.error(
-                        f"Duplicate digest key '{key}': collector '{rule_id}' "
-                        f"would overwrite existing value (keeping first)"
-                    )
-                else:
-                    digest[key] = value
-        return digest
-
-    @staticmethod
-    def parse_collector_params(rule: CollectorRule, raw: Optional[RuleParameters]) -> Optional[RuleParamsBase]:
-        """Parse a ``RuleParameters`` envelope against the rule's params_model.
-
-        Returns:
-            ``None`` if the rule declares no ``params_model``; otherwise
-            constructs the model (with defaults when ``raw`` is ``None``).
-        Raises:
-            ``RuleAcceptsNoParamsError``: If params are supplied for a rule with
-                no ``params_model``.
-            ``InvalidRuleParams``: If the payload fails ``params_model`` validation.
-        """
-        if rule.params_model is None:
-            if raw is not None and raw.params != {}:
-                raise RuleAcceptsNoParamsError(rule.name)
-            return None
-
-        params_data = raw.params if raw is not None else {}
-        try:
-            return rule.params_model(**params_data)
-        except ValidationError as e:
-            raise InvalidRuleParams(rule.name, e) from e
-
-    def finalize(self) -> None:
-        """Build the TwoStageMatcher and sort filter execution order."""
-        if self.matcher is not None:
-            logger.warning("Redundant rules engine finalization")
-
-        # Collect all patterns by source type — matcher is rule-type-agnostic
-        patterns_by_source: dict[ObservationSource, dict[RuleId, str]] = {}
-        for rule in self.extractor_rules.values():
-            if not rule.match_re:
-                continue
-            for source in rule.source_filters:
-                patterns_by_source.setdefault(source, {})[rule.name] = rule.match_re
-        for acc_rule in self.extractor_accumulator_rules.values():
-            if not acc_rule.match_re:
-                continue
-            for source in acc_rule.source_filters:
-                patterns_by_source.setdefault(source, {})[acc_rule.name] = acc_rule.match_re
-
-        self.matcher = TwoStageSourceMatcher(patterns_by_source)
-        self._ensure_filters_sorted()
-        self._ensure_refiners_sorted()
-
-    def _ensure_filters_sorted(self) -> None:
-        """Sort filter execution order and build phase buckets for efficient dispatch."""
-        if not self._filters_sorted:
-            self._filter_execution_order.sort()
-            self._filters_by_phase = {
-                priority: [proc for _, _, proc in group]
-                for priority, group in groupby(
-                    self._filter_execution_order,
-                    key=lambda x: x[0],
-                )
-            }
-            self._filters_sorted = True
-
-    def _ensure_refiners_sorted(self) -> None:
-        """Sort refiner execution order and build phase buckets for efficient dispatch."""
-        if not self._refiners_sorted:
-            self._refiner_execution_order.sort()
-            self._refiners_by_phase = {
-                priority: [(entry.name, entry.processor) for entry in group]
-                for priority, group in groupby(
-                    self._refiner_execution_order,
-                    key=lambda x: x.priority,
-                )
-            }
-            self._refiners_sorted = True
+    ) -> "ObservationProcessor":
+        """Create an ObservationProcessor for the given source type."""
+        ctx = ExtractionContext(source_type=source_type, job_info=job_info, event_stream=event_stream)
+        self.execute(ctx)
+        return cast("ObservationProcessor", ctx.result)
 
     def process_event_filters(
         self,
@@ -442,21 +238,8 @@ class RuleEngine:
         *,
         phase: Optional[int] = None,
     ) -> None:
-        """Process filter rules in priority order (lower priority values first).
-
-        Args:
-            phase: If set, run only filters at this exact priority.
-                   If None, run all filter phases in order.
-        """
-        self._ensure_filters_sorted()
-        context = FilterContext(job_info=job_info, event_stream=event_stream)
-        if phase is not None:
-            for processor in self._filters_by_phase.get(phase, []):
-                processor(context)
-        else:
-            for priority in sorted(self._filters_by_phase.keys()):
-                for processor in self._filters_by_phase[priority]:
-                    processor(context)
+        """Run filter rules as a compatibility wrapper over ``execute()``."""
+        self.execute(FilterContext(job_info=job_info, event_stream=event_stream, phase=phase))
 
     def process_refiner_rules(
         self,
@@ -474,29 +257,8 @@ class RuleEngine:
         bad_node_result: Optional[Any] = None,
         recorder: Optional[DecisionRecorder] = None,
     ) -> RefinerContext:
-        """Process refiner rules in priority order (lower priority values first).
-
-        Args:
-            event_stream: Event stream (for non-attribution queries, e.g. timeout).
-            job_info: Job metadata.
-            symptoms: Materialized SymptomSet[str].
-            my_bad_nodes: Materialized JobNodeAttributions.
-            raw_keywords: Raw keyword SymptomSet[str] from log scanning.
-            extract_job_metadata_from_logfile: Whether job metadata was extracted from log file.
-            phase: Run only refiners in this phase. The upper bound is derived
-                   automatically from the next FilterPriority value.
-                   If None, run all pre-outcome phases (SCRUB + FINAL).
-            outcome: SourceSet[OutcomeAttribution] (for POST_OUTCOME refiners).
-            cancelled_by: Cancellation source (for POST_OUTCOME refiners).
-            attribution_result: AttributionResult (for POST_OUTCOME refiners).
-            bad_node_result: CalcBadNodesAttributionResult (for POST_OUTCOME refiners).
-            recorder: Optional DecisionRecorder for decision graph.
-
-        Returns:
-            The RefinerContext after all rules have executed.
-        """
-        self._ensure_refiners_sorted()
-        context = RefinerContext(
+        """Run refiner rules as a compatibility wrapper over ``execute()``."""
+        ctx = RefinerContext(
             job_info=job_info,
             event_stream=event_stream,
             symptoms=symptoms,
@@ -508,61 +270,167 @@ class RuleEngine:
             cancelled_by=cancelled_by,
             attribution_result=attribution_result,
             bad_node_result=bad_node_result,
+            phase=phase,
         )
+        self.execute(ctx)
+        return ctx
 
-        def _run_refiners(phase_rules: list[tuple[str, "RefinerProcessor"]]) -> None:
-            cached_bad: Optional[NodeSymptomSnapshot] = None
-            for name, processor in phase_rules:
-                before: Optional[set[str]] = None
-                if recorder is not None:
-                    before = set(symptoms.symptoms()) if symptoms is not None else set()
-                    if cached_bad is None:
-                        cached_bad = snapshot_bad_nodes(my_bad_nodes)
-                processor(context)
-                if recorder is not None and before is not None:
-                    after = set(symptoms.symptoms()) if symptoms is not None else set()
-                    after_bad = snapshot_bad_nodes(my_bad_nodes)
-                    if after != before or after_bad != cached_bad:
-                        recorder.record_refiner_diff(name, before, after, cached_bad or {}, after_bad)
-                    cached_bad = after_bad
-
-        if phase is not None:
-            upper = min((p for p in FilterPriority if p > phase), default=None)
-            for priority in sorted(self._refiners_by_phase.keys()):
-                if priority < phase:
-                    continue
-                if upper is not None and priority >= upper:
-                    break
-                _run_refiners(self._refiners_by_phase[priority])
-        else:
-            for priority in sorted(self._refiners_by_phase.keys()):
-                if priority >= FilterPriority.POST_OUTCOME:
-                    break
-                _run_refiners(self._refiners_by_phase[priority])
-        return context
-
-    def observation_processor(
+    def run_collectors(
         self,
-        source_type: ObservationSource,
-        job_info: JobInfo,
         event_stream: EventStream,
-    ) -> "ObservationProcessor":
-        """Create an ObservationProcessor for the given source type.
+        job_info: JobInfo,
+        rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
+    ) -> dict[str, Any]:
+        """Run collectors as a compatibility wrapper over ``execute()``."""
+        ctx = CollectorContext(event_stream=event_stream, job_info=job_info, rule_params=rule_params)
+        self.execute(ctx)
+        return ctx.result
 
-        Ensures the matcher is built before creating the processor.
+    @staticmethod
+    def parse_collector_params(rule: CollectorRule, raw: Optional[RuleParameters]) -> Optional[RuleParamsBase]:
+        """Delegates to CollectorEngine.parse_params()."""
+        return CollectorEngine.parse_params(rule, raw)
+
+    # -- Cache keys --------------------------------------------------------
+
+    def extractor_hash(self) -> str:
+        """Stable hash of all extractor rules. Changes when extraction behavior changes.
+
+        Contributions are folded in sorted order rather than sub-engine order,
+        so renaming a rule_types module cannot silently change every key.
+
+        TODO: evolve into a versioned scheme that can detect compatible vs breaking
+        rule changes (e.g. additive rules could reuse existing cache + incremental extract).
         """
-        if self.matcher is None:
-            self.finalize()
-        return ObservationProcessor(
-            engine=self,
-            source_type=source_type,
-            context=RuleContext(job_info=job_info),
-            event_adder=event_stream.event_adder(),
-        )
+        h = hashlib.sha256()
+        for contribution in sorted(c for e in self._engines if len(c := e.extractor_hash_contribution()) > 0):
+            h.update(contribution.encode())
+        return h.hexdigest()
+
+    def attribution_hash(self) -> str:
+        """Stable hash of filter/refiner/collector rules. Changes when attribution logic changes."""
+        h = hashlib.sha256()
+        for contribution in sorted(c for e in self._engines if len(c := e.attribution_hash_contribution()) > 0):
+            h.update(contribution)
+        return h.hexdigest()
+
+
+class RuleLoader:
+    """Accumulates rules during a load pass, then builds a RuleEngine.
+
+    Mutable and validating, where RuleEngine is neither. One sub-loader per
+    registered rule type; dispatch goes through a table built from the
+    registry, so no rule type is named here.
+    """
+
+    def __init__(self) -> None:
+        load_builtin_rule_types()
+        self._loaders: list[LoaderBase] = [entry.loader_class() for entry in _RULE_TYPE_REGISTRY]
+        self._dispatch: dict[type[Rule], LoaderBase] = {
+            rt: loader for entry, loader in zip(_RULE_TYPE_REGISTRY, self._loaders) for rt in entry.rule_types
+        }
+        self.declared_rule_names: set[str] = set()
+        self.declared_event_types: set[str] = set()
+        self.symptom_declarations: list[SymptomDeclaration] = []
+        self.symptom_predicates: dict[str, SymptomPredicate] = {}
+        self.declarative_ctx = DeclarativeContext()
+        self._context_scopes: list[AbstractContextManager["RuleLoader"]] = []
+
+    # -- Registration ------------------------------------------------------
+
+    def register_rule(self, rule: Rule) -> None:
+        """Register a rule, dispatching to its sub-loader by exact type.
+
+        Dispatch is by exact type rather than isinstance: a Rule subclass with
+        no registered pair is a mistake worth reporting, not something to
+        silently route to its base's loader.
+        """
+        loader = self._dispatch.get(type(rule))
+        if loader is None:
+            raise UnknownRuleTypeError(f"Unknown rule type: {type(rule)}")
+        for other in self._loaders:
+            existing = other.find_by_name(rule.name)
+            if existing is not None:
+                raise DuplicateRuleError(
+                    f"Duplicate rule '{rule.name}': "
+                    f"first at {existing.location.file}:{existing.location.line}, "
+                    f"duplicate at {rule.location.file}:{rule.location.line}"
+                )
+        loader.register(rule)
+
+    def register_symptom_declaration(self, declaration: SymptomDeclaration) -> None:
+        """Register declarative symptom metadata; rejects conflicting declarations."""
+        for existing in self.symptom_declarations:
+            if existing.prefix != declaration.prefix or existing.scope is not declaration.scope:
+                continue
+            if existing == declaration:
+                return
+            existing_location = existing.location if existing.location is not None else RuleLocation("unknown", 0)
+            new_location = declaration.location if declaration.location is not None else RuleLocation("unknown", 0)
+            raise RuleIngestionError(
+                f"Conflicting symptom declaration for {declaration.prefix!r}: "
+                f"first at {existing_location.file}:{existing_location.line}, "
+                f"conflict at {new_location.file}:{new_location.line}"
+            )
+        self.symptom_declarations.append(declaration)
+
+    def register_symptom_predicate(self, name: str, predicate: SymptomPredicate) -> None:
+        """Register a conditional-discard predicate; rejects a conflicting callable."""
+        existing = self.symptom_predicates.get(name)
+        if existing is not None and existing is not predicate:
+            raise RuleIngestionError(f"Conflicting symptom predicate registered for {name!r}")
+        self.symptom_predicates[name] = predicate
+
+    # -- Sub-loader access -------------------------------------------------
+
+    @property
+    def rules(self) -> dict[RuleId, Rule]:
+        """Every rule registered so far, across all sub-loaders."""
+        combined: dict[RuleId, Rule] = {}
+        for loader in self._loaders:
+            combined.update(cast(dict[RuleId, Rule], loader.rules))
+            combined.update(cast(dict[RuleId, Rule], loader.extra_rules()))
+        return combined
+
+    @property
+    def extractor_rules(self) -> "dict[RuleId, ExtractorRule]":
+        """The extractor sub-loader's rule dict."""
+        return cast("dict[RuleId, ExtractorRule]", self._dispatch[ExtractorRule].rules)
+
+    @property
+    def declarative_emit(self) -> dict[str, str]:
+        """The extractor sub-loader's declarative_emit store."""
+        store = self._dispatch[ExtractorRule].declarative_emit_store()
+        if store is None:
+            raise UnknownRuleTypeError("The extractor loader exposes no declarative_emit store")
+        return store
+
+    # -- Snapshot and rollback --------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        """Capture every field a load may mutate."""
+        return {
+            "loaders": [loader.snapshot() for loader in self._loaders],
+            "declared_rule_names": set(self.declared_rule_names),
+            "declared_event_types": set(self.declared_event_types),
+            "symptom_declarations": list(self.symptom_declarations),
+            "symptom_predicates": dict(self.symptom_predicates),
+            "declarative_ctx": self.declarative_ctx.snapshot(),
+        }
+
+    def restore(self, snap: dict[str, Any]) -> None:
+        """Restore state captured by snapshot()."""
+        for loader, loader_snap in zip(self._loaders, snap["loaders"]):
+            loader.restore(loader_snap)
+        self.declared_rule_names = snap["declared_rule_names"]
+        self.declared_event_types = snap["declared_event_types"]
+        self.symptom_declarations = snap["symptom_declarations"]
+        self.symptom_predicates = snap["symptom_predicates"]
+        self.declarative_ctx.restore(snap["declarative_ctx"])
 
     @contextmanager
     def _load_guard(self) -> Generator[None, None, None]:
-        """Snapshot all load-mutable engine state; restore on any exception."""
+        """Roll back every load-mutable field if the load raises."""
         snap = _LoadSnapshot.capture(self)
         try:
             yield
@@ -570,21 +438,33 @@ class RuleEngine:
             snap.restore(self)
             raise
 
-    def load(self, filepath: str | Path) -> dict[RuleId, Rule]:
-        """
-        Load a rules module and return dict of Rule objects.
+    # -- Loading -----------------------------------------------------------
 
-        The rule file's parent directory is temporarily added to sys.path
-        so that rule modules can import from sibling packages (e.g.
-        ``from common.syslog_helpers import ...``).
+    def __enter__(self) -> "RuleLoader":
+        scope = _using_rule_loader(self)
+        scope.__enter__()
+        self._context_scopes.append(scope)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        if not self._context_scopes:
+            raise RuntimeError("RuleLoader context is not active")
+        scope = self._context_scopes.pop()
+        scope.__exit__(*exc_info)
+
+    def load(self, filepath: str | Path) -> dict[RuleId, Rule]:
+        """Load one rule file, TOML or Python, and return the rules it added.
+
+        Binds itself for the duration, so a bare ``loader.load()`` works as
+        well as a ``with`` block.
         """
         path = Path(filepath)
         if path.suffix == ".toml":
-            with self._load_guard(), _using_rules_engine(self):
+            with self._load_guard(), _using_rule_loader(self):
                 return load_toml_rules(self, str(path))
 
         rules_before = set(self.rules)
-        with self._load_guard(), _using_rules_engine(self):
+        with self._load_guard(), _using_rule_loader(self):
             spec = importlib.util.spec_from_file_location("rules_module", str(path))
             if spec is None or spec.loader is None:
                 raise RuleIngestionError(f"Cannot load module from {path}")
@@ -606,39 +486,66 @@ class RuleEngine:
             # Return only the rules that were added by this module
             return {name: rule for name, rule in self.rules.items() if name not in rules_before}
 
-    def extractor_hash(self) -> str:
-        """Stable hash of all extractor rules. Changes when extraction behavior changes.
+    def build(self) -> RuleEngine:
+        """Produce the immutable engine for everything registered so far."""
+        return RuleEngine(
+            sub_engines=[loader.build() for loader in self._loaders],
+            declarations=RuleDeclarations(
+                rule_names=frozenset(self.declared_rule_names),
+                event_types=frozenset(self.declared_event_types),
+                symptoms=tuple(self.symptom_declarations),
+                predicates=dict(self.symptom_predicates),
+            ),
+        )
 
-        TODO: evolve into a versioned scheme that can detect compatible vs breaking
-        rule changes (e.g. additive rules could reuse existing cache + incremental extract).
-        """
-        h = hashlib.sha256()
-        for name in sorted(self.extractor_rules):
-            rule = self.extractor_rules[name]
-            h.update(name.encode())
-            h.update(rule.match_re.encode())
-            h.update(str(sorted(sf.value for sf in rule.source_filters)).encode())
-            h.update(self.declarative_emit.get(name, "").encode())
-        for name in sorted(self.extractor_accumulator_rules):
-            acc_rule = self.extractor_accumulator_rules[name]
-            h.update(name.encode())
-            h.update(acc_rule.match_re.encode())
-        return h.hexdigest()
+    @classmethod
+    def load_all(cls, rules_paths: Iterable[Path]) -> RuleEngine:
+        """Load every rule file under each path and build the engine."""
+        with cls() as loader:
+            for path in rules_paths:
+                for pattern in ("*.py", "*.toml"):
+                    for file in sorted(glob.glob(pattern, root_dir=path)):
+                        if file.endswith(".test.toml"):
+                            continue  # co-located test files are run by the suite, not loaded
+                        loader.load(str(path / file))
+            return loader.build()
 
-    def attribution_hash(self) -> str:
-        """Stable hash of filter/refiner/collector rules. Changes when attribution logic changes."""
-        h = hashlib.sha256()
-        for name in sorted(self.filter_rules):
-            filter_rule = self.filter_rules[name]
-            h.update(name.encode())
-            h.update(str(filter_rule.priority).encode())
-        for name in sorted(self.refiner_rules):
-            refiner_rule = self.refiner_rules[name]
-            h.update(name.encode())
-            h.update(str(refiner_rule.priority).encode())
-        for name in sorted(self.collector_rules):
-            h.update(name.encode())
-        return h.hexdigest()
+
+@dataclass
+class _LoadSnapshot:
+    """All state a single load() may mutate, for rollback on failure.
+
+    The loader captures its own fields; the two module-level registries in
+    prefilters are captured here as part of the same transaction.
+    """
+
+    loader_snap: dict[str, Any]
+    pre_filters: dict[ObservationSource, PreFilterSpec]
+    metric_specs: dict[ObservationSource, MetricSpec]
+
+    @classmethod
+    def capture(cls, loader: "RuleLoader") -> "_LoadSnapshot":
+        return cls(
+            loader_snap=loader.snapshot(),
+            pre_filters={
+                source: PreFilterSpec(
+                    include_terms=list(spec.include_terms),
+                    exclude_terms=list(spec.exclude_terms),
+                    callables=list(spec.callables),
+                )
+                for source, spec in _PRE_FILTERS.items()
+            },
+            metric_specs={
+                source: MetricSpec(thresholds=dict(spec.thresholds)) for source, spec in _METRIC_SPECS.items()
+            },
+        )
+
+    def restore(self, loader: "RuleLoader") -> None:
+        loader.restore(self.loader_snap)
+        _PRE_FILTERS.clear()
+        _PRE_FILTERS.update(self.pre_filters)
+        _METRIC_SPECS.clear()
+        _METRIC_SPECS.update(self.metric_specs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -810,11 +717,6 @@ __all__ = [
     "RuleParameters",
     "RuleParamsBase",
     # Processor and formatter signatures
-    "CollectorFormatter",
-    "CollectorProcessor",
-    "ExtractorProcessor",
-    "FilterProcessor",
-    "RefinerProcessor",
     # Rule registration
     "collector_def",
     "declare_event_types",
@@ -840,15 +742,16 @@ __all__ = [
     "PreFilterSpec",
     "SOURCE_CONFIGS",
     "SourceProcessingConfig",
-    "get_metric_spec",
-    "get_pre_filter",
     "register_metric_spec",
     "register_pre_filter",
     "register_source_config",
     # Engine and execution
+    "CollectorEngine",
+    "LoaderBase",
     "ObservationProcessor",
+    "SubEngineBase",
     "RuleEngine",
-    "TwoStageSourceMatcher",
+    "RuleLoader",
     "process_observation_source",
     # Compatibility exports owned by exceptions and symptoms.declarations.
     "CascadeScope",

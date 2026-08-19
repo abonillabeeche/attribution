@@ -78,10 +78,32 @@ def test_every_imported_name_is_exported():
 
     This is what keeps __all__ from drifting into fiction: a caller cannot
     quietly start depending on a name the facade does not claim to offer.
-    Underscore-prefixed names are private by convention and exempt.
+    Underscore-prefixed names are private by convention and so are not in
+    __all__; test_every_imported_private_name_resolves covers those instead.
     """
     declared = set(rules_engine.__all__)
     imported, unparsable = _names_imported_from_rules_engine()
     assert unparsable == [], f"Python sources could not be parsed: {unparsable}"
     undeclared = sorted(n for n in imported if n.startswith("_") is False and n not in declared)
     assert undeclared == [], f"imported from rules_engine but absent from __all__: {undeclared}"
+
+
+def test_every_imported_private_name_resolves():
+    """Private names other modules import from rules_engine must still resolve.
+
+    __all__ deliberately excludes underscore-prefixed names, so the guard above
+    cannot see them. Several modules import them anyway (_PRE_FILTERS,
+    _METRIC_SPECS, _EXPR_HELPER_RESERVED), and deleting one of
+    those re-exports as apparently-unused surfaces as an ImportError somewhere
+    unrelated.
+
+    Known blind spot: some tests write a rule file at runtime from a string
+    literal, and its imports are invisible to any static scan. _get_caller_location
+    is imported that way by test_symptom_registry_generation and by nothing
+    else, so only running the suite catches its removal. Treat a name being
+    absent here as weak evidence, not proof that it is unused.
+    """
+    imported, unparsable = _names_imported_from_rules_engine()
+    assert unparsable == [], f"Python sources could not be parsed: {unparsable}"
+    missing = sorted(name for name in imported if name.startswith("_") and hasattr(rules_engine, name) is False)
+    assert missing == [], f"private names imported from rules_engine that do not resolve: {missing}"

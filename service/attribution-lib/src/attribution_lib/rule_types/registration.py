@@ -8,14 +8,14 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Decorators that register rules from a rule file into the active engine."""
+"""Decorators that register rules from a rule file into the active loader."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from inspect import currentframe
 from typing import Any, Optional
 
-from attribution_lib.declarative.context import _current_module_globals, _require_rules_engine
+from attribution_lib.declarative.context import _current_module_globals, _require_rule_loader
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rule_types.definitions import (
@@ -142,12 +142,12 @@ class _Registration:
         return author
 
     def register(self, rule: Rule) -> None:
-        engine = _require_rules_engine(f"defining rule '{self.name}'")
-        engine.register_rule(rule)
+        loader = _require_rule_loader(f"defining rule '{self.name}'")
+        loader.register_rule(rule)
         if self.derived_rules:
-            engine.declared_rule_names.update(self.derived_rules)
+            loader.declared_rule_names.update(self.derived_rules)
         if self.derived_event_types:
-            engine.declared_event_types.update(self.derived_event_types)
+            loader.declared_event_types.update(self.derived_event_types)
 
 
 def declare_rule_names(*names: str) -> None:
@@ -161,8 +161,8 @@ def declare_rule_names(*names: str) -> None:
     Multiple calls (including from different rule files) with the same name
     are safe — names are collected as a set union.
     """
-    engine = _require_rules_engine("declaring rule names")
-    engine.declared_rule_names.update(names)
+    loader = _require_rule_loader("declaring rule names")
+    loader.declared_rule_names.update(names)
 
 
 def declare_event_types(*names: str) -> None:
@@ -175,8 +175,8 @@ def declare_event_types(*names: str) -> None:
     Multiple calls (including from different rule files) with the same name
     are safe — names are collected as a set union.
     """
-    engine = _require_rules_engine("declaring event types")
-    engine.declared_event_types.update(names)
+    loader = _require_rule_loader("declaring event types")
+    loader.declared_event_types.update(names)
 
 
 def filter_def(

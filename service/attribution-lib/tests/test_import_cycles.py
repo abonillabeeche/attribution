@@ -45,3 +45,33 @@ assert callable(load_toml_rules)
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_rule_types_load_only_when_rule_loader_is_constructed():
+    """The base package is inert; RuleLoader explicitly loads built-in implementations."""
+    code = """
+import sys
+import attribution_lib.rule_types
+
+builtins = {
+    "attribution_lib.rule_types.collector",
+    "attribution_lib.rule_types.extractor",
+    "attribution_lib.rule_types.filter",
+    "attribution_lib.rule_types.refiner",
+}
+assert builtins.isdisjoint(sys.modules)
+
+from attribution_lib.rules_engine import RuleLoader
+loader = RuleLoader()
+assert builtins <= sys.modules.keys()
+assert len(loader._loaders) == 4
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr

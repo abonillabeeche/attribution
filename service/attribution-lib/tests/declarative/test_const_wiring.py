@@ -6,11 +6,11 @@ import types
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
-from attribution_lib.declarative.context import _using_rules_engine
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.emit import compile_element
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine, const
+from attribution_lib.rules_engine import RuleContext, RuleLoader, const
 from attribution_lib.sources import Source
 
 
@@ -38,13 +38,13 @@ def test_const_absent_default_is_unaffected(dummy_ctx):
 
 
 def _load(tmp_path, toml_text, register=None):
-    engine = RuleEngine()
-    with _using_rules_engine(engine):
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
         if register:
             register()
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
-        return engine, load_toml_rules(engine, str(f))
+        return loader, load_toml_rules(loader, str(f))
 
 
 def test_rule_using_provider_const_loads(tmp_path):
@@ -66,7 +66,7 @@ def test_rule_using_provider_const_loads(tmp_path):
     expect = "none"
     line = "metric_value: 0.04"
     """
-    engine, added = _load(tmp_path, toml, register)
+    loader, added = _load(tmp_path, toml, register)
     assert "Plr" in added
 
 
@@ -86,9 +86,9 @@ def test_inline_const_table_loads(tmp_path):
     expect = "none"
     line = "metric_value: 0.04"
     """
-    engine, added = _load(tmp_path, toml)
+    loader, added = _load(tmp_path, toml)
     assert "Plr" in added
-    assert engine.const_values["some_threshold"] == 0.05
+    assert loader.declarative_ctx.const_values["some_threshold"] == 0.05
 
 
 def test_unknown_const_is_load_error(tmp_path):
