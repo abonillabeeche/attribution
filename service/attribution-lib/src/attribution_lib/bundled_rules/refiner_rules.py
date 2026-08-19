@@ -853,6 +853,9 @@ def process_completes_cleanup(context: RefinerContext):
         symptoms.discard("BrokenPipeError")
         symptoms.discard("No such file or directory")
         symptoms.discard(_CSP_TENANT_REPORTED)
+        # Completion is a job-lifecycle signal and is stripped from node
+        # attributions, so same-node DAG cascade pruning cannot demote this CSP
+        # symptom there.
         if my_bad_nodes is not None:
             for _node, node_group in my_bad_nodes.items():
                 node_group.discard(_CSP_TENANT_REPORTED)
