@@ -83,6 +83,49 @@ def test_nv_err_busy_retry_maps_to_infrasw():
     assert match.outcome == "Fail InfraSW"
 
 
+def test_slurm_node_failure_maps_to_infrasw():
+    """Treat the scheduler's NODE_FAIL state as infrastructure software evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Node failure reported by slurm"])
+
+    assert match is not None
+    assert match.matched_prefix == "Node failure reported by slurm"
+    assert match.outcome == "Fail InfraSW"
+    assert match.hw_cause == "Not Applicable"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_slurm_node_failure_takes_precedence_over_xid31_in_any_order():
+    """Prefer the specific scheduler failure over ambiguous XID-31 evidence."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    xid31 = "XID-31-MMU_ERR_FLT"
+
+    for symptoms in ([node_failure, xid31], [xid31, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == node_failure
+        assert match.outcome == "Fail InfraSW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_slurm_node_failure_yields_to_epilog_non_response_in_any_order():
+    """Prefer epilog non-response hardware evidence over the scheduler state."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    epilog_non_response = "Not responding"
+
+    for symptoms in ([node_failure, epilog_non_response], [epilog_non_response, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == epilog_non_response
+        assert match.outcome == "Fail InfraHW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
+
+
 def test_wandb_error_maps_to_low_priority_fail_user():
     """Classify a generic W&B application exception as a low-priority user failure."""
     registry = _load_committed_registry()
