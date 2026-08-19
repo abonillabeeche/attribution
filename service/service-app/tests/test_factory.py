@@ -100,6 +100,7 @@ def test_http_logging_omits_bodies_and_preserves_request_handling(app, client):
 
     assert response.content == payload
     assert error_response.status_code == 500
+    assert error_response.json() == {"detail": "Internal Server Error"}
 
     logged = "".join(map(str, messages))
     assert "private-request-body" not in logged
@@ -107,3 +108,4 @@ def test_http_logging_omits_bodies_and_preserves_request_handling(app, client):
     assert "REQUEST: POST /_test/logging" in logged
     assert "RESPONSE: POST /_test/logging Status: 200" in logged
     assert "Error handling POST /_test/logging-error" in logged
+    assert "expected test failure" in logged
