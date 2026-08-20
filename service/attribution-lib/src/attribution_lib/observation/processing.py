@@ -722,8 +722,10 @@ def _serialize_csp_source_event(source_event: CspEventSourceEvent) -> str:
         Deterministic strict JSON suitable for ``Source.datum``.
 
     Raises:
-        ValueError: If fields are missing, unexpected, blank, or non-string.
+        ValueError: If the event is not an object, or fields are missing, unexpected, blank, or non-string.
     """
+    if not isinstance(source_event, dict):
+        raise ValueError("Invalid CSP source_event: expected an object")
     fields = set(source_event)
     if not _CSP_SOURCE_EVENT_REQUIRED_FIELDS <= fields or not fields <= _CSP_SOURCE_EVENT_ALLOWED_FIELDS:
         raise ValueError("Invalid CSP source_event: unexpected or missing fields")
@@ -750,10 +752,9 @@ class CspEventEntryObj(EntryBase):
 
     def body(self) -> str:
         body = f"csp_event: category={self._category}, reason={self._reason}, status={self._status}"
-        source_event = self._entry.get("source_event")
-        if source_event is None:
+        if "source_event" not in self._entry:
             return body
-        return f"{body}, source_event={_serialize_csp_source_event(source_event)}"
+        return f"{body}, source_event={_serialize_csp_source_event(self._entry['source_event'])}"
 
     def node(self, job_info: Optional[JobInfo] = None) -> Optional[str]:
         return self._hostname

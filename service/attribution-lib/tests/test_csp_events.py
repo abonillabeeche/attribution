@@ -99,6 +99,14 @@ class TestCspEventEntryObj:
     @pytest.mark.parametrize(
         "source_event",
         [
+            pytest.param(None, id="explicit-none"),
+            pytest.param("", id="blank-string"),
+            pytest.param(0, id="zero"),
+            pytest.param({}, id="empty-object"),
+            pytest.param(
+                ["source", "event_id", "event_created_at", "event_region", "hostname", "fault_id"],
+                id="non-dict-with-required-fields",
+            ),
             {
                 "source": "databricks_maintenance_fault",
                 "event_id": "event-1",
@@ -118,6 +126,14 @@ class TestCspEventEntryObj:
             {
                 "source": "databricks_maintenance_fault",
                 "event_id": 1,
+                "event_created_at": "2024-06-15T12:00:00+00:00",
+                "event_region": "us-west",
+                "hostname": "test-node-001",
+                "fault_id": "GPU_RETIRED_PAGE",
+            },
+            {
+                "source": "databricks_maintenance_fault",
+                "event_id": " ",
                 "event_created_at": "2024-06-15T12:00:00+00:00",
                 "event_region": "us-west",
                 "hostname": "test-node-001",
