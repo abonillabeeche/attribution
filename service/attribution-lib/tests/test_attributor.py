@@ -8,7 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import copy
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -40,16 +39,10 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval,
 )
+from attribution_lib.prefilters import PreFilterSpec
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import (
-    _PRE_FILTERS,
-    EventTriple,
-    ExtractorRule,
-    PreFilterSpec,
-    RuleEngine,
-    RuleLocation,
-    register_pre_filter,
-)
+from attribution_lib.rule_types.definitions import EventTriple, ExtractorRule, RuleLocation
+from attribution_lib.rules_engine import RuleLoader
 from test_support.helpers import make_node_to_ranks, make_syslog_entry
 
 # APPLOG registers "error" as an include-keyword.
@@ -462,10 +455,10 @@ def _emit_one_event(groups, hostname, source, context):
 def prefilter_env():
     """Process-global rules engine + prefilter carrying only test-local rules.
 
-    Installs a fresh engine with one APPLOG extractor (fires on the trigger sentinel) and an
-    exclude-only prefilter, then restores both globals on teardown so nothing leaks."""
-    engine = RuleEngine()
-    engine.register_rule(
+    Builds and installs an engine with one APPLOG extractor (fires on the trigger sentinel) and
+    an exclude-only prefilter, then restores both globals on teardown so nothing leaks."""
+    loader = RuleLoader()
+    loader.register_rule(
         ExtractorRule(
             name=_TEST_RULE_NAME,
             author="test",
@@ -475,21 +468,21 @@ def prefilter_env():
             source_filters=frozenset({ObservationSource.APPLOG}),
         )
     )
-    engine.declared_event_types.add(_TEST_EVENT_TYPE)
+    loader.declared_event_types.add(_TEST_EVENT_TYPE)
+    loader.register_pre_filter(
+        ObservationSource.APPLOG,
+        PreFilterSpec(exclude_terms=[_EXCLUDE_SENTINEL]),
+    )
 
+    built = loader.build()
     saved_engine = attribution_lib._rules_engine
-    saved_filters = copy.deepcopy(_PRE_FILTERS)
-    attribution_lib._rules_engine = engine
-    _PRE_FILTERS.clear()
-    register_pre_filter(ObservationSource.APPLOG, PreFilterSpec(exclude_terms=[_EXCLUDE_SENTINEL]))
+    attribution_lib._rules_engine = built
 
-    manager = EventManager(rules_engine=engine)
+    manager = EventManager(rules_engine=built)
     try:
         yield manager
     finally:
         manager.close()
-        _PRE_FILTERS.clear()
-        _PRE_FILTERS.update(saved_filters)
         attribution_lib._rules_engine = saved_engine
 
 

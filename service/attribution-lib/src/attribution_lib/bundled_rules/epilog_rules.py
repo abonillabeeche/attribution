@@ -11,7 +11,7 @@
 """Health-check observation filtering for the external rule pack."""
 
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     PreFilterSpec,
     register_pre_filter,
 )

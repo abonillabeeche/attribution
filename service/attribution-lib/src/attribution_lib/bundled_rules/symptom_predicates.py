@@ -23,7 +23,7 @@ from datetime import timedelta
 from typing import Any, Optional
 
 from attribution_lib.job_info import JobInfo
-from attribution_lib.rules_engine import symptom_predicate
+from attribution_lib.rules import symptom_predicate
 from attribution_lib.sources import SymptomSet
 
 

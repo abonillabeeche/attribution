@@ -16,7 +16,7 @@ from loguru import logger
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventStream, sql_placeholders
 from attribution_lib.exceptions import UndeclaredEventTypeError
-from attribution_lib.rules_engine import RuleParamsBase
+from attribution_lib.rules import RuleParamsBase
 from attribution_lib.sources import (
     Source,
     SourceSet,

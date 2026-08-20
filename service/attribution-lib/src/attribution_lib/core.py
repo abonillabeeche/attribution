@@ -8,7 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import glob
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -32,13 +31,11 @@ from attribution_lib.outcome import (
     OutcomeAttribution,
     calculate_outcome,
 )
+from attribution_lib.rule_types.definitions import CollectorContext, RuleId, RuleParameters
 from attribution_lib.rules_engine import (
-    _METRIC_SPECS,
-    _PRE_FILTERS,
     SOURCE_CONFIGS,
     RuleEngine,
-    RuleId,
-    RuleParameters,
+    RuleLoader,
     SourceProcessingConfig,
     process_observation_source,
     register_source_config,
@@ -155,9 +152,10 @@ def setup_rules(
             (e.g., ['monitor-', 'scanner-'])
         node_domain_resolver: Optional callback that maps a node hostname to a
             hardware domain identifier. Return None for nodes without a domain.
-        rules_paths: Directories to scan for rule plugin files (``*.py``).
+        rules_paths: Directories to scan for rule plugin files (``*.py`` and
+            ``*.toml``, excluding ``*.test.toml``).
             - ``None`` (default): loads the bundled rules shipped with this package.
-            - ``[]``: skips rule loading entirely (no rule engine).
+            - ``[]``: loads no rule files and creates an empty ``RuleEngine``.
             - Explicit list: loads only from the given paths. Use
               ``[get_bundled_rules_path(), my_extra_path]`` to extend the
               bundled set with additional rules.
@@ -182,16 +180,7 @@ def setup_rules(
     if ignored_hostname_prefixes:
         attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes
 
-    _PRE_FILTERS.clear()
-    _METRIC_SPECS.clear()
-
-    attribution_lib._rules_engine = RuleEngine()
-    for path in rules_paths:
-        for pattern in ("*.py", "*.toml"):
-            for file in sorted(glob.glob(pattern, root_dir=path)):
-                if file.endswith(".test.toml"):
-                    continue  # co-located test files are run by the test suite, not loaded
-                attribution_lib._rules_engine.load(str(path / file))
+    attribution_lib._rules_engine = RuleLoader.load_all(rules_paths)
 
     # Compile loaded declarations into the runtime symptom registry once per
     # initialization. Per-job attribution reads this cached snapshot; it is only
@@ -390,6 +379,8 @@ def attribute(
     )
 
     if run_collectors:
-        result.collectors = attribution_lib.get_rules_engine().run_collectors(event_stream, job_info, rule_params)
+        collector_context = CollectorContext(event_stream=event_stream, job_info=job_info, rule_params=rule_params)
+        attribution_lib.get_rules_engine().execute(collector_context)
+        result.collectors = collector_context.result
 
     return result

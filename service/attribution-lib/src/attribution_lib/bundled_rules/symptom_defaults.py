@@ -17,14 +17,12 @@ move declarations next to the extractor rules that emit them. doc anchors are
 derived placeholders pending the attribution documentation manifest.
 """
 
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import cascade_symptom, known_symptom, outcome_symptom
+from attribution_lib.symptoms.declarations import (
     CascadeScope,
     DagDiscardBehavior,
     OutcomePriority,
     SymptomCategory,
-    cascade_symptom,
-    known_symptom,
-    outcome_symptom,
 )
 
 
@@ -179,7 +177,9 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# A tenant report still removes the node from service, so classify it as Fail InfraHW.
+# A tenant report is the initiating repair request: the tenant marks the host
+# faulty and asks the CSP to remove/repair it. When a correlated provider
+# termination is also present, this initiating cause is the primary symptom.
 outcome_symptom(
     "CSP Event Tenant Reported As Faulty",
     outcome="Fail InfraHW",
@@ -190,7 +190,9 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# Provider-initiated host maintenance terminated the VM.
+# Provider host-maintenance termination is the resulting CSP action. It is
+# primary by itself, but supporting evidence when paired with a tenant report
+# for the same job/node (resolved by CspEventPrecedenceAndCascades).
 outcome_symptom(
     "CSP Event Terminated by CSP",
     outcome="Fail InfraHW",
@@ -570,10 +572,9 @@ outcome_symptom(
 
 outcome_symptom(
     "Node failure reported by slurm",
-    outcome="Fail InfraHW",
-    priority=OutcomePriority.HIGH_HW,
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM,
     doc="node-failure-reported-by-slurm",
-    hw_cause="Known HW Cause - Node",
     cascade_discards=("Stopping nvidia-imex.service",),
 )
 
@@ -2113,6 +2114,13 @@ outcome_symptom(
     outcome="Fail User",
     priority=OutcomePriority.LOW_USER,
     doc="python-exception",
+)
+
+outcome_symptom(
+    "wandb.Error",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="wandb-error",
 )
 
 outcome_symptom(

@@ -12,7 +12,7 @@
 UFM log rules ported from attribution_lib/ufmlog.py check().
 """
 
-from attribution_lib.rules_engine import declare_event_types
+from attribution_lib.rules import declare_event_types
 
 rule_author = "NVIDIA Attribution team"
 

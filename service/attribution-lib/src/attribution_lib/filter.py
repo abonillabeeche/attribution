@@ -10,16 +10,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 import attribution_lib
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
 from attribution_lib.job_info import JobInfo
-from attribution_lib.rules_engine import FilterPriority
-
-if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RefinerContext
+from attribution_lib.rule_types.definitions import FilterContext, FilterPriority, RefinerContext
 
 # Constants for bad-to-interesting type mappings
 _BAD_TYPES = ["Attribution.node.bad", "Attribution.node.bad_peers"]
@@ -33,7 +30,12 @@ def filter_events(
     phase: Optional[int] = None,
 ):
     """Run event-stream filter rules (EARLY / MID / STANDARD / LATE)."""
-    attribution_lib.get_rules_engine().process_event_filters(event_stream, job_info, phase=phase)
+    attribution_lib.get_rules_engine().execute(FilterContext(job_info=job_info, event_stream=event_stream, phase=phase))
+
+
+def _run_refiners(context: RefinerContext) -> RefinerContext:
+    attribution_lib.get_rules_engine().execute(context)
+    return context
 
 
 def run_scrub_phase_refiners(
@@ -44,13 +46,15 @@ def run_scrub_phase_refiners(
     recorder: Optional[DecisionRecorder] = None,
 ) -> None:
     """Run SCRUB-phase refiners only (per-node cascade cleanup before aggregation)."""
-    attribution_lib.get_rules_engine().process_refiner_rules(
-        event_stream,
-        job_info,
-        symptoms=None,
-        my_bad_nodes=my_bad_nodes,
-        phase=FilterPriority.SCRUB,
-        recorder=recorder,
+    _run_refiners(
+        RefinerContext(
+            event_stream=event_stream,
+            job_info=job_info,
+            symptoms=None,
+            my_bad_nodes=my_bad_nodes,
+            phase_window=(FilterPriority.SCRUB, FilterPriority.FINAL),
+            recorder=recorder,
+        )
     )
 
 
@@ -65,15 +69,17 @@ def run_pre_outcome_refiners(
     recorder: Optional[DecisionRecorder] = None,
 ) -> tuple[Optional[dict], Optional[set]]:
     """Run pre-outcome refiner rules on materialized symptoms and my_bad_nodes."""
-    ctx = attribution_lib.get_rules_engine().process_refiner_rules(
-        event_stream,
-        job_info,
-        symptoms=symptoms,
-        my_bad_nodes=my_bad_nodes,
-        raw_keywords=raw_keywords,
-        extract_job_metadata_from_logfile=extract_job_metadata_from_logfile,
-        phase=FilterPriority.FINAL,
-        recorder=recorder,
+    ctx = _run_refiners(
+        RefinerContext(
+            event_stream=event_stream,
+            job_info=job_info,
+            symptoms=symptoms,
+            my_bad_nodes=my_bad_nodes,
+            raw_keywords=raw_keywords,
+            extract_job_metadata_from_logfile=extract_job_metadata_from_logfile,
+            phase_window=(FilterPriority.FINAL, FilterPriority.POST_OUTCOME),
+            recorder=recorder,
+        )
     )
     return ctx.node_symptoms_base, ctx.skipped_symptom_ids
 
@@ -91,15 +97,17 @@ def run_post_outcome_refiners(
     recorder: Optional[DecisionRecorder] = None,
 ) -> "RefinerContext":
     """Run post-outcome refiner rules (POST_OUTCOME phase) after calculate_outcome."""
-    return attribution_lib.get_rules_engine().process_refiner_rules(
-        event_stream,
-        job_info,
-        symptoms=symptoms,
-        my_bad_nodes=my_bad_nodes,
-        outcome=outcome,
-        cancelled_by=cancelled_by,
-        attribution_result=attribution_result,
-        bad_node_result=bad_node_result,
-        phase=FilterPriority.POST_OUTCOME,
-        recorder=recorder,
+    return _run_refiners(
+        RefinerContext(
+            event_stream=event_stream,
+            job_info=job_info,
+            symptoms=symptoms,
+            my_bad_nodes=my_bad_nodes,
+            outcome=outcome,
+            cancelled_by=cancelled_by,
+            attribution_result=attribution_result,
+            bad_node_result=bad_node_result,
+            phase_window=(FilterPriority.POST_OUTCOME, None),
+            recorder=recorder,
+        )
     )

@@ -14,8 +14,9 @@ from http import HTTPStatus
 
 import pytest
 from attribution_lib import get_rules_engine
-from attribution_lib.rules_engine import CollectorRule, RuleLocation, RuleParamsBase
+from attribution_lib.rules import CollectorRule, RuleLocation, RuleParameters, RuleParamsBase
 
+from app.attributor import AttributionParameters
 from app.exceptions import AttributionHTTPException
 from tests.conftest import make_up_attributor_info
 
@@ -88,7 +89,7 @@ class _PassthroughParams(RuleParamsBase):
 
 
 @pytest.fixture
-def passthrough_collector_rule():
+def passthrough_collector_rule(monkeypatch):
     """Register a rule-agnostic test collector with a params_model and tear down after."""
     name = "Test.ParamsPassthrough"
     rule = CollectorRule(
@@ -100,15 +101,13 @@ def passthrough_collector_rule():
         params_model=_PassthroughParams,
     )
     engine = get_rules_engine()
-    engine.collector_rules[name] = rule
-    try:
-        yield name
-    finally:
-        engine.collector_rules.pop(name, None)
+    get_rule = engine.get_rule
+    monkeypatch.setattr(engine, "get_rule", lambda rule_id: rule if rule_id == name else get_rule(rule_id))
+    yield name
 
 
 @pytest.fixture
-def no_params_collector_rule():
+def no_params_collector_rule(monkeypatch):
     """Register a collector with no params_model and tear down after."""
     name = "Test.NoParams"
     rule = CollectorRule(
@@ -120,15 +119,20 @@ def no_params_collector_rule():
         params_model=None,
     )
     engine = get_rules_engine()
-    engine.collector_rules[name] = rule
-    try:
-        yield name
-    finally:
-        engine.collector_rules.pop(name, None)
+    get_rule = engine.get_rule
+    monkeypatch.setattr(engine, "get_rule", lambda rule_id: rule if rule_id == name else get_rule(rule_id))
+    yield name
 
 
 class TestRuleParamsValidation:
     """Test that the rule_params validator accepts a known rule's schema and rejects unknown ids."""
+
+    def test_parameter_model_uses_registered_rule_schema(self, app, passthrough_collector_rule):
+        parameters = AttributionParameters(
+            rule_params={passthrough_collector_rule: RuleParameters(params={"value": 42})}
+        )
+
+        assert parameters.rule_params[passthrough_collector_rule].params == {"value": 42}
 
     def test_valid_params_accepted(self, client, passthrough_collector_rule):
         body = json.loads(make_up_attributor_info().model_dump_json())

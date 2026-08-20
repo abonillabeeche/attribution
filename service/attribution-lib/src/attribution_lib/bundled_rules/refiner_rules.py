@@ -30,7 +30,7 @@ from attribution_lib.hooks import multihooks, singlehooks
 from attribution_lib.job_info import NVRX_TAG, JobInfo
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
 from attribution_lib.outcome import OutcomeAttribution
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     FilterPriority,
     RefinerContext,
     declare_event_types,
@@ -99,6 +99,7 @@ _REFINER_ORDER = [
     # Symptom cleanup and resolution rules
     "SlurmStateSymptoms",
     "ProcessCompletesCleanup",
+    "CspEventPrecedenceAndCascades",
     "CancellationResolution",
     "SimpleSymptomCascades",
     "MulticastNvErrSuppression",
@@ -135,6 +136,10 @@ _REFINER_ORDER = [
 
 GRACEFUL_MULTICAST_SKIP_MESSAGE = "Gracefully skipping multicast initialization"
 MULTICAST_RESOURCE_SYMPTOM = "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c"
+_CSP_EVENT_PREFIX = "CSP Event "
+_CSP_TENANT_REPORTED = "CSP Event Tenant Reported As Faulty"
+_CSP_TERMINATED = "CSP Event Terminated by CSP"
+_SYSTEM_POWERING_DOWN = "System is powering down"
 
 
 _POST_OUTCOME_ORDER = [
@@ -836,8 +841,14 @@ def slurm_state_symptoms(context: RefinerContext):
     name="ProcessCompletesCleanup", author="NVIDIA Attribution team", priority=_priority("ProcessCompletesCleanup")
 )
 def process_completes_cleanup(context: RefinerContext):
-    """When 'the process completes', discard cascaded symptoms that are noise."""
+    """When 'the process completes', discard cascaded symptoms that are noise.
+
+    A completed workload disproves a tenant report that the host made progress
+    impossible. Other CSP events remain authoritative and continue through the
+    normal precedence and cascade rules.
+    """
     symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
     if symptoms is None:
         return
 
@@ -846,6 +857,66 @@ def process_completes_cleanup(context: RefinerContext):
         symptoms.discard("Not responding")  # hmmma
         symptoms.discard("BrokenPipeError")
         symptoms.discard("No such file or directory")
+        symptoms.discard(_CSP_TENANT_REPORTED)
+        # Completion is a job-lifecycle signal and is stripped from node
+        # attributions, so same-node DAG cascade pruning cannot demote this CSP
+        # symptom there.
+        if my_bad_nodes is not None:
+            for _node, node_group in my_bad_nodes.items():
+                node_group.discard(_CSP_TENANT_REPORTED)
+
+
+@refiner_def(
+    name="CspEventPrecedenceAndCascades",
+    author="NVIDIA Attribution team",
+    priority=_priority("CspEventPrecedenceAndCascades"),
+)
+def csp_event_precedence_and_cascades(context: RefinerContext):
+    """Resolve CSP event precedence and demote symptoms caused by CSP action.
+
+    ``Tenant Reported As Faulty`` records the initiating tenant repair request,
+    while ``Terminated by CSP`` records the provider action that follows when
+    both describe the same interruption. The initiating report is therefore the
+    primary job and same-node symptom; the termination remains supporting
+    evidence. A termination on a different node remains bad-node evidence.
+
+    Any CSP event that remains after precedence explains generic shutdown and
+    Pyxis-family symptoms, so those are demoted from both job and node causes.
+    This rule intentionally runs after ``ProcessCompletesCleanup``: completion
+    first removes only the tenant report, allowing a co-occurring provider
+    termination to remain authoritative.
+
+    Args:
+        context: Refiner state containing job symptoms and node attributions.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None:
+        return
+
+    if _CSP_TENANT_REPORTED in symptoms and _CSP_TERMINATED in symptoms:
+        symptoms.discard(_CSP_TERMINATED)
+        if my_bad_nodes is not None:
+            for _node, node_group in my_bad_nodes.items():
+                if _CSP_TENANT_REPORTED in node_group and _CSP_TERMINATED in node_group:
+                    node_group.discard(_CSP_TERMINATED)
+
+    if not any(symptom.startswith(_CSP_EVENT_PREFIX) for symptom in symptoms.symptoms()):
+        return
+
+    cascade_targets = [
+        symptom for symptom in symptoms.symptoms() if symptom == _SYSTEM_POWERING_DOWN or "pyxis" in symptom.casefold()
+    ]
+    symptoms.discard_seq(cascade_targets)
+
+    if my_bad_nodes is not None:
+        for _node, node_group in my_bad_nodes.items():
+            node_cascade_targets = [
+                symptom
+                for symptom in node_group.symptoms()
+                if symptom == _SYSTEM_POWERING_DOWN or "pyxis" in symptom.casefold()
+            ]
+            node_group.attributions.discard_seq(node_cascade_targets)
 
 
 @singlehooks.CancelledByCleanup.set_default
