@@ -824,10 +824,204 @@ class TestProcessCompletesCleanup:
         assert "Not responding" not in symptoms
         assert "BrokenPipeError" not in symptoms
 
+    def test_discards_only_tenant_reported_csp_event(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            "CSP Event Tenant Reported As Faulty",
+            "CSP Event Terminated by CSP",
+            "Python Exception",
+        )
+
+        _run(stream, job_info, symptoms)
+
+        assert "the process completes" in symptoms
+        assert "CSP Event Tenant Reported As Faulty" not in symptoms
+        assert symptoms["CSP Event Tenant Reported As Faulty"].has_interesting()
+        assert "CSP Event Terminated by CSP" in symptoms
+        assert "Python Exception" in symptoms
+
+    def test_discards_tenant_reported_from_bad_nodes(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "the process completes", "CSP Event Tenant Reported As Faulty")
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["CSP Event Tenant Reported As Faulty"]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "CSP Event Tenant Reported As Faulty" not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions["CSP Event Tenant Reported As Faulty"].has_interesting()
+
+    def test_no_process_completes_keeps_tenant_reported(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "CSP Event Tenant Reported As Faulty")
+
+        _run(stream, job_info, symptoms)
+
+        assert "CSP Event Tenant Reported As Faulty" in symptoms
+
     def test_no_process_completes_keeps_symptoms(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(obs_ctx, "Not responding")
         _run(stream, job_info, symptoms)
         assert "Not responding" in symptoms
+
+
+class TestCspEventPrecedenceAndCascades:
+    _TENANT_REPORTED = "CSP Event Tenant Reported As Faulty"
+    _TERMINATED = "CSP Event Terminated by CSP"
+
+    @pytest.mark.parametrize(
+        "ordered_csp_events",
+        [
+            (_TENANT_REPORTED, _TERMINATED),
+            (_TERMINATED, _TENANT_REPORTED),
+        ],
+    )
+    def test_tenant_reported_is_primary_regardless_of_input_order(
+        self,
+        stream,
+        obs_ctx,
+        job_info,
+        ordered_csp_events,
+    ):
+        symptoms = _make_symptoms(obs_ctx, *ordered_csp_events)
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TENANT_REPORTED in symptoms
+        assert self._TERMINATED not in symptoms
+        assert symptoms[self._TERMINATED].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TENANT_REPORTED
+
+    @pytest.mark.parametrize("csp_event", [_TENANT_REPORTED, _TERMINATED])
+    def test_single_csp_event_is_unchanged(self, stream, obs_ctx, job_info, csp_event):
+        symptoms = _make_symptoms(obs_ctx, csp_event)
+
+        _run(stream, job_info, symptoms)
+
+        assert csp_event in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == csp_event
+
+    def test_same_node_terminated_event_becomes_supporting_evidence(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TENANT_REPORTED, self._TERMINATED)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._TENANT_REPORTED, self._TERMINATED]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED in bad_nodes["node01"]
+        assert self._TERMINATED not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions[self._TERMINATED].has_interesting()
+
+    def test_different_node_terminated_event_remains_bad_node_evidence(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TENANT_REPORTED, self._TERMINATED)
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": [self._TENANT_REPORTED],
+                "node02": [self._TERMINATED],
+            },
+        )
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED in symptoms
+        assert self._TERMINATED not in symptoms
+        assert self._TENANT_REPORTED in bad_nodes["node01"]
+        assert self._TERMINATED in bad_nodes["node02"]
+
+    def test_csp_event_discards_shutdown_and_pyxis_evidence(self, stream, obs_ctx, job_info):
+        cascades = ["System is powering down", "error: pyxis"]
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, *cascades)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._TERMINATED, *cascades]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TERMINATED in symptoms
+        assert self._TERMINATED in bad_nodes["node01"]
+        for cascade in cascades:
+            assert cascade not in symptoms
+            assert symptoms[cascade].has_interesting()
+            assert cascade not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[cascade].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TERMINATED
+
+    @pytest.mark.parametrize(
+        "pyxis_symptom",
+        [
+            "error: pyxis",
+            "pyxis: couldn't start container",
+            "srun: invalid pyxis argument",
+        ],
+    )
+    def test_csp_event_discards_pyxis_family(self, stream, obs_ctx, job_info, pyxis_symptom):
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, pyxis_symptom)
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TERMINATED in symptoms
+        assert pyxis_symptom not in symptoms
+        assert symptoms[pyxis_symptom].has_interesting()
+
+    def test_csp_event_keeps_non_pyxis_enroot_symptom(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, "enroot: registry auth denied")
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TERMINATED in symptoms
+        assert "enroot: registry auth denied" in symptoms
+
+    def test_shutdown_and_pyxis_are_unchanged_without_csp_event(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "System is powering down", "error: pyxis")
+
+        _run(stream, job_info, symptoms)
+
+        assert "System is powering down" in symptoms
+        assert "error: pyxis" in symptoms
+
+    def test_completed_tenant_report_does_not_trigger_csp_cascades(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            self._TENANT_REPORTED,
+            "System is powering down",
+            "error: pyxis",
+        )
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TENANT_REPORTED not in symptoms
+        assert "System is powering down" in symptoms
+        assert "error: pyxis" in symptoms
+
+    def test_completed_process_keeps_termination_and_discards_csp_cascades(self, stream, obs_ctx, job_info):
+        cascades = ["System is powering down", "error: pyxis"]
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            self._TENANT_REPORTED,
+            self._TERMINATED,
+            *cascades,
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._TENANT_REPORTED, self._TERMINATED, *cascades]},
+        )
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED not in symptoms
+        assert symptoms[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in symptoms
+        assert self._TENANT_REPORTED not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in bad_nodes["node01"]
+        for cascade in cascades:
+            assert cascade not in symptoms
+            assert symptoms[cascade].has_interesting()
+            assert cascade not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[cascade].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TERMINATED
 
 
 class TestCancellationResolution:
