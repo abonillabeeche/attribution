@@ -21,23 +21,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.declarative import load_toml_rules
-from attribution_lib.declarative.context import (  # noqa: F401 (re-exported public API)
-    _EXPR_HELPER_RESERVED,
-    EXPR_HELPER_INJECTED_PARAMS,
-    DeclarativeContext,
-    _using_module_globals,
-    _using_rule_loader,
-    const,
-    expr_helper,
-    rows,
-    rule_processor,
-)
+from attribution_lib.declarative.context import DeclarativeContext, _using_module_globals, _using_rule_loader
 from attribution_lib.events import EventStream
 from attribution_lib.exceptions import (
     DuplicateRuleError,
     RuleIngestionError,
+    UninitializedRuleEngineError,
     UnknownResourceError,
     UnknownRuleTypeError,
 )
@@ -45,68 +35,23 @@ from attribution_lib.job_info import JobInfo
 from attribution_lib.logline_filtering import log_ignored_node_line, log_ignored_time_line
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.observation.processing import EntryProtocol, EntrySourceBase
-from attribution_lib.prefilters import (  # noqa: F401 (re-exported public API)
-    _METRIC_SPECS,
-    _PRE_FILTERS,
-    MetricSpec,
-    PreFilterCallable,
-    PreFilterSpec,
-    register_metric_spec,
-    register_pre_filter,
-)
-from attribution_lib.rule_types.bases import (  # noqa: F401 (re-exported public API)
+from attribution_lib.prefilters import MetricSpec, PreFilterCallable, PreFilterSpec
+from attribution_lib.rule_types.bases import (
     _RULE_TYPE_REGISTRY,
     LoaderBase,
     SubEngineBase,
 )
 from attribution_lib.rule_types.bootstrap import load_builtin_rule_types
-from attribution_lib.rule_types.collector import CollectorEngine
-from attribution_lib.rule_types.definitions import (  # noqa: F401 (re-exported public API)
-    CollectorContext,
-    CollectorRule,
-    EventTriple,
+from attribution_lib.rule_types.definitions import (
     ExecutionContext,
     ExtractionContext,
-    ExtractorAccumulator,
-    ExtractorAccumulatorRule,
-    ExtractorRule,
-    FilterContext,
-    FilterPriority,
-    FilterRule,
-    RefinerContext,
-    RefinerRule,
     Rule,
-    RuleContext,
     RuleId,
     RuleLocation,
-    RuleParameters,
-    RuleParamsBase,
 )
-from attribution_lib.rule_types.observation import ObservationProcessor  # noqa: F401 (re-exported)
-from attribution_lib.rule_types.registration import (  # noqa: F401 (re-exported public API)
-    _get_caller_location,
-    collector_def,
-    declare_event_types,
-    declare_rule_names,
-    extractor_accumulator_def,
-    filter_def,
-    normalize_tags,
-    refiner_def,
-)
-from attribution_lib.symptoms.declarations import (  # noqa: F401 (re-exported public API)
-    CascadeScope,
-    DagDiscardBehavior,
-    OutcomePriority,
-    SymptomCategory,
-    SymptomDeclaration,
-)
-from attribution_lib.symptoms.predicate_registry import SymptomPredicate  # noqa: F401 (re-exported)
-from attribution_lib.symptoms.registration import (  # noqa: F401 (re-exported public API)
-    cascade_symptom,
-    known_symptom,
-    outcome_symptom,
-    symptom_predicate,
-)
+from attribution_lib.rule_types.observation import ObservationProcessor
+from attribution_lib.symptoms.declarations import SymptomDeclaration
+from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,22 +72,29 @@ class RuleEngine:
     the derived views are computed once.
     """
 
-    def __init__(self, sub_engines: list[SubEngineBase], declarations: RuleDeclarations) -> None:
+    def __init__(
+        self,
+        sub_engines: list[SubEngineBase],
+        declarations: RuleDeclarations,
+        pre_filters: Mapping[ObservationSource, PreFilterSpec],
+        metric_specs: Mapping[ObservationSource, MetricSpec],
+        declarative_emit: Mapping[str, str],
+    ) -> None:
         self._engines = sub_engines
         self.declarations = declarations
+        self.pre_filters = dict(pre_filters)
+        self.metric_specs = dict(metric_specs)
+        self.declarative_emit = dict(declarative_emit)
 
         combined: dict[RuleId, Rule] = {}
         names: set[str] = set()
-        by_type: dict[type, dict[RuleId, Rule]] = {}
         for engine in sub_engines:
             for store in (engine.rules, engine.extra_rules()):
                 for rule_id, rule in store.items():
                     combined[rule_id] = rule
-                    by_type.setdefault(type(rule), {})[rule_id] = rule
             names.update(engine.rules.keys())
             names.update(engine.extra_rule_names())
         self._rules = combined
-        self._by_type = by_type
         self._all_rule_names = names | set(declarations.rule_names)
 
     # -- Declarations ------------------------------------------------------
@@ -163,11 +115,28 @@ class RuleEngine:
     def symptom_predicates(self) -> dict[str, SymptomPredicate]:
         return dict(self.declarations.predicates)
 
+    def get_pre_filter(self, source: ObservationSource) -> PreFilterSpec:
+        """Return the pre-filter for ``source``, or an empty specification."""
+        return self.pre_filters.get(source, PreFilterSpec())
+
+    def get_metric_spec(self, source: ObservationSource) -> MetricSpec:
+        """Return the metric specification for ``source``."""
+        spec = self.metric_specs.get(source)
+        if spec is None:
+            raise UninitializedRuleEngineError(
+                f"No metric spec registered for {source.name}. Was setup_rules() called?"
+            )
+        return spec
+
     # -- Rule views (computed once in __init__) ----------------------------
 
     @property
     def rules(self) -> dict[RuleId, Rule]:
         return self._rules
+
+    def get_rule(self, rule_id: RuleId) -> Optional[Rule]:
+        """Return a rule by ID, independent of its concrete rule type."""
+        return self._rules.get(rule_id)
 
     @property
     def all_rule_names(self) -> set[str]:
@@ -176,30 +145,6 @@ class RuleEngine:
     @property
     def all_event_types(self) -> set[str]:
         return set(self.declarations.event_types)
-
-    def rules_of_type(self, rule_type_: type) -> dict[RuleId, Rule]:
-        """Every registered rule of exactly ``rule_type_``."""
-        return self._by_type.get(rule_type_, {})
-
-    @property
-    def extractor_rules(self) -> "dict[RuleId, ExtractorRule]":
-        return cast("dict[RuleId, ExtractorRule]", self.rules_of_type(ExtractorRule))
-
-    @property
-    def extractor_accumulator_rules(self) -> "dict[RuleId, ExtractorAccumulatorRule]":
-        return cast("dict[RuleId, ExtractorAccumulatorRule]", self.rules_of_type(ExtractorAccumulatorRule))
-
-    @property
-    def filter_rules(self) -> "dict[RuleId, FilterRule]":
-        return cast("dict[RuleId, FilterRule]", self.rules_of_type(FilterRule))
-
-    @property
-    def refiner_rules(self) -> "dict[RuleId, RefinerRule]":
-        return cast("dict[RuleId, RefinerRule]", self.rules_of_type(RefinerRule))
-
-    @property
-    def collector_rules(self) -> "dict[RuleId, CollectorRule]":
-        return cast("dict[RuleId, CollectorRule]", self.rules_of_type(CollectorRule))
 
     # -- Execution ---------------------------------------------------------
 
@@ -230,66 +175,6 @@ class RuleEngine:
         ctx = ExtractionContext(source_type=source_type, job_info=job_info, event_stream=event_stream)
         self.execute(ctx)
         return cast("ObservationProcessor", ctx.result)
-
-    def process_event_filters(
-        self,
-        event_stream: EventStream,
-        job_info: JobInfo,
-        *,
-        phase: Optional[int] = None,
-    ) -> None:
-        """Run filter rules as a compatibility wrapper over ``execute()``."""
-        self.execute(FilterContext(job_info=job_info, event_stream=event_stream, phase=phase))
-
-    def process_refiner_rules(
-        self,
-        event_stream: EventStream,
-        job_info: JobInfo,
-        *,
-        symptoms: Any,
-        my_bad_nodes: Any,
-        raw_keywords: Optional[Any] = None,
-        extract_job_metadata_from_logfile: bool = False,
-        phase: Optional[int] = None,
-        outcome: Optional[Any] = None,
-        cancelled_by: Optional[str] = None,
-        attribution_result: Optional[Any] = None,
-        bad_node_result: Optional[Any] = None,
-        recorder: Optional[DecisionRecorder] = None,
-    ) -> RefinerContext:
-        """Run refiner rules as a compatibility wrapper over ``execute()``."""
-        ctx = RefinerContext(
-            job_info=job_info,
-            event_stream=event_stream,
-            symptoms=symptoms,
-            my_bad_nodes=my_bad_nodes,
-            raw_keywords=raw_keywords,
-            extract_job_metadata_from_logfile=extract_job_metadata_from_logfile,
-            recorder=recorder,
-            outcome=outcome,
-            cancelled_by=cancelled_by,
-            attribution_result=attribution_result,
-            bad_node_result=bad_node_result,
-            phase=phase,
-        )
-        self.execute(ctx)
-        return ctx
-
-    def run_collectors(
-        self,
-        event_stream: EventStream,
-        job_info: JobInfo,
-        rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
-    ) -> dict[str, Any]:
-        """Run collectors as a compatibility wrapper over ``execute()``."""
-        ctx = CollectorContext(event_stream=event_stream, job_info=job_info, rule_params=rule_params)
-        self.execute(ctx)
-        return ctx.result
-
-    @staticmethod
-    def parse_collector_params(rule: CollectorRule, raw: Optional[RuleParameters]) -> Optional[RuleParamsBase]:
-        """Delegates to CollectorEngine.parse_params()."""
-        return CollectorEngine.parse_params(rule, raw)
 
     # -- Cache keys --------------------------------------------------------
 
@@ -333,6 +218,8 @@ class RuleLoader:
         self.declared_event_types: set[str] = set()
         self.symptom_declarations: list[SymptomDeclaration] = []
         self.symptom_predicates: dict[str, SymptomPredicate] = {}
+        self.pre_filters: dict[ObservationSource, PreFilterSpec] = {}
+        self.metric_specs: dict[ObservationSource, MetricSpec] = {}
         self.declarative_ctx = DeclarativeContext()
         self._context_scopes: list[AbstractContextManager["RuleLoader"]] = []
 
@@ -381,6 +268,20 @@ class RuleLoader:
             raise RuleIngestionError(f"Conflicting symptom predicate registered for {name!r}")
         self.symptom_predicates[name] = predicate
 
+    def register_pre_filter(self, source: ObservationSource, spec: PreFilterSpec) -> None:
+        """Register a pre-filter specification; repeated declarations merge."""
+        existing = self.pre_filters.get(source, PreFilterSpec())
+        self.pre_filters[source] = PreFilterSpec(
+            include_terms=[*existing.include_terms, *spec.include_terms],
+            exclude_terms=[*existing.exclude_terms, *spec.exclude_terms],
+            callables=[*existing.callables, *spec.callables],
+        )
+
+    def register_metric_spec(self, source: ObservationSource, spec: MetricSpec) -> None:
+        """Register a metric specification; repeated declarations merge."""
+        existing = self.metric_specs.get(source, MetricSpec())
+        self.metric_specs[source] = MetricSpec(thresholds={**existing.thresholds, **spec.thresholds})
+
     # -- Sub-loader access -------------------------------------------------
 
     @property
@@ -393,17 +294,13 @@ class RuleLoader:
         return combined
 
     @property
-    def extractor_rules(self) -> "dict[RuleId, ExtractorRule]":
-        """The extractor sub-loader's rule dict."""
-        return cast("dict[RuleId, ExtractorRule]", self._dispatch[ExtractorRule].rules)
-
-    @property
     def declarative_emit(self) -> dict[str, str]:
-        """The extractor sub-loader's declarative_emit store."""
-        store = self._dispatch[ExtractorRule].declarative_emit_store()
-        if store is None:
-            raise UnknownRuleTypeError("The extractor loader exposes no declarative_emit store")
-        return store
+        """The declarative emit store exposed by the loader that owns it."""
+        for loader in self._loaders:
+            store = loader.declarative_emit_store()
+            if store is not None:
+                return store
+        raise UnknownRuleTypeError("No registered loader exposes a declarative_emit store")
 
     # -- Snapshot and rollback --------------------------------------------
 
@@ -415,6 +312,8 @@ class RuleLoader:
             "declared_event_types": set(self.declared_event_types),
             "symptom_declarations": list(self.symptom_declarations),
             "symptom_predicates": dict(self.symptom_predicates),
+            "pre_filters": dict(self.pre_filters),
+            "metric_specs": dict(self.metric_specs),
             "declarative_ctx": self.declarative_ctx.snapshot(),
         }
 
@@ -426,6 +325,8 @@ class RuleLoader:
         self.declared_event_types = snap["declared_event_types"]
         self.symptom_declarations = snap["symptom_declarations"]
         self.symptom_predicates = snap["symptom_predicates"]
+        self.pre_filters = snap["pre_filters"]
+        self.metric_specs = snap["metric_specs"]
         self.declarative_ctx.restore(snap["declarative_ctx"])
 
     @contextmanager
@@ -496,6 +397,9 @@ class RuleLoader:
                 symptoms=tuple(self.symptom_declarations),
                 predicates=dict(self.symptom_predicates),
             ),
+            pre_filters=dict(self.pre_filters),
+            metric_specs=dict(self.metric_specs),
+            declarative_emit=dict(self.declarative_emit),
         )
 
     @classmethod
@@ -513,39 +417,16 @@ class RuleLoader:
 
 @dataclass
 class _LoadSnapshot:
-    """All state a single load() may mutate, for rollback on failure.
-
-    The loader captures its own fields; the two module-level registries in
-    prefilters are captured here as part of the same transaction.
-    """
+    """All state a single load() may mutate, for rollback on failure."""
 
     loader_snap: dict[str, Any]
-    pre_filters: dict[ObservationSource, PreFilterSpec]
-    metric_specs: dict[ObservationSource, MetricSpec]
 
     @classmethod
     def capture(cls, loader: "RuleLoader") -> "_LoadSnapshot":
-        return cls(
-            loader_snap=loader.snapshot(),
-            pre_filters={
-                source: PreFilterSpec(
-                    include_terms=list(spec.include_terms),
-                    exclude_terms=list(spec.exclude_terms),
-                    callables=list(spec.callables),
-                )
-                for source, spec in _PRE_FILTERS.items()
-            },
-            metric_specs={
-                source: MetricSpec(thresholds=dict(spec.thresholds)) for source, spec in _METRIC_SPECS.items()
-            },
-        )
+        return cls(loader_snap=loader.snapshot())
 
     def restore(self, loader: "RuleLoader") -> None:
         loader.restore(self.loader_snap)
-        _PRE_FILTERS.clear()
-        _PRE_FILTERS.update(self.pre_filters)
-        _METRIC_SPECS.clear()
-        _METRIC_SPECS.update(self.metric_specs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -643,7 +524,7 @@ def process_observation_source(
     raw_keywords: set[str] = set()
 
     # Build pre-filter state (once, not per-entry)
-    pre_filter_spec = None if pre_filtered else _PRE_FILTERS.get(source_type)
+    pre_filter_spec = None if pre_filtered else rules_engine.pre_filters.get(source_type)
     exclude_set = set(pre_filter_spec.exclude_terms) if pre_filter_spec else None
     include_set = set(pre_filter_spec.include_terms) if pre_filter_spec else None
     pf_callables = pre_filter_spec.callables if pre_filter_spec else None
@@ -691,75 +572,3 @@ def process_observation_source(
 
     processor.finalize()
     return raw_keywords
-
-
-__all__ = [
-    # Rule types and the accumulator protocol
-    "CollectorRule",
-    "ExtractorAccumulator",
-    "ExtractorAccumulatorRule",
-    "ExtractorRule",
-    "FilterRule",
-    "RefinerRule",
-    "Rule",
-    # Execution contexts
-    "CollectorContext",
-    "ExecutionContext",
-    "ExtractionContext",
-    "FilterContext",
-    "RefinerContext",
-    "RuleContext",
-    # Values a rule file declares or receives
-    "EventTriple",
-    "FilterPriority",
-    "RuleId",
-    "RuleLocation",
-    "RuleParameters",
-    "RuleParamsBase",
-    # Processor and formatter signatures
-    # Rule registration
-    "collector_def",
-    "declare_event_types",
-    "declare_rule_names",
-    "extractor_accumulator_def",
-    "filter_def",
-    "normalize_tags",
-    "refiner_def",
-    # Declarative (TOML) registration
-    "EXPR_HELPER_INJECTED_PARAMS",
-    "const",
-    "expr_helper",
-    "rows",
-    "rule_processor",
-    # Symptom declaration
-    "cascade_symptom",
-    "known_symptom",
-    "outcome_symptom",
-    "symptom_predicate",
-    # Pre-filter, metric and source configuration
-    "MetricSpec",
-    "PreFilterCallable",
-    "PreFilterSpec",
-    "SOURCE_CONFIGS",
-    "SourceProcessingConfig",
-    "register_metric_spec",
-    "register_pre_filter",
-    "register_source_config",
-    # Engine and execution
-    "CollectorEngine",
-    "LoaderBase",
-    "ObservationProcessor",
-    "SubEngineBase",
-    "RuleEngine",
-    "RuleLoader",
-    "process_observation_source",
-    # Compatibility exports owned by exceptions and symptoms.declarations.
-    "CascadeScope",
-    "DagDiscardBehavior",
-    "DuplicateRuleError",
-    "OutcomePriority",
-    "RuleIngestionError",
-    "SymptomCategory",
-    "SymptomDeclaration",
-    "SymptomPredicate",
-]

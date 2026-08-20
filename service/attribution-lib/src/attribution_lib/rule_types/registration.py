@@ -239,7 +239,6 @@ def extractor_accumulator_def(
 
     def _register(cls: type[ExtractorAccumulator]) -> type[ExtractorAccumulator]:
         mod_globals = _current_module_globals()
-
         final_source_filters = source_filters if source_filters is not None else mod_globals.get("rule_sources", set())
 
         rule = ExtractorAccumulatorRule(

@@ -16,25 +16,26 @@ import pytest
 
 import attribution_lib
 from attribution_lib.events import EventManager
-from attribution_lib.exceptions import InvalidRuleParams, RuleAcceptsNoParamsError
-from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.rules_engine import (
-    CascadeScope,
-    CollectorRule,
+from attribution_lib.exceptions import (
     DuplicateRuleError,
+    InvalidRuleParams,
+    RuleAcceptsNoParamsError,
+    RuleIngestionError,
+)
+from attribution_lib.observation.inbound import Source as ObservationSource
+from attribution_lib.rule_types.definitions import (
+    CollectorRule,
     ExtractorAccumulatorRule,
     ExtractorRule,
+    FilterContext,
     FilterPriority,
     FilterRule,
-    OutcomePriority,
-    RuleEngine,
-    RuleIngestionError,
-    RuleLoader,
     RuleLocation,
     RuleParameters,
     RuleParamsBase,
-    SymptomCategory,
 )
+from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.symptoms.declarations import CascadeScope, OutcomePriority, SymptomCategory
 
 
 def test_symptom_declarations_register_during_load(tmp_path):
@@ -42,7 +43,8 @@ def test_symptom_declarations_register_during_load(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import CascadeScope, OutcomePriority, SymptomCategory, cascade_symptom, outcome_symptom",
+                "from attribution_lib.rules import cascade_symptom, outcome_symptom",
+                "from attribution_lib.symptoms.declarations import CascadeScope, OutcomePriority, SymptomCategory",
                 "",
                 "outcome_symptom(",
                 "    'bus error',",
@@ -94,7 +96,8 @@ def test_outcome_symptom_requires_doc_anchor(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import OutcomePriority, outcome_symptom",
+                "from attribution_lib.rules import outcome_symptom",
+                "from attribution_lib.symptoms.declarations import OutcomePriority",
                 "",
                 "outcome_symptom(",
                 "    'bus error',",
@@ -116,7 +119,7 @@ def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import known_symptom",
+                "from attribution_lib.rules import known_symptom",
                 "",
                 "known_symptom('BrokenPipeError')",
             ]
@@ -141,7 +144,8 @@ def test_duplicate_identical_symptom_declaration_is_ignored(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import OutcomePriority, outcome_symptom",
+                "from attribution_lib.rules import outcome_symptom",
+                "from attribution_lib.symptoms.declarations import OutcomePriority",
                 "",
                 "outcome_symptom(",
                 "    'bus error',",
@@ -170,7 +174,8 @@ def test_conflicting_symptom_declaration_raises(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import OutcomePriority, outcome_symptom",
+                "from attribution_lib.rules import outcome_symptom",
+                "from attribution_lib.symptoms.declarations import OutcomePriority",
                 "",
                 "outcome_symptom(",
                 "    'bus error',",
@@ -205,7 +210,7 @@ def test_failed_load_restores_symptom_predicates(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import symptom_predicate",
+                "from attribution_lib.rules import symptom_predicate",
                 "",
                 "@symptom_predicate",
                 "def leaked_predicate(symptoms, job_info):",
@@ -228,7 +233,8 @@ def test_explicit_empty_accumulator_source_filters_override_rule_sources(tmp_pat
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules_engine import ExtractorAccumulator, ObservationSource, extractor_accumulator_def",
+                "from attribution_lib.rules import ExtractorAccumulator, extractor_accumulator_def",
+                "from attribution_lib.observation.inbound import Source as ObservationSource",
                 "",
                 "rule_sources = {ObservationSource.APPLOG}",
                 "",
@@ -278,7 +284,7 @@ class TestFilterPriorityOrdering:
 
     def _run_filters(self, loader: RuleLoader, **kwargs) -> list[str]:
         stream = self.mgr.create_stream("test")
-        loader.build().process_event_filters(stream, None, **kwargs)
+        loader.build().execute(FilterContext(event_stream=stream, job_info=None, **kwargs))
         return list(self.execution_log)
 
     def test_default_priority_is_standard(self):
@@ -369,30 +375,46 @@ def _collector(name: str, params_model: Optional[type[RuleParamsBase]]) -> Colle
     )
 
 
+def test_engine_get_rule_is_independent_of_rule_type():
+    loader = RuleLoader()
+    rule = _collector("Collector", None)
+    loader.register_rule(rule)
+
+    engine = loader.build()
+
+    assert engine.get_rule(rule.name) is rule
+    assert engine.get_rule("Missing") is None
+
+
 class TestParseCollectorParams:
-    """Behavior of ``parse_collector_params`` across model/no-model and valid/invalid input."""
+    """Behavior of collector parameter parsing across model/no-model and valid/invalid input."""
+
+    def test_no_model_accepts_none(self):
+        assert _collector("NoModel", None).parse_params(None) is None
 
     def test_no_model_rejects_supplied_params(self):
         """Passing params for a rule with no params_model raises."""
+        rule = _collector("NoModel", None)
         with pytest.raises(RuleAcceptsNoParamsError) as exc:
-            RuleEngine.parse_collector_params(_collector("NoModel", None), RuleParameters(params={"value": 1}))
+            rule.parse_params(RuleParameters(params={"value": 1}))
         assert exc.value.rule_id == "NoModel"
 
     def test_no_model_accepts_empty_envelope(self):
         """Empty envelope is fine. Callers often pass {} for all rules indiscriminately."""
-        assert RuleEngine.parse_collector_params(_collector("NoModel", None), RuleParameters()) is None
+        assert _collector("NoModel", None).parse_params(RuleParameters()) is None
 
     def test_model_parses_valid_params(self):
-        out = RuleEngine.parse_collector_params(
-            _collector("WithModel", _SampleParams), RuleParameters(params={"value": 7})
-        )
+        out = _collector("WithModel", _SampleParams).parse_params(RuleParameters(params={"value": 7}))
         assert isinstance(out, _SampleParams) and out.value == 7
 
+    def test_model_uses_defaults_for_none(self):
+        out = _collector("WithModel", _SampleParams).parse_params(None)
+        assert out == _SampleParams(value=0)
+
     def test_model_rejects_invalid_params(self):
+        rule = _collector("WithModel", _SampleParams)
         with pytest.raises(InvalidRuleParams) as exc:
-            RuleEngine.parse_collector_params(
-                _collector("WithModel", _SampleParams), RuleParameters(params={"value": "nope"})
-            )
+            rule.parse_params(RuleParameters(params={"value": "nope"}))
         assert exc.value.rule_id == "WithModel"
 
 

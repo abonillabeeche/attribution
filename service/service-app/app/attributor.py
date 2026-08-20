@@ -27,7 +27,7 @@ from attribution_lib.exceptions import (
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
 from attribution_lib.job_info import JobInfo
-from attribution_lib.rules_engine import RuleEngine, RuleId, RuleParameters
+from attribution_lib.rules import CollectorRule, RuleId, RuleParameters
 from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 
@@ -87,12 +87,11 @@ class AttributionParameters(HashableModel):
         Raises ValueError for unknown rule IDs.
         """
         # TODO: Currently only allowing parameters for collector rules.
-        collector_rules = attribution_lib.get_rules_engine().collector_rules
         for rule_id, rp in value.items():
-            rule = collector_rules.get(rule_id)
-            if rule is None:
+            rule = attribution_lib.get_rules_engine().get_rule(rule_id)
+            if not isinstance(rule, CollectorRule):
                 raise ValueError(f"unknown rule id: {rule_id!r}")
-            RuleEngine.parse_collector_params(rule, rp)
+            rule.parse_params(rp)
         return value
 
 

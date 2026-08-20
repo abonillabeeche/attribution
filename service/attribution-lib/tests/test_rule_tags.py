@@ -12,17 +12,17 @@ import dataclasses
 
 import pytest
 
-from attribution_lib.rules_engine import (
+from attribution_lib.exceptions import RuleIngestionError
+from attribution_lib.rule_types.definitions import (
     CollectorRule,
     ExtractorAccumulatorRule,
     ExtractorRule,
     FilterRule,
     RefinerRule,
     Rule,
-    RuleIngestionError,
     RuleLocation,
-    normalize_tags,
 )
+from attribution_lib.rule_types.registration import normalize_tags
 
 WHERE = "RuleName (rules.py:123)"
 

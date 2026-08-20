@@ -30,7 +30,7 @@ from attribution_lib.bundled_rules.common.straggler_types import StragglerQualif
 from loguru import logger
 
 from attribution_lib.exceptions import UnknownResourceError
-from attribution_lib.rules_engine import EventTriple, RuleContext, collector_def, rule_processor
+from attribution_lib.rules import EventTriple, RuleContext, collector_def, rule_processor
 from attribution_lib.sources import Source, SourceSet
 
 rule_author = "NVIDIA Attribution team"

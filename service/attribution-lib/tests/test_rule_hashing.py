@@ -10,13 +10,13 @@
 
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.rules_engine import (
+from attribution_lib.rule_types.definitions import (
     ExtractorAccumulatorRule,
     ExtractorRule,
     FilterRule,
-    RuleLoader,
     RuleLocation,
 )
+from attribution_lib.rules_engine import RuleLoader
 
 
 def _make_extractor(name: str, regex: str, sources: frozenset = frozenset()) -> ExtractorRule:

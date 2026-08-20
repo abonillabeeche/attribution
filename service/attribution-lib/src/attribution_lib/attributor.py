@@ -48,7 +48,8 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
 )
 from attribution_lib.observation.processing import EntrySourceBase
-from attribution_lib.rules_engine import SOURCE_CONFIGS, RuleId, RuleParameters, process_observation_source
+from attribution_lib.rule_types.definitions import RuleId, RuleParameters
+from attribution_lib.rules_engine import SOURCE_CONFIGS, process_observation_source
 
 
 class ConsumedObservation:

@@ -14,7 +14,7 @@ from loguru import logger
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventStream
 from attribution_lib.exceptions import UndeclaredEventTypeError, UnknownResourceError
-from attribution_lib.rules_engine import RuleContext, RuleParamsBase
+from attribution_lib.rules import RuleContext, RuleParamsBase
 from attribution_lib.sources import (
     Source,
     SourceSet,

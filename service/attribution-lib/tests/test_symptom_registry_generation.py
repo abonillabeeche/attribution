@@ -549,7 +549,7 @@ def test_cascade_only_noop_declaration_is_valid_registry_metadata(tmp_path):
 from dataclasses import replace
 
 from attribution_lib.declarative.context import _require_rule_loader
-from attribution_lib.rules_engine import _get_caller_location
+from attribution_lib.rule_types.registration import _get_caller_location
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 
 

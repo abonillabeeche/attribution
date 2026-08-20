@@ -17,7 +17,6 @@ from attribution_lib.decision_trace_recorder import NodeSymptomSnapshot, snapsho
 from attribution_lib.rule_types.bases import OrderedLoader, OrderedSubEngine, rule_type
 from attribution_lib.rule_types.definitions import (
     ExecutionContext,
-    FilterPriority,
     RefinerContext,
     RefinerProcessor,
     RefinerRule,
@@ -33,27 +32,17 @@ class RefinerEngine(OrderedSubEngine[RefinerRule, RefinerProcessor]):
     def execute(self, context: ExecutionContext) -> None:
         """Run refiner processors in priority order.
 
-        With ``context.phase`` set, processors in ``[phase, next FilterPriority)``
-        run. With it None, every pre-outcome phase runs, that is everything
-        below ``POST_OUTCOME``.
+        ``context.phase_window`` supplies inclusive lower and exclusive upper
+        priority bounds. A ``None`` bound is open-ended.
         """
         if not isinstance(context, RefinerContext):  # narrowing guard; mypy does not narrow `is False`
             return
         self._ensure_sorted()
-        phase = context.phase
-
-        if phase is not None:
-            upper = min((p for p in FilterPriority if p > phase), default=None)
-            for priority in sorted(self._by_phase.keys()):
-                if priority < phase:
-                    continue
-                if upper is not None and priority >= upper:
-                    break
-                self._run_phase(self._by_phase[priority], context)
-            return
-
+        lower, upper = context.phase_window
         for priority in sorted(self._by_phase.keys()):
-            if priority >= FilterPriority.POST_OUTCOME:
+            if lower is not None and priority < lower:
+                continue
+            if upper is not None and priority >= upper:
                 break
             self._run_phase(self._by_phase[priority], context)
 

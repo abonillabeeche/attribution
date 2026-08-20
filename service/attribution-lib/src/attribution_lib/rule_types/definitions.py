@@ -18,10 +18,11 @@ from re import Match
 from typing import Any, NamedTuple, Optional, TypeAlias, cast
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
+from attribution_lib.exceptions import InvalidRuleParams, RuleAcceptsNoParamsError
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.regex_accelerator.two_stage_matcher import TwoStageMatcher
@@ -120,8 +121,11 @@ class RefinerContext(RuleContext):
     cancelled_by: Optional[str] = None
     attribution_result: Optional[Any] = None
     bad_node_result: Optional[Any] = None
-    # When set, execute() runs all priorities in [phase, next FilterPriority).
-    phase: Optional[int] = None
+    # Inclusive lower and exclusive upper priority bounds. None is unbounded.
+    # The default preserves the historical "all pre-outcome refiners" behavior.
+    phase_window: tuple[Optional[int], Optional[int]] = field(
+        default_factory=lambda: (None, FilterPriority.POST_OUTCOME)
+    )
 
 
 RuleId: TypeAlias = str
@@ -317,6 +321,19 @@ class CollectorRule(Rule):
     processor: CollectorProcessor
     formatter: CollectorFormatter
     params_model: Optional[type[RuleParamsBase]] = None
+
+    def parse_params(self, raw: Optional[RuleParameters]) -> Optional[RuleParamsBase]:
+        """Validate a parameter envelope against this rule's declared schema."""
+        if self.params_model is None:
+            if raw is not None and raw.params != {}:
+                raise RuleAcceptsNoParamsError(self.name)
+            return None
+
+        params_data = raw.params if raw is not None else {}
+        try:
+            return self.params_model(**params_data)
+        except ValidationError as e:
+            raise InvalidRuleParams(self.name, e) from e
 
     def process(
         self, event_stream: EventStream, job_info: "JobInfo", params: Optional[RuleParamsBase] = None

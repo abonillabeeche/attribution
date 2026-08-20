@@ -33,7 +33,8 @@ from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
 from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RefinerContext, RuleLoader
+from attribution_lib.rule_types.definitions import RefinerContext
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 
@@ -3513,7 +3514,7 @@ class TestSuppressNonFatalJobSymptoms:
 
     def _run_refiner(self, stream, job_info, symptoms, my_bad_nodes):
         context = RefinerContext(job_info=job_info, event_stream=stream, symptoms=symptoms, my_bad_nodes=my_bad_nodes)
-        attribution_lib.get_rules_engine().refiner_rules["SuppressNonFatalJobSymptoms"].process(context)
+        attribution_lib.get_rules_engine().rules["SuppressNonFatalJobSymptoms"].process(context)
 
     def test_non_fatal_dropped_real_symptom_kept(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR", "(non-fatal) LustreError")

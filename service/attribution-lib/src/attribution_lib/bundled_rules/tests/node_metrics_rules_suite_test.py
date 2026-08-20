@@ -18,7 +18,13 @@ import pytest
 
 import attribution_lib
 from attribution_lib.attributor import ConsumedObservation, MismatchedSourceAndFormatError
-from attribution_lib.core import CalcBadNodesAttributionResult, calculate_bad_nodes, process_check
+from attribution_lib.bundled_rules.common import node_metrics_spec
+from attribution_lib.core import (
+    CalcBadNodesAttributionResult,
+    calculate_bad_nodes,
+    get_bundled_rules_path,
+    process_check,
+)
 from attribution_lib.observation import Observation
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
@@ -28,6 +34,20 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.observation.processing import EntrySourceBase
 from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.rules_engine import RuleLoader
+
+
+def test_node_metrics_rules_register_metric_thresholds():
+    """The bundled rule exposes its node-metric threshold specification."""
+    loader = RuleLoader()
+
+    loader.load(get_bundled_rules_path() / "node_metrics_rules.py")
+
+    thresholds = loader.build().get_metric_spec(ObservationSource.NODE_METRICS).thresholds
+    expected = node_metrics_spec.metric_thresholds
+    assert thresholds["node_infiniband_link_downed_total"] == expected["node_infiniband_link_downed_total"]
+    assert thresholds["ib_roce_adp_retrans"] == expected["ib_roce_adp_retrans"]
+    assert thresholds["up"] == expected["up"]
 
 
 @pytest.fixture

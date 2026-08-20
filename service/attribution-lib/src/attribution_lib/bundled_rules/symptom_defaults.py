@@ -17,14 +17,12 @@ move declarations next to the extractor rules that emit them. doc anchors are
 derived placeholders pending the attribution documentation manifest.
 """
 
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import cascade_symptom, known_symptom, outcome_symptom
+from attribution_lib.symptoms.declarations import (
     CascadeScope,
     DagDiscardBehavior,
     OutcomePriority,
     SymptomCategory,
-    cascade_symptom,
-    known_symptom,
-    outcome_symptom,
 )
 
 

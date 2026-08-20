@@ -47,7 +47,7 @@ from attribution_lib.declarative.families import stamp_family
 from attribution_lib.declarative.lifecycle import LIFECYCLE_INJECTIONS, LIFECYCLE_PREDICATES
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.prefilters import PreFilterSpec, register_pre_filter
+from attribution_lib.prefilters import PreFilterSpec
 from attribution_lib.rule_types.definitions import ExtractorRule, Rule, RuleId, RuleLocation
 from attribution_lib.rule_types.registration import normalize_tags
 
@@ -936,7 +936,7 @@ def _finalize_family(
 # ---------------------------------------------------------------------------
 
 
-def _load_prefilter(pf_doc: dict[str, Any], ctx: _LoadContext, filepath: str) -> None:
+def _load_prefilter(loader: "RuleLoader", pf_doc: dict[str, Any], ctx: _LoadContext, filepath: str) -> None:
     """Register a [prefilter] section: include/exclude term lists for each source."""
     raw_sources = pf_doc.get("sources", ctx.file_sources)
     if not raw_sources:
@@ -961,7 +961,7 @@ def _load_prefilter(pf_doc: dict[str, Any], ctx: _LoadContext, filepath: str) ->
         exclude_terms=_checked_str_list("exclude"),
     )
     for source in sources:
-        register_pre_filter(source, spec)
+        loader.register_pre_filter(source, spec)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1006,6 @@ def load_toml_rules(
         added.update(_finalize_family(family, fi, loader, ctx, filepath))
 
     if "prefilter" in doc:
-        _load_prefilter(doc["prefilter"], ctx, filepath)
+        _load_prefilter(loader, doc["prefilter"], ctx, filepath)
 
     return added
