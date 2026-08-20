@@ -2,16 +2,14 @@
 
 import pytest
 
+from attribution_lib.declarative.context import const
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.declarative.expressions import (
     check_consts_resolvable,
     referenced_const_names,
 )
-from attribution_lib.rules_engine import (
-    RuleIngestionError,
-    RuleLoader,
-    const,
-)
+from attribution_lib.exceptions import RuleIngestionError
+from attribution_lib.rules_engine import RuleLoader
 from tests.declarative.conftest import _with_loader
 
 

@@ -31,14 +31,11 @@ from attribution_lib.outcome import (
     OutcomeAttribution,
     calculate_outcome,
 )
+from attribution_lib.rule_types.definitions import CollectorContext, RuleId, RuleParameters
 from attribution_lib.rules_engine import (
-    _METRIC_SPECS,
-    _PRE_FILTERS,
     SOURCE_CONFIGS,
     RuleEngine,
-    RuleId,
     RuleLoader,
-    RuleParameters,
     SourceProcessingConfig,
     process_observation_source,
     register_source_config,
@@ -182,9 +179,6 @@ def setup_rules(
 
     if ignored_hostname_prefixes:
         attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes
-
-    _PRE_FILTERS.clear()
-    _METRIC_SPECS.clear()
 
     attribution_lib._rules_engine = RuleLoader.load_all(rules_paths)
 
@@ -385,6 +379,8 @@ def attribute(
     )
 
     if run_collectors:
-        result.collectors = attribution_lib.get_rules_engine().run_collectors(event_stream, job_info, rule_params)
+        collector_context = CollectorContext(event_stream=event_stream, job_info=job_info, rule_params=rule_params)
+        attribution_lib.get_rules_engine().execute(collector_context)
+        result.collectors = collector_context.result
 
     return result

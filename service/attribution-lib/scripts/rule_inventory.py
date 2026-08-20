@@ -23,7 +23,14 @@ from typing import Any, cast
 
 import attribution_lib
 from attribution_lib.core import get_bundled_rules_path, setup_rules
-from attribution_lib.rules_engine import CollectorRule, Rule
+from attribution_lib.rule_types.definitions import (
+    CollectorRule,
+    ExtractorAccumulatorRule,
+    ExtractorRule,
+    FilterRule,
+    RefinerRule,
+    Rule,
+)
 
 SCHEMA_NAME = "attribution-rule-inventory"
 SCHEMA_VERSION = 1
@@ -36,6 +43,13 @@ RULE_KINDS = (
     "refiner",
     "collector",
 )
+RULE_TYPES: dict[str, type[Rule]] = {
+    "extractor": ExtractorRule,
+    "filter": FilterRule,
+    "extractor_accumulator": ExtractorAccumulatorRule,
+    "refiner": RefinerRule,
+    "collector": CollectorRule,
+}
 
 
 def _runtime_schema(kind: str) -> str:
@@ -136,13 +150,10 @@ def dump_inventory(rules_dirs: Sequence[Path] | None = None) -> dict[str, Any]:
     )
     setup_rules(rules_paths=list(roots), force=True)
     engine = attribution_lib.get_rules_engine()
-    declarative_emit = cast("dict[str, str]", getattr(engine, "declarative_emit", {}))
-    collections: tuple[tuple[str, dict[str, Rule]], ...] = (
-        ("extractor", cast("dict[str, Rule]", engine.extractor_rules)),
-        ("filter", cast("dict[str, Rule]", engine.filter_rules)),
-        ("extractor_accumulator", cast("dict[str, Rule]", engine.extractor_accumulator_rules)),
-        ("refiner", cast("dict[str, Rule]", engine.refiner_rules)),
-        ("collector", cast("dict[str, Rule]", engine.collector_rules)),
+    declarative_emit = engine.declarative_emit
+    collections: tuple[tuple[str, dict[str, Rule]], ...] = tuple(
+        (kind, {name: rule for name, rule in engine.rules.items() if type(rule) is rule_type})
+        for kind, rule_type in RULE_TYPES.items()
     )
     rules = [
         _rule_record(kind, rule, roots, declarative_emit) for kind, by_name in collections for rule in by_name.values()

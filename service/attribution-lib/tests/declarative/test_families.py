@@ -145,7 +145,7 @@ symptom = "out of memory"
     assert "gk:OOM" in added
     rule = added["gk:Segmentation fault"]
     assert rule.match_re == re.escape("Segmentation fault")
-    assert loader.extractor_rules["gk:OOM"] is added["gk:OOM"]
+    assert loader.rules["gk:OOM"] is added["gk:OOM"]
 
 
 # --- Task 2: patterns (indexed) + rows_from a record table ----------------------

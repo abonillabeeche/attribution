@@ -154,6 +154,10 @@ class ExtractorLoader(LoaderBase[ExtractorRule]):
         rule = self.rules.get(name)
         return rule if rule is not None else self.extractor_accumulator_rules.get(name)
 
+    def extra_rules(self) -> Mapping[RuleId, Rule]:
+        """Accumulator rules, for the coordinator's combined rules view."""
+        return self.extractor_accumulator_rules
+
     def snapshot(self) -> dict[str, Any]:
         return {
             **super().snapshot(),
@@ -169,10 +173,6 @@ class ExtractorLoader(LoaderBase[ExtractorRule]):
     def declarative_emit_store(self) -> dict[str, str]:
         """Expose this loader's declarative_emit for the coordinator's proxy."""
         return self.declarative_emit
-
-    def extra_rules(self) -> Mapping[RuleId, Rule]:
-        """Accumulator rules, for the coordinator's combined rules view."""
-        return self.extractor_accumulator_rules
 
     def build(self) -> ExtractorEngine:
         return ExtractorEngine(

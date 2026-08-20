@@ -2,7 +2,12 @@
 
 import pytest
 
-from attribution_lib.declarative.context import _using_rule_loader
+from attribution_lib.declarative.context import (
+    _EXPR_HELPER_RESERVED,
+    EXPR_HELPER_INJECTED_PARAMS,
+    _using_rule_loader,
+    expr_helper,
+)
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.declarative.expressions import (
     _FIXED_FUNCS,
@@ -12,13 +17,8 @@ from attribution_lib.declarative.expressions import (
     merge_functions,
     render_template,
 )
-from attribution_lib.rules_engine import (
-    _EXPR_HELPER_RESERVED,
-    EXPR_HELPER_INJECTED_PARAMS,
-    RuleIngestionError,
-    RuleLoader,
-    expr_helper,
-)
+from attribution_lib.exceptions import RuleIngestionError
+from attribution_lib.rules_engine import RuleLoader
 from tests.declarative.conftest import _with_loader
 
 
@@ -210,7 +210,7 @@ def test_positional_only_injected_param_is_error(pname):
     with _with_loader():
         with pytest.raises(RuleIngestionError, match=f"{pname!r}.*positional-only"):
             exec(
-                f"from attribution_lib.rules_engine import expr_helper\n"
+                f"from attribution_lib.rules import expr_helper\n"
                 f"@expr_helper('bad_{pname}')\n"
                 f"def _h({pname}, /, x): pass",
                 {},

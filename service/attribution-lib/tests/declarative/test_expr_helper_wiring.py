@@ -10,13 +10,14 @@ import textwrap
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
-from attribution_lib.declarative.context import _using_rule_loader
+from attribution_lib.declarative.context import _using_rule_loader, expr_helper
 from attribution_lib.declarative.coverage import check_coverage
 from attribution_lib.declarative.emit import compile_element
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.declarative.expressions import merge_functions
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleLoader, expr_helper
+from attribution_lib.rule_types.definitions import RuleContext
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
 

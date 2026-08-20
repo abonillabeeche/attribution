@@ -32,6 +32,7 @@ from attribution_lib.rule_types.definitions import (
     FilterPriority,
     FilterRule,
     RefinerContext,
+    RefinerRule,
     Rule,
     RuleLocation,
 )
@@ -123,6 +124,23 @@ def test_sub_engine_base_defaults_are_inert():
     assert engine.extra_rules() == {}
     assert engine.extra_rule_names() == set()
     assert engine.handles(ExecutionContext()) is False
+
+
+def test_coordinators_do_not_expose_rule_type_specific_helpers():
+    loader = RuleLoader()
+    engine = loader.build()
+
+    assert hasattr(loader, "extractor_rules") is False
+    for name in (
+        "rules_of_type",
+        "extractor_rules",
+        "extractor_accumulator_rules",
+        "filter_rules",
+        "refiner_rules",
+        "collector_rules",
+        "parse_collector_params",
+    ):
+        assert hasattr(engine, name) is False
 
 
 def test_ordered_loader_holds_only_the_append_order():
@@ -250,6 +268,64 @@ def test_filter_engine_phase_selects_one_priority():
         )
     loader.build().execute(FilterContext(phase=FilterPriority.MID))
     assert log == ["mid"]
+
+
+@pytest.mark.parametrize(
+    ("phase_window", "expected"),
+    [
+        ((FilterPriority.SCRUB, FilterPriority.FINAL), ["scrub-start", "scrub-late"]),
+        ((FilterPriority.FINAL, FilterPriority.POST_OUTCOME), ["final"]),
+        ((FilterPriority.POST_OUTCOME, None), ["post-outcome"]),
+    ],
+)
+def test_refiner_engine_runs_explicit_priority_window(phase_window, expected):
+    loader = RefinerLoader()
+    log: list[str] = []
+    for name, priority in (
+        ("before-scrub", FilterPriority.SCRUB - 1),
+        ("scrub-start", FilterPriority.SCRUB),
+        ("scrub-late", FilterPriority.FINAL - 1),
+        ("final", FilterPriority.FINAL),
+        ("post-outcome", FilterPriority.POST_OUTCOME),
+    ):
+        loader.register(
+            RefinerRule(
+                name=name,
+                author="test",
+                location=RuleLocation("f.py", 1),
+                processor=(lambda n: lambda ctx: log.append(n))(name),
+                priority=priority,
+            )
+        )
+
+    loader.build().execute(RefinerContext(phase_window=phase_window))
+
+    assert log == expected
+
+
+def test_refiner_engine_default_window_excludes_post_outcome():
+    loader = RefinerLoader()
+    log: list[str] = []
+    for name, priority in (
+        ("before-scrub", FilterPriority.SCRUB - 1),
+        ("scrub-start", FilterPriority.SCRUB),
+        ("scrub-late", FilterPriority.FINAL - 1),
+        ("final", FilterPriority.FINAL),
+        ("post-outcome", FilterPriority.POST_OUTCOME),
+    ):
+        loader.register(
+            RefinerRule(
+                name=name,
+                author="test",
+                location=RuleLocation("f.py", 1),
+                processor=(lambda n: lambda ctx: log.append(n))(name),
+                priority=priority,
+            )
+        )
+
+    loader.build().execute(RefinerContext())
+
+    assert log == ["before-scrub", "scrub-start", "scrub-late", "final"]
 
 
 def test_engines_ignore_contexts_they_do_not_handle():

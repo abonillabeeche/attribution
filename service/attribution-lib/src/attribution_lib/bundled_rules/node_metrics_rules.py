@@ -16,10 +16,15 @@ metric name inside the ``MetricEntry.body()`` text and captures the numeric
 value for threshold comparison in the processor.
 """
 
-import common.node_metrics_spec  # noqa: F401 — triggers metric spec registration
+import common.node_metrics_spec
 
-from attribution_lib.rules_engine import declare_event_types
+from attribution_lib.observation.inbound import Source as ObservationSource
+from attribution_lib.rules import MetricSpec, declare_event_types, register_metric_spec
 
 rule_author = "NVIDIA Attribution team"
 
+register_metric_spec(
+    ObservationSource.NODE_METRICS,
+    MetricSpec(thresholds=common.node_metrics_spec.metric_thresholds),
+)
 declare_event_types("Attribution.node.bad", "Attribution.node.interesting")
