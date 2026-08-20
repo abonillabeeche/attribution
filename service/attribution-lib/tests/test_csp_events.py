@@ -77,6 +77,11 @@ class TestCspEventEntryObj:
         obj = CspEventEntryObj(context, pos=1, entry=sample_entry)
         assert obj.body() == "csp_event: category=HOST_FAILURE, reason=BAD_GPU, status="
 
+    def test_attribution_source_preserves_raw_event_without_source_event(self, context, sample_entry):
+        source = CspEventEntryObj(context, pos=1, entry=sample_entry).attribution_source_base(None)
+
+        assert source.datum == "csp_event: category=HOST_FAILURE, reason=BAD_GPU, status="
+
     def test_attribution_source_preserves_optional_source_event(self, context):
         entry = CspEventEntry(
             hostname="test-node-001",
