@@ -68,6 +68,77 @@ class TestCspEventEntryObj:
         obj = CspEventEntryObj(context, pos=1, entry=sample_entry)
         assert obj.body() == "csp_event: category=HOST_FAILURE, reason=BAD_GPU, status="
 
+    def test_attribution_source_preserves_optional_source_event(self, context):
+        entry = CspEventEntry(
+            hostname="test-node-001",
+            termination_timestamp_s=1718452800.0,
+            category="HOST_FAILURE",
+            reason="BAD_HARDWARE",
+            status="CLASSIFICATION_READY",
+            version=1,
+            source_event={
+                "source": "databricks_maintenance_fault",
+                "hostname": "test-node-001",
+                "fault_id": "GPU_RETIRED_PAGE",
+                "event_region": "us-west",
+                "event_id": "event-1",
+                "event_created_at": "2024-06-15T12:00:00+00:00",
+                "fault_component": "GPU",
+            },
+        )
+
+        source = CspEventEntryObj(context, pos=1, entry=entry).attribution_source_base(None)
+
+        assert source.datum == (
+            "csp_event: category=HOST_FAILURE, reason=BAD_HARDWARE, status=CLASSIFICATION_READY, "
+            'source_event={"event_created_at":"2024-06-15T12:00:00+00:00","event_id":"event-1",'
+            '"event_region":"us-west","fault_component":"GPU","fault_id":"GPU_RETIRED_PAGE",'
+            '"hostname":"test-node-001","source":"databricks_maintenance_fault"}'
+        )
+
+    @pytest.mark.parametrize(
+        "source_event",
+        [
+            {
+                "source": "databricks_maintenance_fault",
+                "event_id": "event-1",
+                "event_created_at": "2024-06-15T12:00:00+00:00",
+                "event_region": "us-west",
+                "hostname": "test-node-001",
+                "fault_id": "GPU_RETIRED_PAGE",
+                "raw_payload": "not part of the public contract",
+            },
+            {
+                "source": "databricks_maintenance_fault",
+                "event_id": "event-1",
+                "event_created_at": "2024-06-15T12:00:00+00:00",
+                "event_region": "us-west",
+                "hostname": "test-node-001",
+            },
+            {
+                "source": "databricks_maintenance_fault",
+                "event_id": 1,
+                "event_created_at": "2024-06-15T12:00:00+00:00",
+                "event_region": "us-west",
+                "hostname": "test-node-001",
+                "fault_id": "GPU_RETIRED_PAGE",
+            },
+        ],
+    )
+    def test_body_rejects_source_event_outside_public_contract(self, context, source_event):
+        entry = CspEventEntry(
+            hostname="test-node-001",
+            termination_timestamp_s=1718452800.0,
+            category="HOST_FAILURE",
+            reason="BAD_HARDWARE",
+            status="CLASSIFICATION_READY",
+            version=1,
+            source_event=source_event,
+        )
+
+        with pytest.raises(ValueError, match="Invalid CSP source_event"):
+            CspEventEntryObj(context, pos=1, entry=entry).body()
+
     def test_time_returns_datetime(self, context, sample_entry, timezone):
         obj = CspEventEntryObj(context, pos=1, entry=sample_entry)
         expected = datetime.fromtimestamp(1718452800.0, timezone)
