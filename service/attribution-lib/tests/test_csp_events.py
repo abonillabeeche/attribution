@@ -155,6 +155,14 @@ class TestCspEventEntryObj:
                 id="blank-fault-component",
             ),
             pytest.param(
+                {**_SOURCE_EVENT, "fault_component": ""},
+                id="empty-fault-component",
+            ),
+            pytest.param(
+                {**_SOURCE_EVENT, "fault_component": None},
+                id="none-fault-component",
+            ),
+            pytest.param(
                 {**_SOURCE_EVENT, "fault_component": 1},
                 id="non-string-fault-component",
             ),
