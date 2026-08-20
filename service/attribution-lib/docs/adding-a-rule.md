@@ -108,8 +108,7 @@ Create a new rule when the evidence needs a distinct matcher, symptom, provenanc
 ## Choose the Smallest Rule Form
 
 Prefer declarative TOML for fixed matching and emission behavior.
-The standalone `docs/declarative-grammar.md` referenced by the loader is not currently present in this repository.
-Until that document is restored, treat the accepted keys in [`declarative/loader.py`](../src/attribution_lib/declarative/loader.py) and the emission forms in [`declarative/emit.py`](../src/attribution_lib/declarative/emit.py) as the authoritative grammar definitions.
+Consult the accepted keys in [`declarative/loader.py`](../src/attribution_lib/declarative/loader.py) and the emission forms in [`declarative/emit.py`](../src/attribution_lib/declarative/emit.py) when you need details beyond the examples below.
 Use the following mapping to choose a form.
 
 | Required Behavior | Rule Form | Example |

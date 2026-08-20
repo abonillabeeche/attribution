@@ -57,8 +57,7 @@ In particular, do not infer whether evidence is `bad_node` or `interesting_node`
 ## Step 2: Select the Implementation Path
 
 Use the smallest path that implements the required behavior.
-The standalone `docs/declarative-grammar.md` referenced by the loader is not currently present in this repository.
-Before authoring new declarative syntax, treat the accepted keys in [`declarative/loader.py`](../src/attribution_lib/declarative/loader.py) and the emission forms in [`declarative/emit.py`](../src/attribution_lib/declarative/emit.py) as the authoritative grammar definitions.
+Before authoring new declarative syntax, consult the accepted keys in [`declarative/loader.py`](../src/attribution_lib/declarative/loader.py) and the emission forms in [`declarative/emit.py`](../src/attribution_lib/declarative/emit.py).
 
 1. Use a declarative leaf for one fixed `bad_node`, `interesting_node`, or `generic_event` emission.
 2. Use `pick_one`, `try_all`, `catalog_lookup`, or `family` only when the requested control flow directly requires that form.
