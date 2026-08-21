@@ -43,7 +43,7 @@ def main() -> None:
     schema = asyncio.run(_build_schema(create_app()))
 
     # trailing newline so the file is diff-friendly and POSIX-clean
-    destination.write_text(json.dumps(schema, indent=2) + "\n")
+    destination.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {destination}")
 
 
