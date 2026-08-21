@@ -180,7 +180,6 @@ def test_wandb_error_yields_to_stronger_infrastructure_symptom_in_any_order():
 @pytest.mark.parametrize(
     ("code", "symptom"),
     [
-        ("NV_ERR_NO_MEMORY", "NV_ERR_NO_MEMORY mem_desc.c"),
         ("NV_ERR_INSUFFICIENT_PERMISSIONS", "NV_ERR_INSUFFICIENT_PERMISSIONS kern_profiler_v2_ctrl.c"),
         ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
         ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
@@ -208,6 +207,97 @@ def test_observed_nv_err_symptoms_map_to_infrasw(code: str, symptom: str):
     assert match is not None
     assert match.matched_prefix == code
     assert match.outcome == "Fail InfraSW"
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "NV_ERR_NO_MEMORY mem_desc.c",
+        "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        "NV_ERR_NO_MEMORY system_mem.c",
+    ],
+)
+def test_non_multicast_nv_err_no_memory_maps_to_multicategory(symptom: str):
+    """Keep non-multicast Resource Manager memory failures ambiguous.
+
+    Args:
+        symptom: Exact FACT DB symptom to classify.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for([symptom])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+    assert match.outcome == "Fail MultiCategory"
+    assert match.hw_cause == "Not Applicable"
+
+
+def test_multicast_nv_err_no_memory_maps_to_infrasw():
+    """Classify multicast Resource Manager memory failure as infrastructure software."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_NO_MEMORY mem_multicast_fabric.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+    assert match.outcome == "Fail InfraSW"
+    assert match.hw_cause == "Driver bug"
+
+
+@pytest.mark.parametrize(
+    "non_multicast",
+    [
+        "NV_ERR_NO_MEMORY mem_desc.c",
+        "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        "NV_ERR_NO_MEMORY system_mem.c",
+    ],
+)
+def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order(non_multicast: str):
+    """Keep mixed multicast and non-multicast memory failures ambiguous.
+
+    Args:
+        non_multicast: Non-multicast memory symptom paired with multicast evidence.
+    """
+    registry = _load_committed_registry()
+    multicast = "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+
+    for symptoms in ([non_multicast, multicast], [multicast, non_multicast]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+        assert match.outcome == "Fail MultiCategory"
+        assert match.hw_cause == "Not Applicable"
+
+
+def test_mixed_nv_err_no_memory_does_not_override_earlier_same_tier_match():
+    """Preserve an unrelated same-tier match that sorts before no-memory evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(
+        [
+            "Call to ibv_modify_qp failed: eno 110 timeout",
+            "NV_ERR_NO_MEMORY mem_multicast_fabric.c",
+            "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        ]
+    )
+
+    assert match is not None
+    assert match.matched_prefix == "Call to ibv_modify_qp failed: eno 110 timeout"
+    assert match.outcome == "Fail InfraHW"
+
+
+def test_bare_nv_err_no_memory_maps_to_multicategory():
+    """Classify the bare memory status through the generic fallback."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_NO_MEMORY"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+    assert match.outcome == "Fail MultiCategory"
+    assert match.hw_cause == "Not Applicable"
 
 
 def test_nvrx_detected_failure_maps_to_fail_undetermined():
