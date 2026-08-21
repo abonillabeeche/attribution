@@ -36,6 +36,7 @@ from attribution_lib.job_info import JobInfo
 from attribution_lib.observation import Context, Observation
 from attribution_lib.observation.inbound import (
     CspEventEntry,
+    CspEventSourceEvent,
     Format,
     LokiAppEntry,
     LokiHealthCheckEntry,
@@ -705,6 +706,34 @@ class MetricEntry(EntryBase):
         return self._threshold
 
 
+_CSP_SOURCE_EVENT_REQUIRED_FIELDS = frozenset(
+    {"source", "event_id", "event_created_at", "event_region", "hostname", "fault_id"}
+)
+_CSP_SOURCE_EVENT_ALLOWED_FIELDS = _CSP_SOURCE_EVENT_REQUIRED_FIELDS | {"fault_component"}
+
+
+def _serialize_csp_source_event(source_event: CspEventSourceEvent) -> str:
+    """Serialize the compact, normalized provenance attached to a CSP event.
+
+    Args:
+        source_event: Provider event fields retained for attribution provenance.
+
+    Returns:
+        Deterministic strict JSON suitable for ``Source.datum``.
+
+    Raises:
+        ValueError: If the event is not an object, or fields are missing, unexpected, blank, or non-string.
+    """
+    if not isinstance(source_event, dict):
+        raise ValueError("Invalid CSP source_event: expected an object")
+    fields = set(source_event)
+    if not _CSP_SOURCE_EVENT_REQUIRED_FIELDS <= fields or not fields <= _CSP_SOURCE_EVENT_ALLOWED_FIELDS:
+        raise ValueError("Invalid CSP source_event: unexpected or missing fields")
+    if any(not isinstance(value, str) or not value.strip() for value in source_event.values()):
+        raise ValueError("Invalid CSP source_event: values must be non-empty strings")
+    return json.dumps(source_event, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 class CspEventEntryObj(EntryBase):
     """Entry for a CSP event event."""
 
@@ -722,7 +751,10 @@ class CspEventEntryObj(EntryBase):
         return datetime.fromtimestamp(self._termination_timestamp_s, self._context.timezone)
 
     def body(self) -> str:
-        return f"csp_event: category={self._category}, reason={self._reason}, status={self._status}"
+        body = f"csp_event: category={self._category}, reason={self._reason}, status={self._status}"
+        if "source_event" not in self._entry:
+            return body
+        return f"{body}, source_event={_serialize_csp_source_event(self._entry['source_event'])}"
 
     def node(self, job_info: Optional[JobInfo] = None) -> Optional[str]:
         return self._hostname

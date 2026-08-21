@@ -313,6 +313,16 @@ PrometheusMetricEntry: TypeAlias = dict[str, Any]
 PrometheusMetricEntrySeries: TypeAlias = list[PrometheusMetricEntry]
 
 
+class CspEventSourceEvent(TypedDict):
+    source: str
+    event_id: str
+    event_created_at: str
+    event_region: str
+    hostname: str
+    fault_id: str
+    fault_component: NotRequired[str]
+
+
 class CspEventEntry(TypedDict):
     hostname: NodeStr
     termination_timestamp_s: float
@@ -320,6 +330,7 @@ class CspEventEntry(TypedDict):
     reason: str
     status: str
     version: int
+    source_event: NotRequired[CspEventSourceEvent]
 
 
 CspEventEntrySeries: TypeAlias = list[CspEventEntry]
