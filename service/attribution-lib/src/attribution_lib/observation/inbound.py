@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, NamedTuple, NewType, NotRequired, Optional, TypeAlias, TypedDict, TypeVar, cast
+from typing import Any, Generic, NamedTuple, NewType, NotRequired, TypeAlias, TypedDict, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from attribution_lib.exceptions import (
@@ -347,8 +347,8 @@ class Context:
     source: Source
     format: Format
     timezone: ZoneInfo
-    # Processing directive, not identity. None defers to the deprecated pre_filtered_sources; a bool overrides.
-    pre_filtered: Optional[bool] = field(default=None, kw_only=True, compare=False)
+    # Processing directive, not identity.
+    pre_filtered: bool = field(default=False, kw_only=True, compare=False)
 
     def __hash__(self) -> int:
         return hash((self.time_interval, self.resources, self.source, self.format, self.timezone))

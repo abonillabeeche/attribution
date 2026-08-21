@@ -226,7 +226,6 @@ def calculate_bad_nodes(
     node_metrics_in: Optional[EntrySourceBase] = None,
     nvlink_metrics_in: Optional[EntrySourceBase] = None,
     csp_event_in: Optional[EntrySourceBase] = None,
-    pre_filtered_sources: Optional[set[ObservationSource]] = None,
 ) -> CalcBadNodesAttributionResult:
     result = CalcBadNodesAttributionResult()
     if not job_info.job_start_time:
@@ -248,7 +247,6 @@ def calculate_bad_nodes(
         nvlink_metrics_in,
         csp_event_in,
     ]
-    _pre_filtered = pre_filtered_sources or set()
     for obs_source in observation_sources:
         if obs_source is None:
             continue
@@ -256,17 +254,15 @@ def calculate_bad_nodes(
         config = SOURCE_CONFIGS.get(source_type)
         if config is not None and config.requires_nodes and not job_info.nodes:
             continue
-        source_pre_filtered = source_type in _pre_filtered
         source_raw_keywords = process_observation_source(
             event_stream=event_stream,
             observation_source=obs_source,
             job_info=job_info,
             rules_engine=attribution_lib.get_rules_engine(),
-            pre_filtered=source_pre_filtered,
+            pre_filtered=False,
         )
-        if not source_pre_filtered:
-            for kw in source_raw_keywords:
-                result.raw_keywords.add(job_info.source_value(kw, datum=None, rule="pre-filter include"))
+        for kw in source_raw_keywords:
+            result.raw_keywords.add(job_info.source_value(kw, datum=None, rule="pre-filter include"))
 
     result.my_bad_nodes = JobNodeAttributions.from_event_stream(event_stream, job_info)
 
