@@ -16,7 +16,11 @@
 # model the API returns. The client is committed to the repo, so the resulting
 # diff belongs in the same PR as the change that caused it.
 #
-#     ./openapi/generate-client.sh
+#     ./openapi/generate-client.sh [output-root]
+#
+# output-root defaults to this project directory, so the spec and client land
+# where they are committed. The drift check passes a scratch directory instead,
+# to verify the committed output without rewriting the working tree.
 #
 # Everything the generator needs is pinned in this project's uv.lock.
 
@@ -26,10 +30,11 @@ TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(dirname "${TOOL_DIR}")"
 
 PACKAGE_NAME="nvidia_attribution_client"
-CLIENT_DIR="${APP_ROOT}/${PACKAGE_NAME}"
-SPEC="${APP_ROOT}/openapi.json"
-# Generate into a scratch directory and swap it in only on success.
-STAGING_DIR="${APP_ROOT}/.openapi-client-staging"
+OUTPUT_ROOT="${1:-${APP_ROOT}}"
+CLIENT_DIR="${OUTPUT_ROOT}/${PACKAGE_NAME}"
+SPEC="${OUTPUT_ROOT}/openapi.json"
+# Generate into a staging directory and swap it in only on success.
+STAGING_DIR="${OUTPUT_ROOT}/.openapi-client-staging"
 
 cd "${APP_ROOT}"
 
@@ -81,7 +86,10 @@ rm -rf "${CLIENT_DIR}"
 mv "${STAGING_DIR}" "${CLIENT_DIR}"
 
 echo "==> done"
-if git -C "${APP_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
+
+# Only meaningful when the output landed in the repo; a scratch run has nothing
+# for git to compare against.
+if [[ "${OUTPUT_ROOT}" == "${APP_ROOT}" ]] && git -C "${APP_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
     # --porcelain lists untracked files too, which a plain `git diff` would miss.
     CHANGED="$(git -C "${APP_ROOT}" status --porcelain -- "${CLIENT_DIR}" "${SPEC}")"
     if [[ -n "${CHANGED}" ]]; then
