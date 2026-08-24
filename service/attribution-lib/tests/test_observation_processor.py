@@ -32,7 +32,7 @@ def _source(datum: str) -> Source:
     )
 
 
-def test_overlapping_accumulator_instances_are_preserved():
+def test_active_accumulator_is_not_retriggered():
     class RecordingAccumulator(ExtractorAccumulator):
         def __init__(self) -> None:
             self.sources: list[Source] = []
@@ -56,12 +56,19 @@ def test_overlapping_accumulator_instances_are_preserved():
                 )
             ]
 
+    created: list[RecordingAccumulator] = []
+
+    def factory() -> RecordingAccumulator:
+        accumulator = RecordingAccumulator()
+        created.append(accumulator)
+        return accumulator
+
     rule = ExtractorAccumulatorRule(
-        name="overlap",
+        name="single",
         author="test",
         location=RuleLocation(__file__, 0),
         match_re="start",
-        factory=RecordingAccumulator,
+        factory=factory,
         source_filters=frozenset({ObservationSource.APPLOG}),
     )
     engine = ExtractorEngine(accumulator_rules={rule.name: rule})
@@ -77,15 +84,13 @@ def test_overlapping_accumulator_instances_are_preserved():
     processor.process_line(_source("start one"))
     processor.process_line(_source("start two"))
 
-    assert len(processor._active["overlap"]) == 2
+    assert len(created) == 1
+    assert set(processor._active) == {"single"}
 
     processor.process_line(_source("stop"))
 
     assert processor._active == {}
-    assert [payload["lines"] for _, payload, _ in emitted] == [
-        ["start one", "start two", "stop"],
-        ["start two", "stop"],
-    ]
+    assert [payload["lines"] for _, payload, _ in emitted] == [["start one", "start two", "stop"]]
 
 
 def test_processing_requires_an_initialized_matcher():

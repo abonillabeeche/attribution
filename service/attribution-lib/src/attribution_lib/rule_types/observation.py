@@ -78,7 +78,7 @@ class ObservationProcessor:
     context: RuleContext
     event_adder: Callable
     _acc_rules: dict[RuleId, ExtractorAccumulatorRule] = field(init=False)
-    _active: dict[RuleId, list[_ActiveAccumulator]] = field(init=False, default_factory=dict)
+    _active: dict[RuleId, _ActiveAccumulator] = field(init=False, default_factory=dict)
     _warned_active_count: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
@@ -93,25 +93,24 @@ class ObservationProcessor:
         for evt in acc.finalize():
             self.event_adder(evt.type, evt.payload, evt.source)
 
-    def _deactivate(self, rid: RuleId, active: _ActiveAccumulator) -> None:
+    def _deactivate(self, rid: RuleId) -> None:
         """Remove an active extractor-accumulator, clean up tracking state, and emit its events."""
-        instances = self._active[rid]
-        instances.remove(active)
-        if not instances:
-            del self._active[rid]
+        active = self._active.pop(rid)
         self._emit_events(active.instance)
 
     def _try_spawn(self, rule_id: RuleId, source: Source) -> None:
-        """Spawn a new extractor-accumulator.
+        """Spawn a new extractor-accumulator if the rule isn't already active.
 
         If the new instance is still consuming after start(), it becomes
         active and will be fed subsequent lines. Otherwise it is finalized
         immediately and discarded.
         """
+        if rule_id in self._active:
+            return
         new_acc = self._acc_rules[rule_id].process()
         new_acc.start(source)
         if new_acc.is_consuming is True:
-            self._active.setdefault(rule_id, []).append(_ActiveAccumulator(new_acc))
+            self._active[rule_id] = _ActiveAccumulator(new_acc)
             self._check_active_count()
         else:
             self._emit_events(new_acc)
@@ -120,23 +119,22 @@ class ObservationProcessor:
         """Feed a line to every active extractor-accumulator, then finalize any that finished."""
         if len(self._active) == 0:
             return
-        finished: list[tuple[RuleId, _ActiveAccumulator]] = []
-        for rid, instances in self._active.items():
-            for active in instances:
-                active.instance.process_line(source)
-                active.lines_fed += 1
-                if not active.warned_line_limit and active.lines_fed >= _SOFT_LINE_LIMIT:
-                    active.warned_line_limit = True
-                    logger.warning(
-                        f"Extractor-accumulator {rid!r} has consumed {active.lines_fed} lines without finalizing"
-                    )
-                if active.instance.is_consuming is False:
-                    finished.append((rid, active))
-        for rid, active in finished:
-            self._deactivate(rid, active)
+        finished: list[RuleId] = []
+        for rid, active in self._active.items():
+            active.instance.process_line(source)
+            active.lines_fed += 1
+            if not active.warned_line_limit and active.lines_fed >= _SOFT_LINE_LIMIT:
+                active.warned_line_limit = True
+                logger.warning(
+                    f"Extractor-accumulator {rid!r} has consumed {active.lines_fed} lines without finalizing"
+                )
+            if active.instance.is_consuming is False:
+                finished.append(rid)
+        for rid in finished:
+            self._deactivate(rid)
 
     def _check_active_count(self) -> None:
-        active_count = sum(len(instances) for instances in self._active.values())
+        active_count = len(self._active)
         if self._warned_active_count is False and active_count >= _ACTIVE_COUNT_WARN:
             self._warned_active_count = True
             logger.warning(f"High extractor-accumulator count: {active_count} active")
@@ -167,6 +165,5 @@ class ObservationProcessor:
 
     def finalize(self) -> None:
         """End-of-stream: finalize all remaining active extractor-accumulators."""
-        for rid, instances in list(self._active.items()):
-            for active in list(instances):
-                self._deactivate(rid, active)
+        for rid in list(self._active):
+            self._deactivate(rid)
