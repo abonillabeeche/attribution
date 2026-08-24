@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-from attribution_lib.rules_engine import FilterPriority, RefinerContext, refiner_def
+from attribution_lib.rules import FilterPriority, RefinerContext, refiner_def
 
 
 # _priority() from refiner_rules.py is not available here (exec-context only).

@@ -11,14 +11,11 @@
 """
 Node metrics specification: threshold-based rules for Prometheus metric attribution.
 
-Ported from attribution_lib/rules/node_metrics_to_symptom.py.  Importing this
-module registers the metric spec with the rules-engine framework.
+Ported from attribution_lib/rules/node_metrics_to_symptom.py.
 """
 
 import operator
 
-from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.rules_engine import MetricSpec, register_metric_spec
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 
 # ---------------------------------------------------------------------------
@@ -80,11 +77,3 @@ metric_thresholds = {
 # ---------------------------------------------------------------------------
 supported_node_metrics = [metric for metric in metric_thresholds.keys()]
 node_metrics_thresholds = {metric: rule["threshold"] for metric, rule in metric_thresholds.items()}
-
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-register_metric_spec(
-    ObservationSource.NODE_METRICS,
-    MetricSpec(thresholds=metric_thresholds),
-)

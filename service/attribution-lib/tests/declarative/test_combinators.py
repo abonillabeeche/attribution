@@ -18,7 +18,7 @@ from attribution_lib.declarative.coverage import (
 from attribution_lib.declarative.emit import LoadError, compile_element, compile_pick_one, compile_try_all
 from attribution_lib.events import DemotionTypes
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext
+from attribution_lib.rule_types.definitions import RuleContext
 from attribution_lib.sources import Source
 
 

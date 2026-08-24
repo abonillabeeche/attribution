@@ -48,7 +48,8 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
 )
 from attribution_lib.observation.processing import EntrySourceBase
-from attribution_lib.rules_engine import SOURCE_CONFIGS, RuleId, RuleParameters, process_observation_source
+from attribution_lib.rule_types.definitions import RuleId, RuleParameters
+from attribution_lib.rules_engine import SOURCE_CONFIGS, process_observation_source
 
 
 class ConsumedObservation:
@@ -143,11 +144,9 @@ class Attributor:
         self,
         event_stream: EventStream,
         job_info: JobInfo,
-        pre_filtered_sources: Optional[set[ObservationSource]] = None,
     ):
         """Constructor for attributor."""
         self.job_info = job_info
-        self._pre_filtered_sources = pre_filtered_sources or set()
         self.event_stream = event_stream
         self.ingested_observations = dict()
         self._raw_keywords_observation = None
@@ -158,17 +157,14 @@ class Attributor:
         cls,
         event_stream: EventStream,
         job_info: JobInfo,
-        pre_filtered_sources: Optional[set[ObservationSource]] = None,
     ) -> "Attributor":
         """Create a new attributor.
 
         Args:
             event_stream: The event stream to capture events from observations.
             job_info: The job information to use for the attributor.
-            pre_filtered_sources: [Deprecated] The sources to skip pre-filtering for.
-                Prefer the per-observation `Context.pre_filtered` directive instead.
         """
-        return Attributor(event_stream, job_info, pre_filtered_sources=pre_filtered_sources)
+        return Attributor(event_stream, job_info)
 
     def ingest(self, observation: InboundObservation) -> ObservationId:
         """Ingest observation: validate format and extract events into the stream.
@@ -194,14 +190,11 @@ class Attributor:
         # For now, eagerly process the observation
         # In future, we can do this asynchronously
         ingested = IngestedObservation(new_observation)
-        source = new_observation.context.source
         ingested.consumed = ConsumedObservation.new(
             self.event_stream,
             self.job_info,
             new_observation,
-            pre_filtered=_resolve_pre_filtered(
-                new_observation.context.pre_filtered, source, self._pre_filtered_sources
-            ),
+            pre_filtered=new_observation.context.pre_filtered,
         )
         ingested.unconsumed = None
         self.ingested_observations[new_observation.context.id] = ingested
@@ -302,9 +295,7 @@ class Attributor:
             )
             event_manager = EventManager(rules_engine=rules_engine)
             event_stream = event_manager.create_stream(job_id_str)
-            _extract_observations(
-                event_stream, extraction_observations, self.job_info, rules_engine, self._pre_filtered_sources
-            )
+            _extract_observations(event_stream, extraction_observations, self.job_info, rules_engine)
             event_stream.flush()
             checkpoint_backend.cleanup()
             save_extraction_cache(checkpoint_backend, cache_key, event_manager, job_id_str, current_fingerprints)
@@ -342,9 +333,7 @@ class Attributor:
                     len(incremental_observations),
                 )
                 event_stream = event_manager.create_stream(job_id_str)
-                _extract_observations(
-                    event_stream, incremental_observations, self.job_info, rules_engine, self._pre_filtered_sources
-                )
+                _extract_observations(event_stream, incremental_observations, self.job_info, rules_engine)
                 event_stream.flush()
                 save_extraction_cache(checkpoint_backend, cache_key, event_manager, job_id_str, current_fingerprints)
             else:
@@ -404,10 +393,8 @@ def _extract_observations(
     observations_to_extract: list[InboundObservation],
     job_info: JobInfo,
     rules_engine,
-    pre_filtered_sources: Optional[set[ObservationSource]] = None,
 ) -> None:
     """Run extraction rules on observations into an event stream."""
-    _pre_filtered = pre_filtered_sources or set()
     for inbound_observation in observations_to_extract:
         observation = Observation.from_inbound_observation(inbound_observation)
         event_stream.register_observation_context(observation.context)
@@ -423,7 +410,7 @@ def _extract_observations(
             observation_source=entry_source,
             job_info=job_info,
             rules_engine=rules_engine,
-            pre_filtered=_resolve_pre_filtered(inbound_observation.context.pre_filtered, source_type, _pre_filtered),
+            pre_filtered=inbound_observation.context.pre_filtered,
         )
 
 
@@ -470,31 +457,3 @@ def _validate_source_format(context: ObservationContext) -> None:
             raise UnhandledObservationSourceError(context.source)
         case _:
             raise UnknownObservationSourceError(context.source)
-
-
-def _resolve_pre_filtered(
-    pre_filtered_flag: Optional[bool],
-    source: ObservationSource,
-    pre_filtered_sources: set[ObservationSource],
-) -> bool:
-    """Reconcile the per-observation pre_filtered directive with the deprecated source set.
-
-    Args:
-        pre_filtered_flag: The per-observation pre_filtered directive.
-        source: The source of the observation.
-        pre_filtered_sources: The set of sources to skip pre-filtering for.
-
-    Returns:
-        The resolved pre_filtered directive.
-
-    Raises:
-        ValueError: If the per-observation pre_filtered directive is False and the source is in the deprecated source set.
-    """
-    in_legacy_set = source in pre_filtered_sources
-    if pre_filtered_flag is None:
-        return in_legacy_set
-    if not pre_filtered_flag and in_legacy_set:
-        raise ValueError(
-            f"observation for source {source} sets pre_filtered=False but that source is in pre_filtered_sources."
-        )
-    return pre_filtered_flag

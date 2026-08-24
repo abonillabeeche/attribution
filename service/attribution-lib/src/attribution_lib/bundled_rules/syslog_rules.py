@@ -34,7 +34,7 @@ from loguru import logger
 
 from attribution_lib.events import DemotionTypes
 from attribution_lib.rule_helpers import _bad, _interesting, _other_event
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     EventTriple,
     RuleContext,
     collector_def,

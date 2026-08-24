@@ -20,7 +20,7 @@ from attribution_lib.exceptions import (
     SymptomValidationError,
     UnknownSymptomError,
 )
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     OutcomePriority,
@@ -41,9 +41,9 @@ from attribution_lib.symptoms.registry_generation import (
 
 
 def _load_committed_symptom_defaults() -> list[SymptomDeclaration]:
-    engine = RuleEngine()
-    engine.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
-    return list(engine.symptom_declarations)
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    return list(loader.symptom_declarations)
 
 
 def _load_committed_registry():
@@ -72,6 +72,234 @@ def test_cuda_not_ready_and_not_supported_classify_as_multicategory():
         assert match.outcome == "Fail MultiCategory", f"{symptom} -> {match.outcome}"
 
 
+def test_nv_err_busy_retry_maps_to_infrasw():
+    """Classify NV_ERR_BUSY_RETRY driver failures as infrastructure software."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_BUSY_RETRY mem_multicast_fabric.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_BUSY_RETRY"
+    assert match.outcome == "Fail InfraSW"
+
+
+def test_slurm_node_failure_maps_to_infrasw():
+    """Treat the scheduler's NODE_FAIL state as infrastructure software evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Node failure reported by slurm"])
+
+    assert match is not None
+    assert match.matched_prefix == "Node failure reported by slurm"
+    assert match.outcome == "Fail InfraSW"
+    assert match.hw_cause == "Not Applicable"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_slurm_node_failure_takes_precedence_over_xid31_in_any_order():
+    """Prefer the specific scheduler failure over ambiguous XID-31 evidence."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    xid31 = "XID-31-MMU_ERR_FLT"
+
+    for symptoms in ([node_failure, xid31], [xid31, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == node_failure
+        assert match.outcome == "Fail InfraSW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_node_not_responding_preserves_hardware_policy():
+    """Rename the symptom without changing its hardware classification."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Node not responding"])
+
+    assert match is not None
+    assert match.matched_prefix == "Node not responding"
+    assert match.outcome == "Fail InfraHW"
+    assert match.hw_cause == "Known HW Cause - Node"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
+    assert not registry.contains("Not responding")
+
+
+def test_slurm_node_failure_yields_to_node_not_responding_in_any_order():
+    """Prefer node non-response hardware evidence over the scheduler state."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    node_not_responding = "Node not responding"
+
+    for symptoms in ([node_failure, node_not_responding], [node_not_responding, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == node_not_responding
+        assert match.outcome == "Fail InfraHW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
+
+
+def test_wandb_error_maps_to_low_priority_fail_user():
+    """Classify a generic W&B application exception as a low-priority user failure."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["wandb.Error"])
+
+    assert match is not None
+    assert match.matched_prefix == "wandb.Error"
+    assert match.outcome == "Fail User"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_USER)
+
+
+def test_wandb_error_prefix_matches_suffixed_message():
+    """Classify a W&B exception that includes its error message."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["wandb.Error: API request failed"])
+
+    assert match is not None
+    assert match.matched_prefix == "wandb.Error"
+    assert match.outcome == "Fail User"
+
+
+def test_wandb_error_yields_to_stronger_infrastructure_symptom_in_any_order():
+    """Prefer infrastructure evidence over a generic W&B exception."""
+    registry = _load_committed_registry()
+    wandb_error = "wandb.Error: API request failed"
+    infra_error = "NV_ERR_BUSY_RETRY mem_multicast_fabric.c"
+
+    for symptoms in ([wandb_error, infra_error], [infra_error, wandb_error]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == "NV_ERR_BUSY_RETRY"
+        assert match.outcome == "Fail InfraSW"
+
+
+@pytest.mark.parametrize(
+    ("code", "symptom"),
+    [
+        ("NV_ERR_INSUFFICIENT_PERMISSIONS", "NV_ERR_INSUFFICIENT_PERMISSIONS kern_profiler_v2_ctrl.c"),
+        ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
+        ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
+        ("NV_ERR_BUFFER_TOO_SMALL", "NV_ERR_BUFFER_TOO_SMALL journal.c"),
+        ("NV_ERR_INVALID_OBJECT", "NV_ERR_INVALID_OBJECT mem_multicast_fabric.c"),
+        ("NV_ERR_TIMEOUT", "NV_ERR_TIMEOUT nv_gpu_ops.c"),
+        ("NV_ERR_INVALID_STATE", "NV_ERR_INVALID_STATE nv_gpu_ops.c"),
+        ("NV_ERR_OBJECT_NOT_FOUND", "NV_ERR_OBJECT_NOT_FOUND mem_multicast_fabric.c"),
+        ("NV_ERR_GENERIC", "NV_ERR_GENERIC mem_multicast_fabric.c"),
+        ("NV_ERR_INVALID_ARGUMENT", "NV_ERR_INVALID_ARGUMENT mem_multicast_fabric.c"),
+        ("NV_ERR_OVERLAPPING_UVM_COMMIT", "NV_ERR_OVERLAPPING_UVM_COMMIT kernel_channel.c"),
+    ],
+)
+def test_observed_nv_err_symptoms_map_to_infrasw(code: str, symptom: str):
+    """Classify observed Resource Manager errors as infrastructure software.
+
+    Args:
+        code: Exact NV_ERR status code that must receive a specific mapping.
+        symptom: Representative normalized symptom recorded by Attribution.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for([symptom])
+
+    assert match is not None
+    assert match.matched_prefix == code
+    assert match.outcome == "Fail InfraSW"
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "NV_ERR_NO_MEMORY mem_desc.c",
+        "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        "NV_ERR_NO_MEMORY system_mem.c",
+    ],
+)
+def test_non_multicast_nv_err_no_memory_maps_to_multicategory(symptom: str):
+    """Keep non-multicast Resource Manager memory failures ambiguous.
+
+    Args:
+        symptom: Exact FACT DB symptom to classify.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for([symptom])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+    assert match.outcome == "Fail MultiCategory"
+    assert match.hw_cause == "Not Applicable"
+
+
+def test_multicast_nv_err_no_memory_maps_to_infrasw():
+    """Classify multicast Resource Manager memory failure as infrastructure software."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_NO_MEMORY mem_multicast_fabric.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+    assert match.outcome == "Fail InfraSW"
+    assert match.hw_cause == "Driver bug"
+
+
+@pytest.mark.parametrize(
+    "non_multicast",
+    [
+        "NV_ERR_NO_MEMORY mem_desc.c",
+        "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        "NV_ERR_NO_MEMORY system_mem.c",
+    ],
+)
+def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order(non_multicast: str):
+    """Keep mixed multicast and non-multicast memory failures ambiguous.
+
+    Args:
+        non_multicast: Non-multicast memory symptom paired with multicast evidence.
+    """
+    registry = _load_committed_registry()
+    multicast = "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+
+    for symptoms in ([non_multicast, multicast], [multicast, non_multicast]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+        assert match.outcome == "Fail MultiCategory"
+        assert match.hw_cause == "Not Applicable"
+
+
+def test_mixed_nv_err_no_memory_does_not_override_earlier_same_tier_match():
+    """Preserve an unrelated same-tier match that sorts before no-memory evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(
+        [
+            "Call to ibv_modify_qp failed: eno 110 timeout",
+            "NV_ERR_NO_MEMORY mem_multicast_fabric.c",
+            "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        ]
+    )
+
+    assert match is not None
+    assert match.matched_prefix == "Call to ibv_modify_qp failed: eno 110 timeout"
+    assert match.outcome == "Fail InfraHW"
+
+
+def test_bare_nv_err_no_memory_maps_to_multicategory():
+    """Classify the bare memory status through the generic fallback."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_NO_MEMORY"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+    assert match.outcome == "Fail MultiCategory"
+    assert match.hw_cause == "Not Applicable"
+
+
 def test_nvrx_detected_failure_maps_to_fail_undetermined():
     registry = _load_committed_registry()
 
@@ -82,13 +310,14 @@ def test_nvrx_detected_failure_maps_to_fail_undetermined():
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
-def test_nvrx_unhealthy_node_maps_to_fail_undetermined():
+def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
+    """Classify an unhealthy NVRx node without asserting its root cause."""
     registry = _load_committed_registry()
 
     match = registry.outcome_for(["NVRx unhealthy node"])
 
     assert match is not None
-    assert match.outcome == "Fail Undetermined"
+    assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
@@ -423,26 +652,24 @@ def test_cascade_only_noop_declaration_is_valid_registry_metadata(tmp_path):
         """
 from dataclasses import replace
 
-from attribution_lib.exceptions import RuleIngestionError
-from attribution_lib.rules_engine import _get_caller_location, _rules_engine
+from attribution_lib.declarative.context import _require_rule_loader
+from attribution_lib.rule_types.registration import _get_caller_location
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 
 
 def _register_prefix(declaration: SymptomDeclaration) -> None:
-    engine = _rules_engine.get(None)
-    if engine is None:
-        raise RuleIngestionError("No active rules engine when declaring prefix symptom")
-    engine.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
+    loader = _require_rule_loader("declaring prefix symptom")
+    loader.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
 
 
 _register_prefix(SymptomDeclaration(prefix="noop-only", cascade_noop=True))
 """,
         encoding="utf-8",
     )
-    engine = RuleEngine()
-    engine.load(str(defaults_file))
+    loader = RuleLoader()
+    loader.load(str(defaults_file))
 
-    registry = registry_from_declarations(engine.symptom_declarations)
+    registry = registry_from_declarations(loader.symptom_declarations)
 
     assert registry.metadata_for("noop-only") is not None
     assert registry.cascade_discards_for("noop-only") == []

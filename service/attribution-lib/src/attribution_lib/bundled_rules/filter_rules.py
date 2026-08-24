@@ -22,7 +22,7 @@ from loguru import logger
 from attribution_lib.attr_types import EventHelper
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import DemotionTypes, EventStream, sql_placeholders
-from attribution_lib.rules_engine import FilterContext, FilterPriority, declare_event_types, filter_def
+from attribution_lib.rules import FilterContext, FilterPriority, declare_event_types, filter_def
 from attribution_lib.sources import Source
 from attribution_lib.symptoms import INFORMATIONAL_XIDS
 

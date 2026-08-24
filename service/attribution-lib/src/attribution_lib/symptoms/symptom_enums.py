@@ -83,7 +83,9 @@ class RegisteredSymptoms(Enum):
     # System Symptoms
     RUNNING_WITHOUT_ERROR = "running without error"
     THE_PROCESS_COMPLETES = "the process completes"
-    NOT_RESPONDING = "Not responding"
+    NODE_NOT_RESPONDING = "Node not responding"
+    # Compatibility alias for callers that still use the former enum member.
+    NOT_RESPONDING = NODE_NOT_RESPONDING
     STOPPING_NVIDIA_IMEX_SERVICE = "Stopping nvidia-imex.service"
     SYSTEM_POWERING_DOWN = "System is powering down"
     SYSTEM_SERVICE_OOM_KILL = "OOM kill of system service"
@@ -92,6 +94,7 @@ class RegisteredSymptoms(Enum):
     OOM_KILL_OTHER = "OOM kill (other)"
     STOPPING_CUDA_PROFILER = "Stopping cuda profiler"
     NMI_WATCHDOG_HARD_LOCKUP = "NMI watchdog hard LOCKUP"
+    NODE_REBOOT_INITIATED = "Node reboot initiated"
     NODE_UNEXPECTEDLY_REBOOTED = "Node unexpectedly rebooted"
     NODE_FAILURE_REPORTED_BY_SLURM = "Node failure reported by slurm"
     GPU_IS_LOST_REPORTED_BY_SLURM = "GPU is lost reported by slurm"

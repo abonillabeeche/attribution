@@ -19,14 +19,11 @@ from attribution_lib.exceptions import (
     UninitializedRuleEngineError,
     UninitializedSymptomRegistryError,
 )
-from attribution_lib.rules_engine import (
-    get_metric_spec as get_metric_spec,
-    get_pre_filter as _registered_pre_filter,
-)
 
 if TYPE_CHECKING:
     from attribution_lib.observation.inbound import Source as ObservationSource
-    from attribution_lib.rules_engine import PreFilterSpec, RuleEngine
+    from attribution_lib.prefilters import MetricSpec, PreFilterSpec
+    from attribution_lib.rules_engine import RuleEngine
     from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
 
 ip_to_nodenames: dict[str, str] = {}
@@ -71,9 +68,12 @@ def get_pre_filter(source: "ObservationSource") -> "PreFilterSpec":
     Raises:
         UninitializedRuleEngineError: If setup_rules() has not been called.
     """
-    if not initialized:
-        raise UninitializedRuleEngineError("attribution_lib.setup_rules() must be called before querying pre-filters")
-    return _registered_pre_filter(source)
+    return get_rules_engine().get_pre_filter(source)
+
+
+def get_metric_spec(source: "ObservationSource") -> "MetricSpec":
+    """Return the metric specification for the given source."""
+    return get_rules_engine().get_metric_spec(source)
 
 
 def _identity(x: str) -> str:

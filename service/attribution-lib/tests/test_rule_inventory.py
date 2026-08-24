@@ -330,6 +330,38 @@ symptom = "TestSymptom"
     }
 
 
+def test_dump_inventory_preserves_toml_extractor_descriptor(tmp_path):
+    """A built engine retains the declarative descriptor used by inventory."""
+    (tmp_path / "rules.toml").write_text(
+        """\
+[[extractor]]
+name = "Declarative"
+match_re = "declarative"
+untested = true
+[extractor.emit]
+type = "bad_node"
+symptom = "TestSymptom"
+""",
+        encoding="utf-8",
+    )
+
+    try:
+        result = inventory.dump_inventory([tmp_path])
+    finally:
+        inventory.setup_rules(force=True)
+
+    [rule] = result["rules"]
+    assert rule["definition"] == {
+        "schema": "extractor/declarative/v1",
+        "data": {
+            "match_re": "declarative",
+            "sources": [],
+            "form": "emit",
+            "emit": {"type": "bad_node", "symptom": "TestSymptom"},
+        },
+    }
+
+
 def test_dumped_records_carry_declared_tags_and_stay_empty_when_untagged(tmp_path):
     """Effective tags reach the record top level, defaulting to an empty list."""
     (tmp_path / "rules.toml").write_text(

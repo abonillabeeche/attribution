@@ -18,7 +18,7 @@ from attribution_lib.bundled_rules.common.nvrx import (
     resolve_reported_node,
 )
 from attribution_lib.rule_helpers import _bad, _interesting
-from attribution_lib.rules_engine import (
+from attribution_lib.rules import (
     EventTriple,
     RuleContext,
     collector_def,

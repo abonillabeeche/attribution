@@ -29,11 +29,13 @@ from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_re
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
 from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
-from attribution_lib.outcome import OutcomeAttribution
+from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RefinerContext, RuleEngine
+from attribution_lib.rule_types.definitions import RefinerContext
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 
@@ -42,10 +44,11 @@ from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 def rules_engine():
     """Load filter and refiner rule modules."""
     original_engine = attribution_lib._rules_engine
-    attribution_lib._rules_engine = RuleEngine()
+    loader = RuleLoader()
     rules_dir = get_bundled_rules_path()
-    attribution_lib.get_rules_engine().load(str(rules_dir / "filter_rules.py"))
-    attribution_lib.get_rules_engine().load(str(rules_dir / "refiner_rules.py"))
+    loader.load(str(rules_dir / "filter_rules.py"))
+    loader.load(str(rules_dir / "refiner_rules.py"))
+    attribution_lib._rules_engine = loader.build()
 
     yield attribution_lib.get_rules_engine()
 
@@ -163,31 +166,42 @@ def _run_scrub(stream, job_info, bad_nodes):
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
 
-    def test_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Not responding", "Node unexpectedly rebooted"]})
+    def test_scheduler_raw_not_responding_reason_emits_renamed_symptom(self, stream, obs_ctx, job_info):
+        job_info = job_info._replace(slurm_node_infos={"node01": {"reason": "Health check: Not responding"}})
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"]})
+
         _run_scrub(stream, job_info, bad_nodes)
-        assert "Not responding" in bad_nodes["node01"]
+
+        assert "Node not responding" in bad_nodes["node01"]
+        assert "Not responding" not in bad_nodes["node01"]
+        source = bad_nodes["node01"].attributions["Node not responding"].one_source()
+        assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
+
+    def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "Node not responding" in bad_nodes["node01"]
         assert "Node unexpectedly rebooted" not in bad_nodes["node01"]
 
     def test_powering_down_discards_cascaded(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["System is powering down", "Not responding", "Node unexpectedly rebooted"]},
+            {"node01": ["System is powering down", "Node not responding", "Node unexpectedly rebooted"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "System is powering down" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node unexpectedly rebooted" not in bad_nodes["node01"]
 
-    def test_xid_discards_not_responding_preserves_node_failure(self, stream, obs_ctx, job_info):
-        """XID discards 'Not responding' but preserves 'Node failure reported by slurm' for DAG."""
+    def test_xid_discards_node_not_responding_preserves_node_failure(self, stream, obs_ctx, job_info):
+        """XID discards 'Node not responding' but preserves 'Node failure reported by slurm' for DAG."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["XID-94-CONTAINED_ERROR", "Not responding", "Node failure reported by slurm"]},
+            {"node01": ["XID-94-CONTAINED_ERROR", "Node not responding", "Node failure reported by slurm"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "XID-94-CONTAINED_ERROR" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node failure reported by slurm" in bad_nodes["node01"]
 
     def test_bad_stack_frame_python_preserves_node_failure(self, stream, obs_ctx, job_info):
@@ -221,11 +235,11 @@ class TestScrubBadNodes:
         """OOM kill of a system service is the root cause for downstream node-silent symptoms."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["OOM kill of system service", "Not responding", "Node failure reported by slurm"]},
+            {"node01": ["OOM kill of system service", "Node not responding", "Node failure reported by slurm"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "OOM kill of system service" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node failure reported by slurm" not in bad_nodes["node01"]
 
     def test_system_service_oom_kill_preserves_node_rebooted(self, stream, obs_ctx, job_info):
@@ -402,6 +416,38 @@ class TestIBSymptomCleanup:
 
         assert "Python Exception" in symptoms
         assert "IB Error-5 (IBV_WC_WR_FLUSH_ERR)" not in symptoms
+
+    @pytest.mark.parametrize("lifecycle", ["Node reboot initiated", "System is powering down"])
+    def test_orderly_lifecycle_discards_cross_node_ib_aftermath(self, stream, obs_ctx, job_info, lifecycle):
+        """Treat orderly lifecycle evidence as the root cause of IB aftermath.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture containing the participating nodes.
+            lifecycle: Orderly lifecycle symptom under test.
+        """
+        job_info.nodes.append("node02")
+        symptoms = _make_symptoms(
+            obs_ctx,
+            lifecycle,
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": [lifecycle],
+                "node02": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"],
+            },
+        )
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert lifecycle in symptoms
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" not in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.root_cause_symptom == lifecycle
 
     def test_non_ib_root_cause_cleans_all_nodes(self, stream, obs_ctx, job_info):
         """Per-node root cause cleanup iterates ALL nodes, not just the first match."""
@@ -785,16 +831,210 @@ class TestSlurmStateSymptoms:
 
 class TestProcessCompletesCleanup:
     def test_discards_cascaded_symptoms(self, stream, obs_ctx, job_info):
-        symptoms = _make_symptoms(obs_ctx, "the process completes", "Not responding", "BrokenPipeError")
+        symptoms = _make_symptoms(obs_ctx, "the process completes", "Node not responding", "BrokenPipeError")
         _run(stream, job_info, symptoms)
         assert "the process completes" in symptoms
-        assert "Not responding" not in symptoms
+        assert "Node not responding" not in symptoms
         assert "BrokenPipeError" not in symptoms
 
-    def test_no_process_completes_keeps_symptoms(self, stream, obs_ctx, job_info):
-        symptoms = _make_symptoms(obs_ctx, "Not responding")
+    def test_discards_only_tenant_reported_csp_event(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            "CSP Event Tenant Reported As Faulty",
+            "CSP Event Terminated by CSP",
+            "Python Exception",
+        )
+
         _run(stream, job_info, symptoms)
-        assert "Not responding" in symptoms
+
+        assert "the process completes" in symptoms
+        assert "CSP Event Tenant Reported As Faulty" not in symptoms
+        assert symptoms["CSP Event Tenant Reported As Faulty"].has_interesting()
+        assert "CSP Event Terminated by CSP" in symptoms
+        assert "Python Exception" in symptoms
+
+    def test_discards_tenant_reported_from_bad_nodes(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "the process completes", "CSP Event Tenant Reported As Faulty")
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["CSP Event Tenant Reported As Faulty"]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "CSP Event Tenant Reported As Faulty" not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions["CSP Event Tenant Reported As Faulty"].has_interesting()
+
+    def test_no_process_completes_keeps_tenant_reported(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "CSP Event Tenant Reported As Faulty")
+
+        _run(stream, job_info, symptoms)
+
+        assert "CSP Event Tenant Reported As Faulty" in symptoms
+
+    def test_no_process_completes_keeps_symptoms(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "Node not responding")
+        _run(stream, job_info, symptoms)
+        assert "Node not responding" in symptoms
+
+
+class TestCspEventPrecedenceAndCascades:
+    _TENANT_REPORTED = "CSP Event Tenant Reported As Faulty"
+    _TERMINATED = "CSP Event Terminated by CSP"
+
+    @pytest.mark.parametrize(
+        "ordered_csp_events",
+        [
+            (_TENANT_REPORTED, _TERMINATED),
+            (_TERMINATED, _TENANT_REPORTED),
+        ],
+    )
+    def test_tenant_reported_is_primary_regardless_of_input_order(
+        self,
+        stream,
+        obs_ctx,
+        job_info,
+        ordered_csp_events,
+    ):
+        symptoms = _make_symptoms(obs_ctx, *ordered_csp_events)
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TENANT_REPORTED in symptoms
+        assert self._TERMINATED not in symptoms
+        assert symptoms[self._TERMINATED].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TENANT_REPORTED
+
+    @pytest.mark.parametrize("csp_event", [_TENANT_REPORTED, _TERMINATED])
+    def test_single_csp_event_is_unchanged(self, stream, obs_ctx, job_info, csp_event):
+        symptoms = _make_symptoms(obs_ctx, csp_event)
+
+        _run(stream, job_info, symptoms)
+
+        assert csp_event in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == csp_event
+
+    def test_same_node_terminated_event_becomes_supporting_evidence(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TENANT_REPORTED, self._TERMINATED)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._TENANT_REPORTED, self._TERMINATED]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED in bad_nodes["node01"]
+        assert self._TERMINATED not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions[self._TERMINATED].has_interesting()
+
+    def test_different_node_terminated_event_remains_bad_node_evidence(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TENANT_REPORTED, self._TERMINATED)
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": [self._TENANT_REPORTED],
+                "node02": [self._TERMINATED],
+            },
+        )
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED in symptoms
+        assert self._TERMINATED not in symptoms
+        assert self._TENANT_REPORTED in bad_nodes["node01"]
+        assert self._TERMINATED in bad_nodes["node02"]
+
+    def test_csp_event_discards_shutdown_and_pyxis_evidence(self, stream, obs_ctx, job_info):
+        cascades = ["System is powering down", "error: pyxis"]
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, *cascades)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._TERMINATED, *cascades]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TERMINATED in symptoms
+        assert self._TERMINATED in bad_nodes["node01"]
+        for cascade in cascades:
+            assert cascade not in symptoms
+            assert symptoms[cascade].has_interesting()
+            assert cascade not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[cascade].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TERMINATED
+
+    @pytest.mark.parametrize(
+        "pyxis_symptom",
+        [
+            "error: pyxis",
+            "pyxis: couldn't start container",
+            "srun: invalid pyxis argument",
+        ],
+    )
+    def test_csp_event_discards_pyxis_family(self, stream, obs_ctx, job_info, pyxis_symptom):
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, pyxis_symptom)
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TERMINATED in symptoms
+        assert pyxis_symptom not in symptoms
+        assert symptoms[pyxis_symptom].has_interesting()
+
+    def test_csp_event_keeps_non_pyxis_enroot_symptom(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, self._TERMINATED, "enroot: registry auth denied")
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TERMINATED in symptoms
+        assert "enroot: registry auth denied" in symptoms
+
+    def test_shutdown_and_pyxis_are_unchanged_without_csp_event(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "System is powering down", "error: pyxis")
+
+        _run(stream, job_info, symptoms)
+
+        assert "System is powering down" in symptoms
+        assert "error: pyxis" in symptoms
+
+    def test_completed_tenant_report_does_not_trigger_csp_cascades(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            self._TENANT_REPORTED,
+            "System is powering down",
+            "error: pyxis",
+        )
+
+        _run(stream, job_info, symptoms)
+
+        assert self._TENANT_REPORTED not in symptoms
+        assert "System is powering down" in symptoms
+        assert "error: pyxis" in symptoms
+
+    def test_completed_process_keeps_termination_and_discards_csp_cascades(self, stream, obs_ctx, job_info):
+        cascades = ["System is powering down", "error: pyxis"]
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "the process completes",
+            self._TENANT_REPORTED,
+            self._TERMINATED,
+            *cascades,
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._TENANT_REPORTED, self._TERMINATED, *cascades]},
+        )
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._TENANT_REPORTED not in symptoms
+        assert symptoms[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in symptoms
+        assert self._TENANT_REPORTED not in bad_nodes["node01"]
+        assert bad_nodes["node01"].attributions[self._TENANT_REPORTED].has_interesting()
+        assert self._TERMINATED in bad_nodes["node01"]
+        for cascade in cascades:
+            assert cascade not in symptoms
+            assert symptoms[cascade].has_interesting()
+            assert cascade not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[cascade].has_interesting()
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.root_cause_symptom == self._TERMINATED
 
 
 class TestCancellationResolution:
@@ -805,9 +1045,22 @@ class TestCancellationResolution:
 
     def test_timeout_adds_cancelled_by_timeout(self, stream, obs_ctx):
         ji = _job_info_with(state="TIMEOUT")
-        symptoms = _make_symptoms(obs_ctx)
+        symptoms = _make_symptoms(obs_ctx, "BrokenPipeError")
         _run(stream, ji, symptoms)
         assert "Cancelled by Timeout" in symptoms
+        assert "BrokenPipeError" not in symptoms
+
+    def test_non_timeout_keeps_broken_pipe(self, stream, obs_ctx):
+        """Retain BrokenPipeError as a failure symptom for non-timeout jobs.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+        """
+        ji = _job_info_with(state="FAILED")
+        symptoms = _make_symptoms(obs_ctx, "BrokenPipeError")
+        _run(stream, ji, symptoms)
+        assert "BrokenPipeError" in symptoms
 
     def test_cancelled_by_timeout_discards_cancelled_by_user(self, stream, obs_ctx):
         ji = _job_info_with(state="TIMEOUT")
@@ -2917,16 +3170,103 @@ class TestDagCascadePruning:
         _run(stream, job_info, symptoms, bad_nodes)
         assert "XID-48-GPU_ECC_DBE" in symptoms
 
-    def test_system_powering_down_prunes_not_responding(self, stream, obs_ctx, job_info):
-        """System powering down prunes Not responding via DAG."""
+    def test_system_powering_down_prunes_node_not_responding(self, stream, obs_ctx, job_info):
+        """System powering down prunes generic node-loss symptoms via DAG."""
+        aftermath = ["Node not responding", "node offline"]
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["System is powering down", "Not responding"]},
+            {"node01": ["System is powering down", *aftermath]},
         )
-        symptoms = _make_symptoms(obs_ctx, "System is powering down", "Not responding")
+        symptoms = _make_symptoms(obs_ctx, "System is powering down", *aftermath)
         _run(stream, job_info, symptoms, bad_nodes)
         assert "System is powering down" in symptoms
-        assert "Not responding" not in symptoms
+        for symptom in aftermath:
+            assert symptom not in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.hw_cause == "Not Applicable"
+
+    @pytest.mark.parametrize(
+        ("lifecycle", "hardware"),
+        [
+            ("System is powering down", "gpu unavailable"),
+            ("Node reboot initiated", "XID-48-GPU_ECC_DBE"),
+        ],
+    )
+    def test_hardware_root_outranks_orderly_lifecycle(self, stream, obs_ctx, job_info, lifecycle, hardware):
+        """Prefer hardware evidence over orderly lifecycle evidence.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture used by the refiner.
+            lifecycle: Orderly lifecycle symptom under test.
+            hardware: Hardware root-cause symptom that must outrank it.
+        """
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [lifecycle, hardware]},
+        )
+        symptoms = _make_symptoms(obs_ctx, lifecycle, hardware)
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == hardware
+
+    def test_reboot_initiation_prunes_generic_aftermath(self, stream, obs_ctx, job_info):
+        """Prune generic reboot aftermath after an initiated reboot.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture used by the refiner.
+        """
+        aftermath = [
+            "Node unexpectedly rebooted",
+            "Node failure reported by slurm",
+            "Node not responding",
+            "node offline",
+            "System is powering down",
+            "Fabric manager lost connection to all GPUs",
+            "Stopping nvidia-imex.service",
+        ]
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node reboot initiated", *aftermath]})
+        symptoms = _make_symptoms(obs_ctx, "Node reboot initiated", *aftermath)
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "Node reboot initiated" in symptoms
+        for symptom in aftermath:
+            assert symptom not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
+
+    def test_unexpected_reboot_on_other_node_outranks_initiated_reboot(self, stream, obs_ctx, job_info):
+        """Keep an unexpected reboot when it occurred on another node.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture containing the participating nodes.
+        """
+        job_info.nodes.append("node02")
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["Node reboot initiated"],
+                "node02": ["Node unexpectedly rebooted"],
+            },
+        )
+        symptoms = _make_symptoms(obs_ctx, "Node reboot initiated", "Node unexpectedly rebooted")
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "Node reboot initiated" in symptoms
+        assert "Node unexpectedly rebooted" in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == "Node unexpectedly rebooted"
 
     def test_multi_node_partial_pruning(self, stream, obs_ctx, job_info):
         """Xid171Cascade refiner removes XID-48 globally; DAG then confirms per-node."""
@@ -3186,7 +3526,7 @@ class TestSuppressNonFatalJobSymptoms:
 
     def _run_refiner(self, stream, job_info, symptoms, my_bad_nodes):
         context = RefinerContext(job_info=job_info, event_stream=stream, symptoms=symptoms, my_bad_nodes=my_bad_nodes)
-        attribution_lib.get_rules_engine().refiner_rules["SuppressNonFatalJobSymptoms"].process(context)
+        attribution_lib.get_rules_engine().rules["SuppressNonFatalJobSymptoms"].process(context)
 
     def test_non_fatal_dropped_real_symptom_kept(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR", "(non-fatal) LustreError")
