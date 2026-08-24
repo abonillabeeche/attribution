@@ -179,7 +179,7 @@ class TestScrubBadNodes:
         source = bad_nodes["node01"].attributions["Node not responding"].one_source()
         assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
 
-    def test_slurm_failure_with_epilog_non_response_emits_node_hardware_failure(self, stream, obs_ctx):
+    def test_slurm_failure_with_epilog_non_response_emits_corroborated_node_failure(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
         epilog_source = _make_source(
             obs_ctx,
@@ -195,9 +195,9 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
 
-        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
-        assert hardware_failure in bad_nodes["node01"]
-        source_rules = {source.rule for source in bad_nodes["node01"].attributions[hardware_failure]}
+        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        assert corroborated_failure in bad_nodes["node01"]
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[corroborated_failure]}
         assert source_rules == {
             NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
             FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
@@ -206,16 +206,16 @@ class TestScrubBadNodes:
             event
             for event in recorder.events
             if event.node_type is NodeType.SCRUB
-            and event.rule_name == "NodeHardwareFailure"
+            and event.rule_name == "CorroboratedNodeFailure"
             and event.action is Action.CREATED
-            and event.symptom == hardware_failure
+            and event.symptom == corroborated_failure
         ]
         assert len(created) == 1
         assert created[0].hostname == "node01"
         assert created[0].evidence is not None
         assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
 
-    def test_node_hardware_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
+    def test_corroborated_node_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
         epilog_source = _make_source(
             obs_ctx,
@@ -231,14 +231,14 @@ class TestScrubBadNodes:
         symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
         outcome = calculate_outcome(symptoms).value()
 
-        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
-        assert hardware_failure in symptoms
+        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        assert corroborated_failure in symptoms
         assert RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value not in symptoms
         assert RegisteredSymptoms.NODE_NOT_RESPONDING.value not in symptoms
         assert outcome.outcome == "Fail InfraHW"
-        assert outcome.root_cause_symptom == hardware_failure
+        assert outcome.root_cause_symptom == corroborated_failure
 
-    def test_slurm_derived_non_response_does_not_emit_node_hardware_failure(self, stream, obs_ctx):
+    def test_slurm_derived_non_response_does_not_emit_corroborated_node_failure(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
         slurm_reason_source = _make_source(
             obs_ctx,
@@ -252,7 +252,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        assert RegisteredSymptoms.NODE_HARDWARE_FAILURE.value not in bad_nodes["node01"]
+        assert RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value not in bad_nodes["node01"]
 
     def test_failure_and_epilog_non_response_on_different_nodes_do_not_combine(self, stream, obs_ctx):
         job_info = _job_info_with(nodes=["node01", "node02"], state="NODE_FAIL")._replace(failed_node="node01")
@@ -268,8 +268,8 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
-        assert all(hardware_failure not in bad_nodes[node] for node in bad_nodes)
+        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        assert all(corroborated_failure not in bad_nodes[node] for node in bad_nodes)
 
     def test_specific_node_failure_evidence_prevents_hardware_composite(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
@@ -285,7 +285,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        assert RegisteredSymptoms.NODE_HARDWARE_FAILURE.value not in bad_nodes["node01"]
+        assert RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value not in bad_nodes["node01"]
 
     def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})

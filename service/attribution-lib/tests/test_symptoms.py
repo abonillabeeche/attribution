@@ -391,7 +391,7 @@ def test_csp_event_discards_generic_node_failure_signals(dummy_ctx):
     """
     node_failure = "Node failure reported by slurm"
     node_not_responding = "Node not responding"
-    node_hardware_failure = "Node hardware failure"
+    corroborated_node_failure = "Corroborated node failure"
     registry = attribution_lib.get_symptom_registry()
 
     csp_blame_symptoms = sorted(
@@ -406,7 +406,7 @@ def test_csp_event_discards_generic_node_failure_signals(dummy_ctx):
         symptoms.add(_one_source_set(dummy_ctx, symptom_id))
         symptoms.add(_one_source_set(dummy_ctx, node_failure))
         symptoms.add(_one_source_set(dummy_ctx, node_not_responding))
-        symptoms.add(_one_source_set(dummy_ctx, node_hardware_failure))
+        symptoms.add(_one_source_set(dummy_ctx, corroborated_node_failure))
         symptoms.add(_one_source_set(dummy_ctx, "UNRELATED-SYMPTOM"))
 
         op.cascade_prune(symptoms, symptom_id)
@@ -416,7 +416,9 @@ def test_csp_event_discards_generic_node_failure_signals(dummy_ctx):
         assert "UNRELATED-SYMPTOM" in remaining, f"{symptom_id}: unrelated symptom pruned"
         assert node_failure not in remaining, f"{symptom_id}: failed to prune {node_failure!r}"
         assert node_not_responding not in remaining, f"{symptom_id}: failed to prune {node_not_responding!r}"
-        assert node_hardware_failure not in remaining, f"{symptom_id}: failed to prune {node_hardware_failure!r}"
+        assert corroborated_node_failure not in remaining, (
+            f"{symptom_id}: failed to prune {corroborated_node_failure!r}"
+        )
 
 
 def test_factory_creates_route_unhealthy():

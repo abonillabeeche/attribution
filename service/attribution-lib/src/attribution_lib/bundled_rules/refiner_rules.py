@@ -82,7 +82,7 @@ _SCRUB_ORDER = [
     "ScrubBadNodes",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
-    "NodeHardwareFailure",
+    "CorroboratedNodeFailure",
 ]
 
 _SCRUB_BASE = FilterPriority.SCRUB
@@ -286,7 +286,7 @@ _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
         "Node not responding",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
     }
 )
@@ -355,7 +355,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%CE deadlock DETECTED%",
     "%JSONDecodeError%",
     "%Node failure reported by slurm%",
-    "%Node hardware failure%",
+    "%Corroborated node failure%",
     "%Power Supply Unit failure%",
     "%System is powering down%",
     "%EOFError: Ran out of input%",
@@ -665,16 +665,16 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
 
 
 @refiner_def(
-    name="NodeHardwareFailure",
+    name="CorroboratedNodeFailure",
     author="NVIDIA Attribution team",
-    priority=_priority("NodeHardwareFailure"),
+    priority=_priority("CorroboratedNodeFailure"),
 )
-def node_hardware_failure_refiner(context: RefinerContext):
+def corroborated_node_failure_refiner(context: RefinerContext):
     """Combine independent scheduler and epilog failure evidence on one node.
 
     A SLURM ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
     the epilog health check independently reports that the same node did not
-    respond, emit the stronger ``Node hardware failure`` symptom. A
+    respond, emit the stronger ``Corroborated node failure`` symptom. A
     scheduler-derived node reason is not independent evidence and must not
     trigger this composite.
     """
@@ -684,7 +684,7 @@ def node_hardware_failure_refiner(context: RefinerContext):
 
     slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
     node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
-    node_hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
+    corroborated_node_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
     epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
 
     for _node, node_group in my_bad_nodes.items():
@@ -696,7 +696,7 @@ def node_hardware_failure_refiner(context: RefinerContext):
         if not epilog_sources:
             continue
 
-        combined_sources = SourceSet(node_hardware_failure)
+        combined_sources = SourceSet(corroborated_node_failure)
         for source in node_attributions[slurm_failure]:
             combined_sources.add(source)
         for source in epilog_sources:

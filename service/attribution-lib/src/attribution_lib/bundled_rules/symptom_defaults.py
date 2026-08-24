@@ -37,7 +37,7 @@ NVL_DOMAIN_CASCADE_TARGETS = (
 NODE_FAILURE_CASCADE_TARGETS = (
     "Node failure reported by slurm",
     "Node not responding",
-    "Node hardware failure",
+    "Corroborated node failure",
 )
 
 
@@ -285,7 +285,7 @@ outcome_symptom(
 )
 
 outcome_symptom(
-    "Node hardware failure",
+    "Corroborated node failure",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="not-responding",
@@ -346,7 +346,7 @@ outcome_symptom(
     cascade_discards=(
         "Node not responding",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
         "node offline",
     ),
@@ -360,7 +360,7 @@ outcome_symptom(
     cascade_discards=(
         "Node not responding",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
         "node offline",
         "OOM kill of user task",
@@ -437,7 +437,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.HIGH,
     doc="nmi-watchdog-hard-lockup",
-    cascade_discards=("Node failure reported by slurm", "Node hardware failure"),
+    cascade_discards=("Node failure reported by slurm", "Corroborated node failure"),
 )
 
 outcome_symptom(
@@ -570,7 +570,7 @@ outcome_symptom(
         "Node not responding",
         "Node unexpectedly rebooted",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "node offline",
         "Fabric manager lost connection to all GPUs",
         "Stopping nvidia-imex.service",
@@ -586,7 +586,7 @@ outcome_symptom(
         "Node unexpectedly rebooted",
         "Node failure reported by slurm",
         "Node not responding",
-        "Node hardware failure",
+        "Corroborated node failure",
         "node offline",
         "System is powering down",
         "Fabric manager lost connection to all GPUs",
@@ -632,7 +632,7 @@ outcome_symptom(
     cascade_discards=(
         "Node failure reported by slurm",
         "Node not responding",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
         "node offline",
         "System is powering down",
@@ -800,7 +800,7 @@ outcome_symptom(
         "error running nvidia-smi",
         "ncclUnhandledCudaError",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
     ),
 )
 
@@ -1220,7 +1220,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1235,7 +1235,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1266,7 +1266,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1276,7 +1276,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW,
     doc="general-protection-fault",
-    cascade_discards=("Node failure reported by slurm", "Node hardware failure"),
+    cascade_discards=("Node failure reported by slurm", "Corroborated node failure"),
 )
 
 outcome_symptom(
@@ -1649,7 +1649,7 @@ outcome_symptom(
     cascade_discards=(
         "Node failure reported by slurm",
         "Node not responding",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Lustre Client Evicted",
         "iSCSI detected conn error",
         "prometheus lost connection",
@@ -2445,7 +2445,7 @@ outcome_symptom(
     hw_cause="Known HW Cause - Node",
     cascade_discards=(
         "Node failure reported by slurm",
-        "Node hardware failure",
+        "Corroborated node failure",
         "Stopping nvidia-imex.service",
     ),
 )
