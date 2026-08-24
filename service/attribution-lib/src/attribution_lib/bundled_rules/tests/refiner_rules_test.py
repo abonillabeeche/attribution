@@ -24,7 +24,9 @@ from attribution_lib.core import (
     calculate_symptoms,
     get_bundled_rules_path,
 )
+from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType
 from attribution_lib.events import EventManager
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
@@ -94,7 +96,7 @@ def _register_ctx(stream, obs_ctx):
     stream.register_observation_context(obs_ctx)
 
 
-def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Source:
+def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1, rule="test") -> Source:
     """Create a minimal Source for building SymptomSets."""
     return Source(
         source_context=obs_ctx,
@@ -102,7 +104,7 @@ def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Sour
         datum=datum,
         time=source_time or datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
         resources=AllJobResources,
-        rule="test",
+        rule=rule,
     )
 
 
@@ -158,9 +160,9 @@ def _job_info_with(**overrides) -> JobInfo:
     return default_job_info(job_end_time=_DEFAULT_END, **overrides)
 
 
-def _run_scrub(stream, job_info, bad_nodes):
+def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     """Run only SCRUB-phase refiners on my_bad_nodes."""
-    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes)
+    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
 
 
 class TestScrubBadNodes:
@@ -176,6 +178,114 @@ class TestScrubBadNodes:
         assert "Not responding" not in bad_nodes["node01"]
         source = bad_nodes["node01"].attributions["Node not responding"].one_source()
         assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
+
+    def test_slurm_failure_with_epilog_non_response_emits_node_hardware_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
+        assert hardware_failure in bad_nodes["node01"]
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[hardware_failure]}
+        assert source_rules == {
+            NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+            FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+        }
+        created = [
+            event
+            for event in recorder.events
+            if event.node_type is NodeType.SCRUB
+            and event.rule_name == "NodeHardwareFailure"
+            and event.action is Action.CREATED
+            and event.symptom == hardware_failure
+        ]
+        assert len(created) == 1
+        assert created[0].hostname == "node01"
+        assert created[0].evidence is not None
+        assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
+
+    def test_node_hardware_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+        outcome = calculate_outcome(symptoms).value()
+
+        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
+        assert hardware_failure in symptoms
+        assert RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value not in symptoms
+        assert RegisteredSymptoms.NODE_NOT_RESPONDING.value not in symptoms
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == hardware_failure
+
+    def test_slurm_derived_non_response_does_not_emit_node_hardware_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        slurm_reason_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, slurm_reason_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert RegisteredSymptoms.NODE_HARDWARE_FAILURE.value not in bad_nodes["node01"]
+
+    def test_failure_and_epilog_non_response_on_different_nodes_do_not_combine(self, stream, obs_ctx):
+        job_info = _job_info_with(nodes=["node01", "node02"], state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node02"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        hardware_failure = RegisteredSymptoms.NODE_HARDWARE_FAILURE.value
+        assert all(hardware_failure not in bad_nodes[node] for node in bad_nodes)
+
+    def test_specific_node_failure_evidence_prevents_hardware_composite(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["XID-94-CONTAINED_ERROR"]})
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert RegisteredSymptoms.NODE_HARDWARE_FAILURE.value not in bad_nodes["node01"]
 
     def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})

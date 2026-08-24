@@ -34,6 +34,12 @@ NVL_DOMAIN_CASCADE_TARGETS = (
     "cudaErrorLaunchFailure",
 )
 
+NODE_FAILURE_CASCADE_TARGETS = (
+    "Node failure reported by slurm",
+    "Node not responding",
+    "Node hardware failure",
+)
+
 
 outcome_symptom(
     "unknown-symptom-",
@@ -64,7 +70,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-gpu-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -74,7 +80,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-nvswitch-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -84,7 +90,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-nic-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -94,7 +100,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-nvlink-trunk-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -104,7 +110,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-power-loss",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -114,7 +120,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-arm-system-error",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -124,7 +130,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-hardware-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -134,7 +140,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-cpu-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -144,7 +150,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-memory-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -154,7 +160,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-storage-device-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -164,7 +170,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-ipu-fault",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -174,7 +180,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-urgent-repair",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 # A tenant report is the initiating repair request: the tenant marks the host
@@ -187,7 +193,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-tenant-reported-as-faulty",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 # Provider host-maintenance termination is the resulting CSP action. It is
@@ -200,7 +206,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-terminated-by-csp",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 # Provider interruption-report-specific hardware faults (FAILURE_TOR_SWITCH /
@@ -212,7 +218,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-tor-switch-fault",
     hw_cause="Known HW Cause - Fabric",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -222,7 +228,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-overtemperature",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -232,7 +238,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-silent-data-corruption",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -242,7 +248,7 @@ outcome_symptom(
     priority=OutcomePriority.CSP,
     doc="csp-event-emergency-maintenance",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -251,7 +257,7 @@ outcome_symptom(
     category=SymptomCategory.CSP_EVENT,
     priority=OutcomePriority.CSP,
     doc="csp-event-guest-os-panic",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -276,6 +282,15 @@ outcome_symptom(
     doc="not-responding",
     hw_cause="Known HW Cause - Node",
     cascade_discards=("Stopping nvidia-imex.service", "Node unexpectedly rebooted"),
+)
+
+outcome_symptom(
+    "Node hardware failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="not-responding",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Node failure reported by slurm", "Node not responding"),
 )
 
 outcome_symptom(
@@ -331,6 +346,7 @@ outcome_symptom(
     cascade_discards=(
         "Node not responding",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
         "node offline",
     ),
@@ -344,6 +360,7 @@ outcome_symptom(
     cascade_discards=(
         "Node not responding",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
         "node offline",
         "OOM kill of user task",
@@ -420,7 +437,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.HIGH,
     doc="nmi-watchdog-hard-lockup",
-    cascade_discards=("Node failure reported by slurm",),
+    cascade_discards=("Node failure reported by slurm", "Node hardware failure"),
 )
 
 outcome_symptom(
@@ -553,6 +570,7 @@ outcome_symptom(
         "Node not responding",
         "Node unexpectedly rebooted",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "node offline",
         "Fabric manager lost connection to all GPUs",
         "Stopping nvidia-imex.service",
@@ -568,6 +586,7 @@ outcome_symptom(
         "Node unexpectedly rebooted",
         "Node failure reported by slurm",
         "Node not responding",
+        "Node hardware failure",
         "node offline",
         "System is powering down",
         "Fabric manager lost connection to all GPUs",
@@ -613,6 +632,7 @@ outcome_symptom(
     cascade_discards=(
         "Node failure reported by slurm",
         "Node not responding",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
         "node offline",
         "System is powering down",
@@ -780,6 +800,7 @@ outcome_symptom(
         "error running nvidia-smi",
         "ncclUnhandledCudaError",
         "Node failure reported by slurm",
+        "Node hardware failure",
     ),
 )
 
@@ -908,7 +929,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="kernel-invalid-memory-access",
     # Same crash also prints the generic "Internal error: Oops"; keep this specific symptom.
-    cascade_discards=("Node failure reported by slurm", "Node not responding", "kernel oops"),
+    cascade_discards=(*NODE_FAILURE_CASCADE_TARGETS, "kernel oops"),
 )
 
 outcome_symptom(
@@ -917,7 +938,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="kernel-oops",
     hw_cause="Kernel oops",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -926,7 +947,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="kernel-soft-lockup",
     hw_cause="Kernel soft lockup",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -935,7 +956,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="kernel-panic",
     hw_cause="Kernel panic",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -943,7 +964,7 @@ outcome_symptom(
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM_SW,
     doc="failed-to-collect-nvlink-status-info",
-    cascade_discards=("Node failure reported by slurm", "Node not responding", "Node unexpectedly rebooted"),
+    cascade_discards=(*NODE_FAILURE_CASCADE_TARGETS, "Node unexpectedly rebooted"),
 )
 
 outcome_symptom(
@@ -1035,7 +1056,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="csp-event-hypervisor-failure",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -1044,7 +1065,7 @@ outcome_symptom(
     category=SymptomCategory.CSP_EVENT,
     priority=OutcomePriority.MEDIUM_SW,
     doc="csp-event-software-fault",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -1199,6 +1220,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1213,6 +1235,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1243,6 +1266,7 @@ outcome_symptom(
         "general protection fault",
         "Node not responding",
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Node unexpectedly rebooted",
     ),
 )
@@ -1252,7 +1276,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW,
     doc="general-protection-fault",
-    cascade_discards=("Node failure reported by slurm",),
+    cascade_discards=("Node failure reported by slurm", "Node hardware failure"),
 )
 
 outcome_symptom(
@@ -1625,6 +1649,7 @@ outcome_symptom(
     cascade_discards=(
         "Node failure reported by slurm",
         "Node not responding",
+        "Node hardware failure",
         "Lustre Client Evicted",
         "iSCSI detected conn error",
         "prometheus lost connection",
@@ -2232,7 +2257,7 @@ outcome_symptom(
     category=SymptomCategory.CSP_EVENT,
     priority=OutcomePriority.FALLBACK,
     doc="csp-event-unrecognized-cause",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -2241,7 +2266,7 @@ outcome_symptom(
     category=SymptomCategory.CSP_EVENT,
     priority=OutcomePriority.FALLBACK,
     doc="csp-event-classification-pending",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
 outcome_symptom(
@@ -2420,6 +2445,7 @@ outcome_symptom(
     hw_cause="Known HW Cause - Node",
     cascade_discards=(
         "Node failure reported by slurm",
+        "Node hardware failure",
         "Stopping nvidia-imex.service",
     ),
 )

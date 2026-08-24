@@ -97,6 +97,7 @@ class RegisteredSymptoms(Enum):
     NODE_REBOOT_INITIATED = "Node reboot initiated"
     NODE_UNEXPECTEDLY_REBOOTED = "Node unexpectedly rebooted"
     NODE_FAILURE_REPORTED_BY_SLURM = "Node failure reported by slurm"
+    NODE_HARDWARE_FAILURE = "Node hardware failure"
     GPU_IS_LOST_REPORTED_BY_SLURM = "GPU is lost reported by slurm"
     NODE_OFFLINE = "node offline"
 
