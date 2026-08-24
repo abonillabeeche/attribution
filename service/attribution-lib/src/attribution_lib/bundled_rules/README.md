@@ -4,6 +4,10 @@ Rule definitions loaded at runtime: the extractors, refiners, and filters that
 turn raw observations into `symptom` strings, plus the declarative symptom
 defaults.
 
+For the canonical workflow for adding an extractor rule, see
+[`Add a New Extractor Rule`](../../../docs/adding-a-rule.md). Keep this README
+focused on symptom-registry behavior and reference details.
+
 - Extractor/refiner/filter rules (`applog_rules.py`, `syslog_rules.py`,
   `node_metrics_rules.py`, `refiner_rules.py`,
   `filter_rules.py`, ...). `common/xid_errors.py` holds the XID/SXID ground-truth
@@ -50,6 +54,6 @@ instead of matching the symptom text.
 3. Use the exact same symptom string in both places (the declaration's `prefix`
    is matched against emitted symptoms via `startswith`).
 
-See `../../../docs/using-the-symptom-registry.md` for the registry API and how to
-test symptoms through it (and why new symptoms never go in the legacy
-`RegisteredSymptoms` enum).
+See [`Register a New Symptom`](../../../docs/adding-a-rule.md#register-a-new-symptom)
+for the authoring workflow and how to test symptoms through the registry (and
+why new symptoms never go in the legacy `RegisteredSymptoms` enum).
