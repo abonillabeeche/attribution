@@ -128,6 +128,8 @@ _REFINER_ORDER = [
     "Xid149AndNvlinkFiltering",
     "Gb200PriorityRootCause",
     "_reserved_final_2",
+    # Demote a crashing node's IB Error-12 before the DAG rebuilds the job set.
+    "KernelCrashIbError12Cleanup",
     # DAG cascade pruning operates on the refined set, not the original
     "DagCascadePruning",
     # Job-lifecycle fallbacks run dead last: for a job with no nodes or a RUNNING job
@@ -1423,6 +1425,52 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if "cudaErrorInvalidValue" in symptoms:
         symptoms.discard("EFA Error-5")
+
+
+def _is_ib_error_12(symptom: str) -> bool:
+    """True for bare IB Error-12 and every vendor variant.
+
+    The exact prefix excludes EFA Error-12 and IB Error-5.
+    """
+    return symptom == "IB Error-12" or symptom.startswith("IB Error-12 ")
+
+
+@refiner_def(
+    name="KernelCrashIbError12Cleanup",
+    author="NVIDIA Attribution team",
+    priority=_priority("KernelCrashIbError12Cleanup"),
+)
+def kernel_crash_ib_error_12_cleanup(context: RefinerContext):
+    """Demote IB Error-12 when the same node reports a kernel invalid memory access.
+
+    IB Error-5 and EFA Error-12 are preserved. A sibling node's IB Error-12 also
+    remains because job-level reconciliation removes only forms that no longer
+    survive as a bad symptom on any node.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    kernel_crash = RegisteredSymptoms.KERNEL_INVALID_MEMORY_ACCESS.value
+    demoted: set[str] = set()
+    for _node, node_group in my_bad_nodes.items():
+        errors = node_group.attributions
+        if kernel_crash not in errors:
+            continue
+        for symptom in list(errors.symptoms()):
+            if _is_ib_error_12(symptom):
+                errors.discard(symptom)
+                demoted.add(symptom)
+
+    if len(demoted) == 0:
+        return
+
+    surviving = {
+        symptom for _node, node_group in my_bad_nodes.items() for symptom in node_group.attributions.symptoms()
+    }
+    for symptom in demoted - surviving:
+        symptoms.discard(symptom)
 
 
 @refiner_def(
