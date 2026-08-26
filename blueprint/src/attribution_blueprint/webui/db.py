@@ -21,6 +21,7 @@ import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 _REQUIRED_ATTRIBUTION_RUN_COLUMNS = frozenset({"terminal_state", "sub_domain"})
@@ -1338,6 +1339,7 @@ def _dashboard_data_from_rollup_conn(
     *,
     since: str | None,
     until: str | None,
+    database: str,
     ledger_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Return dashboard data from the denormalized quickstart rollup table.
@@ -1346,6 +1348,7 @@ def _dashboard_data_from_rollup_conn(
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
+        database: Display name of the database being served.
         ledger_outcome: Optional outcome filter for concentration ledgers.
 
     Returns:
@@ -1446,6 +1449,7 @@ def _dashboard_data_from_rollup_conn(
             "dateBounds": {"min": db_min, "max": db_max},
             "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "dbTotalRuns": db_total_runs,
+            "database": database,
             "returnedRuns": 0,
         },
         "metrics": {
@@ -1782,6 +1786,7 @@ def dashboard_data(
                 conn,
                 since=since,
                 until=until,
+                database=Path(path).name,
                 ledger_outcome=ledger_outcome,
             )
 
@@ -1865,6 +1870,7 @@ def dashboard_data(
             "dateBounds": {"min": db_min, "max": db_max},
             "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "dbTotalRuns": db_total_runs,
+            "database": Path(path).name,
             "returnedRuns": 0,
         },
         "metrics": {

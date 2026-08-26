@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import type { Run } from '@/interfaces/attribution'
 import { useDashboard } from '@/hooks/use-dashboard'
+import { useMeta } from '@/hooks/use-meta'
 import { useNodeRuns } from '@/hooks/use-node-runs'
 import { useRuns } from '@/hooks/use-runs'
 import { useRunsTable } from '@/hooks/use-runs-table'
@@ -84,6 +85,19 @@ describe('data hooks', () => {
     })
     expect(result.current.dashboard).toEqual({ metrics: { windowedRuns: 2 } })
     expect(result.current.error).toBeNull()
+  })
+
+  it('asks the server once for the backend it is bound to', async () => {
+    mocks.useSWR.mockReturnValue({ data: { database: 'demo.db' }, isLoading: false, error: undefined })
+    mocks.httpGet.mockResolvedValue({ database: 'demo.db' })
+
+    const { result } = renderHook(() => useMeta())
+    const [key, fetcher] = mocks.useSWR.mock.calls[0]
+
+    expect(key).toBe('meta')
+    await expect(fetcher()).resolves.toEqual({ database: 'demo.db' })
+    expect(mocks.httpGet).toHaveBeenCalledWith('/meta')
+    expect(result.current.meta).toEqual({ database: 'demo.db' })
   })
 
   it('disables node requests without an ID and paginates enabled requests', async () => {

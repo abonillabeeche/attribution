@@ -161,9 +161,14 @@ describe('node, time, and shell components', () => {
   })
 
   it('renders the active route in the top bar', () => {
-    render(<TopBar name="node" />)
+    const { rerender } = render(<TopBar name="node" />)
 
     expect(screen.getByAltText('Attribution')).toBeTruthy()
     expect(screen.getByText('NVIDIA Attribution · v0.3.0 · node')).toBeTruthy()
+    // A server that names no database leaves the slot out rather than reading 'db · null'.
+    expect(screen.queryByText(/^db · /)).toBeNull()
+
+    rerender(<TopBar name="node" database="demo.db" />)
+    expect(screen.getByText('db · demo.db')).toBeTruthy()
   })
 })

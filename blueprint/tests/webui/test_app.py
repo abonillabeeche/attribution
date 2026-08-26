@@ -114,6 +114,7 @@ def test_index_serves_spa_with_bootstrap(populated_db):
     assert "attr-bootstrap" not in r.text
     dashboard = client.get("/api/v1/dashboard").json()
     assert dashboard["meta"]["windowedRuns"] == 2
+    assert dashboard["meta"]["database"] == "test.db"
 
 
 def test_dashboard_query_params_filter_server_payload(tmp_path):

@@ -28,6 +28,8 @@ export interface Meta {
   windowedRuns: number
   /** Every run in the database. Unlike windowedRuns, no query scope narrows it. */
   dbTotalRuns: number
+  /** File name of the database being served, or null when the server did not name one. */
+  database: string | null
   returnedRuns: number
 }
 
