@@ -423,6 +423,11 @@ _IB_ERROR_12_PREFIX = "IB Error-12"
 # IBSymptomCleanup helpers
 
 
+def _is_ib_error_12(symptom: str) -> bool:
+    """Match Error-12 as a complete code, including its formatted variants."""
+    return symptom == _IB_ERROR_12_PREFIX or symptom.startswith(f"{_IB_ERROR_12_PREFIX} ")
+
+
 def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
     """Deactivate all bad pair events."""
     type_ids = event_stream.mgr.types.get_ids(BAD_PAIR_EVENT_TYPES)
@@ -1465,7 +1470,7 @@ def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
         if node in crashed_nodes:
             continue
         errors = node_group.attributions
-        if not any(symptom.startswith(_IB_ERROR_12_PREFIX) for symptom in errors.symptoms()):
+        if not any(_is_ib_error_12(symptom) for symptom in errors.symptoms()):
             continue
         before = set(errors.symptoms())
         _discard_ib_cascade(errors)

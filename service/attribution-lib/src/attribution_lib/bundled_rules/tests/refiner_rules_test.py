@@ -826,6 +826,17 @@ class TestKernelCrashIbCascadeCleanup:
         assert ib12 not in symptoms
         assert ib12 not in bad_nodes["node02"].attributions
 
+    def test_ib_error_120_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
+        """Error-120 must not be mistaken for the Error-12 cascade trigger."""
+        ib120 = "IB Error-120"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib120)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib120]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib120 in symptoms
+        assert ib120 in bad_nodes["node02"].attributions
+
     def test_peer_error_12_discards_full_ib_cascade(self, stream, obs_ctx, two_node_job):
         """Error-12 triggers the shared full IB/EFA/NCCL cascade cleanup."""
         peer_cascade = [
