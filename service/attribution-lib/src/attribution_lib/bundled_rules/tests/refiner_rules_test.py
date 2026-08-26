@@ -787,6 +787,125 @@ class TestIBSymptomCleanup:
         )
 
 
+class TestKernelCrashIbCascadeCleanup:
+    """Kernel crashes discard the IB cascade reported by peer nodes."""
+
+    @pytest.fixture
+    def two_node_job(self):
+        return _job_info_with(nodes=["node01", "node02"])
+
+    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
+        """Every kernel crash type makes a peer's IB Error-12 a cascade."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, crash_symptom, ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [crash_symptom], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert crash_symptom in symptoms
+        assert ib12 not in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    @pytest.mark.parametrize(
+        "ib12",
+        [
+            "IB Error-12",
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-12 Vendor-1",
+            "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)",
+        ],
+    )
+    def test_all_peer_ib_error_12_forms_trigger(self, stream, obs_ctx, two_node_job, ib12):
+        """Every emitted IB Error-12 spelling triggers the peer cleanup."""
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 not in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    def test_ib_error_120_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
+        """Error-120 must not be mistaken for the Error-12 cascade trigger."""
+        ib120 = "IB Error-120"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib120)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib120]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib120 in symptoms
+        assert ib120 in bad_nodes["node02"].attributions
+
+    def test_peer_error_12_discards_full_ib_cascade(self, stream, obs_ctx, two_node_job):
+        """Error-12 triggers the shared full IB/EFA/NCCL cascade cleanup."""
+        peer_cascade = [
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+            "EFA Error-107",
+            "ncclTimeout",
+        ]
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", *peer_cascade)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": peer_cascade})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "kernel panic" in symptoms
+        assert all(symptom not in symptoms for symptom in peer_cascade)
+        assert all(symptom not in bad_nodes["node02"].attributions for symptom in peer_cascade)
+
+    def test_ib_error_12_on_crashed_node_is_kept(self, stream, obs_ctx, job_info):
+        """IB evidence on the crashed node itself is not treated as peer cascade."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic", ib12]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node01"].attributions
+
+    def test_crashed_node_evidence_keeps_job_level_symptom(self, stream, obs_ctx, two_node_job):
+        """Peer cleanup does not erase the same IB evidence retained by a crashed node."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["kernel panic", ib12],
+                "node02": [ib12],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node01"].attributions
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    def test_soft_lockup_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
+        """A soft lockup is not one of the kernel crash signals."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel soft lockup"], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node02"].attributions
+
+    def test_peer_without_error_12_is_unchanged(self, stream, obs_ctx, two_node_job):
+        """A peer carrying only another IB error does not trigger cleanup."""
+        ib5 = "IB Error-5 (IBV_WC_WR_FLUSH_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib5)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib5]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib5 in symptoms
+        assert ib5 in bad_nodes["node02"].attributions
+
+
 class TestSlurmStateSymptoms:
     def test_cancelled_state_adds_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="CANCELLED", exit_code_signal=None)
