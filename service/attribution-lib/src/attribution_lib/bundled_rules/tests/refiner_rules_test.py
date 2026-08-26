@@ -168,6 +168,8 @@ def _run_scrub(stream, job_info, bad_nodes, recorder=None):
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
 
+    _CORROBORATED_FAILURE = "Corroborated node failure"
+
     def test_scheduler_raw_not_responding_reason_emits_renamed_symptom(self, stream, obs_ctx, job_info):
         job_info = job_info._replace(slurm_node_infos={"node01": {"reason": "Health check: Not responding"}})
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"]})
@@ -195,7 +197,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
 
-        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        corroborated_failure = self._CORROBORATED_FAILURE
         assert corroborated_failure in bad_nodes["node01"]
         source_rules = {source.rule for source in bad_nodes["node01"].attributions[corroborated_failure]}
         assert source_rules == {
@@ -231,7 +233,7 @@ class TestScrubBadNodes:
         symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
         outcome = calculate_outcome(symptoms).value()
 
-        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        corroborated_failure = self._CORROBORATED_FAILURE
         assert corroborated_failure in symptoms
         assert RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value not in symptoms
         assert RegisteredSymptoms.NODE_NOT_RESPONDING.value not in symptoms
@@ -252,7 +254,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        assert RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value not in bad_nodes["node01"]
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
 
     def test_failure_and_epilog_non_response_on_different_nodes_do_not_combine(self, stream, obs_ctx):
         job_info = _job_info_with(nodes=["node01", "node02"], state="NODE_FAIL")._replace(failed_node="node01")
@@ -268,7 +270,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        corroborated_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
+        corroborated_failure = self._CORROBORATED_FAILURE
         assert all(corroborated_failure not in bad_nodes[node] for node in bad_nodes)
 
     def test_specific_node_failure_evidence_prevents_hardware_composite(self, stream, obs_ctx):
@@ -285,7 +287,7 @@ class TestScrubBadNodes:
 
         _run_scrub(stream, job_info, bad_nodes)
 
-        assert RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value not in bad_nodes["node01"]
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
 
     def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})

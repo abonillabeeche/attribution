@@ -282,11 +282,12 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 
 # Symptoms that mean the node became unusable mid-job. Used by cascade-scrub
 # rules whose root cause is "the node went away."
+_CORROBORATED_NODE_FAILURE = "Corroborated node failure"
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
         "Node not responding",
-        "Corroborated node failure",
+        _CORROBORATED_NODE_FAILURE,
         "Node unexpectedly rebooted",
     }
 )
@@ -684,7 +685,6 @@ def corroborated_node_failure_refiner(context: RefinerContext):
 
     slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
     node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
-    corroborated_node_failure = RegisteredSymptoms.CORROBORATED_NODE_FAILURE.value
     epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
 
     for _node, node_group in my_bad_nodes.items():
@@ -696,7 +696,7 @@ def corroborated_node_failure_refiner(context: RefinerContext):
         if not epilog_sources:
             continue
 
-        combined_sources = SourceSet(corroborated_node_failure)
+        combined_sources = SourceSet(_CORROBORATED_NODE_FAILURE)
         for source in node_attributions[slurm_failure]:
             combined_sources.add(source)
         for source in epilog_sources:
