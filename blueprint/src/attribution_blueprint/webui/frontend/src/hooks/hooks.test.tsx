@@ -62,7 +62,7 @@ beforeEach(() => {
 describe('data hooks', () => {
   it('builds the dashboard cache key and request', async () => {
     mocks.useSWR.mockReturnValue({
-      data: { metrics: { totalRuns: 2 } },
+      data: { metrics: { windowedRuns: 2 } },
       isLoading: false,
       error: undefined,
     })
@@ -73,16 +73,16 @@ describe('data hooks', () => {
       outcome: 'hardware',
     }))
     const [key, fetcher] = mocks.useSWR.mock.calls[0]
-    mocks.httpGet.mockResolvedValue({ metrics: { totalRuns: 2 } })
+    mocks.httpGet.mockResolvedValue({ metrics: { windowedRuns: 2 } })
 
     expect(key).toEqual(['dashboard', '2026-05-01', '2026-05-02', 'hardware'])
-    await expect(fetcher()).resolves.toEqual({ metrics: { totalRuns: 2 } })
+    await expect(fetcher()).resolves.toEqual({ metrics: { windowedRuns: 2 } })
     expect(mocks.httpGet).toHaveBeenCalledWith('/dashboard', {
       from: '2026-05-01',
       to: '2026-05-02',
       outcome: 'hardware',
     })
-    expect(result.current.dashboard).toEqual({ metrics: { totalRuns: 2 } })
+    expect(result.current.dashboard).toEqual({ metrics: { windowedRuns: 2 } })
     expect(result.current.error).toBeNull()
   })
 
@@ -110,12 +110,12 @@ describe('data hooks', () => {
   it('combines runs and metadata through the shared runs cache', async () => {
     const api = {
       getAllRuns: vi.fn().mockResolvedValue([run('a')]),
-      getMeta: vi.fn().mockResolvedValue({ totalRuns: 1 }),
+      getMeta: vi.fn().mockResolvedValue({ windowedRuns: 1 }),
     }
     mocks.useApi.mockReturnValue(api)
     const mutate = vi.fn()
     mocks.useSWR.mockReturnValue({
-      data: { runs: [run('a')], meta: { totalRuns: 1 } },
+      data: { runs: [run('a')], meta: { windowedRuns: 1 } },
       isLoading: false,
       error: undefined,
       mutate,
@@ -125,10 +125,10 @@ describe('data hooks', () => {
     const [key, fetcher] = mocks.useSWR.mock.calls[0]
 
     expect(key).toBe('runs')
-    await expect(fetcher()).resolves.toEqual({ runs: [run('a')], meta: { totalRuns: 1 } })
+    await expect(fetcher()).resolves.toEqual({ runs: [run('a')], meta: { windowedRuns: 1 } })
     expect(result.current).toMatchObject({
       runs: [run('a')],
-      meta: { totalRuns: 1 },
+      meta: { windowedRuns: 1 },
       isLoading: false,
       mutate,
     })

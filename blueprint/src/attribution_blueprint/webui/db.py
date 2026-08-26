@@ -1296,6 +1296,22 @@ def _schema_meta_conn(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def _db_total_runs_conn(conn: sqlite3.Connection) -> int:
+    """Return the number of runs held by the whole database.
+
+    Args:
+        conn: SQLite connection.
+
+    Returns:
+        Count of runs across the database.
+    """
+
+    # Not count_runs(): that one exists to match list_runs' filters, and this denominator
+    # must stay unfiltered while the date window moves.
+    row = conn.execute("SELECT COUNT(*) AS n FROM attribution_run").fetchone()
+    return int(row["n"] if row is not None else 0)
+
+
 def _dashboard_data_from_rollup_conn(
     conn: sqlite3.Connection,
     *,
@@ -1318,7 +1334,7 @@ def _dashboard_data_from_rollup_conn(
     clauses, params = _rollup_clauses(since=since, until=until)
     where_sql = " WHERE " + " AND ".join(clauses) if len(clauses) > 0 else ""
     metric_sql = (
-        "SELECT COUNT(*) AS total_runs, "
+        "SELECT COUNT(*) AS windowed_runs, "
         "SUM(gpu_hours) AS gpu_hours, "
         "SUM(gpu_count) AS gpu_count, "
         "SUM(CASE WHEN outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw_failures, "
@@ -1328,7 +1344,7 @@ def _dashboard_data_from_rollup_conn(
     )
     # Daily buckets only cover the outcomes the day-by-day charts plot;
     # 'Fail Undetermined' is intentionally omitted (matches DailyBucket in
-    # the React interfaces). Window totals come from total_runs.
+    # the React interfaces). Window totals come from windowed_runs.
     daily_sql = (
         "SELECT end_day AS day, "
         "SUM(gpu_hours) AS gpu_hours, "
@@ -1352,6 +1368,7 @@ def _dashboard_data_from_rollup_conn(
             fallback_gpu_count=fallback_gpu_count,
         )
     lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    db_total_runs = _db_total_runs_conn(conn)
     days = _date_spine(
         since, until, lo_hi["lo"] if lo_hi is not None else None, lo_hi["hi"] if lo_hi is not None else None
     )
@@ -1405,11 +1422,12 @@ def _dashboard_data_from_rollup_conn(
                 "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
                 "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
             },
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
+            "dbTotalRuns": db_total_runs,
             "returnedRuns": 0,
         },
         "metrics": {
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "gpuHoursRaw": gpu_hours,
             "gpuCount": window_gpu_count,
             "hwFailures": hw_failures,
@@ -1749,7 +1767,7 @@ def dashboard_data(
     clauses, params = _filtered_clauses(since=since, until=until)
     where_sql = " WHERE " + " AND ".join(clauses) if len(clauses) > 0 else ""
     metric_sql = (
-        "SELECT COUNT(*) AS total_runs, "
+        "SELECT COUNT(*) AS windowed_runs, "
         f"SUM({gpu_expr}) AS gpu_hours, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw_failures, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw_failures, "
@@ -1773,6 +1791,7 @@ def dashboard_data(
         metric_row = conn.execute(metric_sql, tuple(params)).fetchone()
         window_gpu_count = _window_gpu_count_conn(conn, clauses, params)
         lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
+        db_total_runs = _db_total_runs_conn(conn)
         summary = db_summary(path)
         days = _date_spine(since, until, lo_hi["lo"] if lo_hi else None, lo_hi["hi"] if lo_hi else None)
         daily_rows = conn.execute(daily_sql, tuple(params)).fetchall()
@@ -1824,11 +1843,12 @@ def dashboard_data(
                 "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
                 "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
             },
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
+            "dbTotalRuns": db_total_runs,
             "returnedRuns": 0,
         },
         "metrics": {
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "gpuHoursRaw": gpu_hours,
             "gpuCount": window_gpu_count,
             "hwFailures": hw_failures,
