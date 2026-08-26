@@ -87,7 +87,7 @@ describe('data hooks', () => {
     expect(result.current.error).toBeNull()
   })
 
-  it('asks the server once for the backend it is bound to', async () => {
+  it('reads the backend it is bound to from /meta under one static key', async () => {
     mocks.useSWR.mockReturnValue({ data: { database: 'demo.db' }, isLoading: false, error: undefined })
     mocks.httpGet.mockResolvedValue({ database: 'demo.db' })
 
