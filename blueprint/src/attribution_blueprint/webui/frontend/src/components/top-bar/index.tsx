@@ -19,7 +19,7 @@ export function TopBar({ name, database }: { name: RouterName; database?: string
         <span className="text-zinc-700">·</span>
         <span>pipeline · 0.1.0</span>
         <span className="text-zinc-700">·</span>
-        {database !== null && database !== undefined && (
+        {database !== null && database !== undefined && database !== '' && (
           <>
             <span>db · {database}</span>
             <span className="text-zinc-700">·</span>
