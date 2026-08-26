@@ -276,6 +276,7 @@ def test_build_payload_shape_and_counts(tmp_path):
     assert meta["windowedRuns"] == 1 and meta["returnedRuns"] == 1
     assert "versions" in meta and "schema" in meta["versions"]
     assert "dateBounds" in meta
+    assert meta["database"] == "m.db"
 
 
 def test_build_payload_empty_db(tmp_path):

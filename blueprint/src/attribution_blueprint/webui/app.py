@@ -69,6 +69,7 @@ def create_app(db_path: str) -> FastAPI:
             "dateBounds": {"min": lo[:10] if lo is not None else None, "max": hi[:10] if hi is not None else None},
             "windowedRuns": n_runs,
             "dbTotalRuns": n_runs,
+            "database": backend.name,
             "returnedRuns": 0,
         }
 

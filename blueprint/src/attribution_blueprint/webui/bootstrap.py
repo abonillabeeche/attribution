@@ -6,6 +6,7 @@ from __future__ import annotations
 import json as _json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
@@ -374,6 +375,7 @@ def build_payload(
             "dateBounds": {"min": lo[:10] if lo else None, "max": hi[:10] if hi else None},
             "windowedRuns": windowed_total,
             "dbTotalRuns": db_total,
+            "database": Path(db_path).name,
             "returnedRuns": len(mapped),
         },
     }
