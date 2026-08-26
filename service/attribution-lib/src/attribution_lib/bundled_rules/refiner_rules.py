@@ -410,6 +410,14 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
+_KERNEL_CRASH_SYMPTOMS = frozenset(
+    {
+        "kernel panic",
+        "kernel oops",
+        "kernel invalid memory access",
+    }
+)
+_IB_ERROR_12_PREFIX = "IB Error-12"
 
 
 # IBSymptomCleanup helpers
@@ -1433,23 +1441,31 @@ def ib_symptom_cleanup(context: RefinerContext):
     priority=_priority("KernelCrashIbCascadeCleanup"),
 )
 def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
-    """Discard the IB cascade from a node with a kernel invalid memory access.
+    """Discard peer IB cascades caused by a node's kernel crash.
 
-    An independently reported cascade symptom on another node remains because
-    job-level reconciliation removes only symptoms that no longer survive on
-    any node.
+    A crashed node stops servicing its queue pairs, so peers can report
+    retry-exceeded IB Error-12 against a healthy fabric. IB evidence on the
+    crashed node itself is preserved.
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
     if symptoms is None or my_bad_nodes is None:
         return
 
-    kernel_crash = RegisteredSymptoms.KERNEL_INVALID_MEMORY_ACCESS.value
+    crashed_nodes = {
+        node
+        for node, node_group in my_bad_nodes.items()
+        if any(symptom in node_group.attributions for symptom in _KERNEL_CRASH_SYMPTOMS)
+    }
+    if len(crashed_nodes) == 0:
+        return
+
     discarded: set[str] = set()
-    for _node, node_group in my_bad_nodes.items():
+    for node, node_group in my_bad_nodes.items():
+        if node in crashed_nodes:
+            continue
         errors = node_group.attributions
-        has_ib_error = any(symptom.startswith("IB Error-") for symptom in errors.symptoms())
-        if kernel_crash not in errors or not has_ib_error:
+        if not any(symptom.startswith(_IB_ERROR_12_PREFIX) for symptom in errors.symptoms()):
             continue
         before = set(errors.symptoms())
         _discard_ib_cascade(errors)
