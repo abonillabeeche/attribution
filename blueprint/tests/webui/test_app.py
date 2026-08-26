@@ -400,6 +400,30 @@ def test_db_total_runs_counts_every_row(populated_db):
     assert client.get("/api/v1/runs", params={"status": "all"}).json()["total"] == 2
 
 
+def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
+    """Bounds the fleet view resets the window to must cover every run, not just rolled-up ones."""
+    p = tmp_path / "rollup-bounds.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("100", "sluid-A"), _attr("Fail InfraHW"))
+    late = _ctx("101", "sluid-B")
+    late["start_time"] = datetime(2026, 6, 9, 0, tzinfo=timezone.utc)
+    late["end_time"] = datetime(2026, 6, 9, 1, tzinfo=timezone.utc)
+    out.write(late, _attr("Fail InfraSW"))
+    out.close()
+    # The rollup has only caught up with the May run, so its own MIN/MAX stops at 2026-05-01.
+    _seed_rollup(
+        p,
+        [("rollup-1", "2026-05-01T01:00:00+00:00", "2026-05-01", "100", "Fail InfraHW", 1000, 8, "XID-79")],
+    )
+
+    payload = TestClient(create_app(str(p))).get("/api/v1/dashboard").json()
+
+    assert payload["meta"]["dbTotalRuns"] == 2
+    assert payload["meta"]["dateBounds"] == {"min": "2026-05-01", "max": "2026-06-09"}
+    # Window metrics still come off the rollup; only the database-wide fields bypass it.
+    assert payload["metrics"]["windowedRuns"] == 1
+
+
 def test_dashboard_rejects_malformed_dates(tmp_path):
     p = tmp_path / "invalid-dates.db"
     out = SQLiteOutput(str(p))

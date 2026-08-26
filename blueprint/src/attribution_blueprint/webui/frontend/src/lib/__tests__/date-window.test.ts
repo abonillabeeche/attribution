@@ -112,4 +112,23 @@ describe('boundsOutsideWindow', () => {
 
     expect(boundsOutsideWindow(bounds, filterWith('2026-05-03', '2026-05-05'))).toEqual(bounds)
   })
+
+  it('returns null when only one end of the window is set', () => {
+    const bounds = { min: '2026-05-01', max: '2026-05-10' }
+    const allTime: FleetFilter = { status: 'failed', axis: 'symptom', metric: 'count' }
+
+    expect(boundsOutsideWindow(bounds, { ...allTime, from: '2026-05-03' })).toBeNull()
+    expect(boundsOutsideWindow(bounds, { ...allTime, to: '2026-05-05' })).toBeNull()
+  })
+
+  it('returns null when only one end of the bounds is known', () => {
+    expect(boundsOutsideWindow(
+      { min: null, max: '2026-05-10' },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+    expect(boundsOutsideWindow(
+      { min: '2026-04-01', max: null },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+  })
 })

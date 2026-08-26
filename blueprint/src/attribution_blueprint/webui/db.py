@@ -1312,6 +1312,27 @@ def _db_total_runs_conn(conn: sqlite3.Connection) -> int:
     return int(row["n"] if row is not None else 0)
 
 
+def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """Return the first and last run end days held by the whole database.
+
+    Args:
+        conn: SQLite connection.
+
+    Returns:
+        Inclusive ``(min, max)`` ISO day pair; both None when the database holds no runs.
+    """
+
+    row = conn.execute(
+        "SELECT MIN(c.end_time) AS lo, MAX(c.end_time) AS hi "
+        "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id"
+    ).fetchone()
+    if row is None:
+        return None, None
+    lo = row["lo"][:10] if row["lo"] is not None else None
+    hi = row["hi"][:10] if row["hi"] is not None else None
+    return lo, hi
+
+
 def _dashboard_data_from_rollup_conn(
     conn: sqlite3.Connection,
     *,
@@ -1367,10 +1388,14 @@ def _dashboard_data_from_rollup_conn(
             params,
             fallback_gpu_count=fallback_gpu_count,
         )
-    lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    rollup_lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
     db_total_runs = _db_total_runs_conn(conn)
+    db_min, db_max = _db_date_bounds_conn(conn)
     days = _date_spine(
-        since, until, lo_hi["lo"] if lo_hi is not None else None, lo_hi["hi"] if lo_hi is not None else None
+        since,
+        until,
+        rollup_lo_hi["lo"] if rollup_lo_hi is not None else None,
+        rollup_lo_hi["hi"] if rollup_lo_hi is not None else None,
     )
     daily_rows = conn.execute(daily_sql, tuple(params)).fetchall()
     hw_breakdown = _daily_rollup_breakdown_conn(conn, outcome="Fail InfraHW", days=days, since=since, until=until)
@@ -1418,10 +1443,7 @@ def _dashboard_data_from_rollup_conn(
     return {
         "meta": {
             "versions": _schema_meta_conn(conn),
-            "dateBounds": {
-                "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
-                "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
-            },
+            "dateBounds": {"min": db_min, "max": db_max},
             "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "dbTotalRuns": db_total_runs,
             "returnedRuns": 0,
@@ -1792,6 +1814,7 @@ def dashboard_data(
         window_gpu_count = _window_gpu_count_conn(conn, clauses, params)
         lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
         db_total_runs = _db_total_runs_conn(conn)
+        db_min, db_max = _db_date_bounds_conn(conn)
         summary = db_summary(path)
         days = _date_spine(since, until, lo_hi["lo"] if lo_hi else None, lo_hi["hi"] if lo_hi else None)
         daily_rows = conn.execute(daily_sql, tuple(params)).fetchall()
@@ -1839,10 +1862,7 @@ def dashboard_data(
                 "pipeline": None,
                 "service": None,
             },
-            "dateBounds": {
-                "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
-                "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
-            },
+            "dateBounds": {"min": db_min, "max": db_max},
             "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "dbTotalRuns": db_total_runs,
             "returnedRuns": 0,
