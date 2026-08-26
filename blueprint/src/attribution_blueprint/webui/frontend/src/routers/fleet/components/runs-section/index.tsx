@@ -201,6 +201,7 @@ export function RunsSection({
   setPageSize,
   setGroupPage,
   loading = false,
+  databaseEmpty = false,
 }: {
   groups: RunsTableGroup[]
   matchingRuns: number
@@ -212,6 +213,7 @@ export function RunsSection({
   setPageSize: (next: number) => void
   setGroupPage: (outcome: OutcomeKey, page: number) => void
   loading?: boolean
+  databaseEmpty?: boolean
 }) {
   const [collapsed, setCollapsed] = useState<Set<OutcomeKey>>(new Set())
 
@@ -226,7 +228,7 @@ export function RunsSection({
   )
 
   const windowed = isWindowed(filter)
-  const hints = [
+  const hints = databaseEmpty ? [] : [
     filter.outcome || filter.symptom || filter.node || filter.rule || filter.user || filter.q
       ? 'clear the active filter chips above'
       : null,
@@ -267,7 +269,9 @@ export function RunsSection({
                   colSpan={COL_COUNT}
                   className="text-foreground-muted text-center py-8"
                 >
-                  <div className="font-mono text-sm text-foreground mb-1">No runs in this view</div>
+                  <div className="font-mono text-sm text-foreground mb-1">
+                    {databaseEmpty ? 'No runs in this database' : 'No runs in this view'}
+                  </div>
                   {hints.length > 0 && <div className="text-xs">Try to {hints.join(', or ')}.</div>}
                 </TableCell>
               </TableRow>

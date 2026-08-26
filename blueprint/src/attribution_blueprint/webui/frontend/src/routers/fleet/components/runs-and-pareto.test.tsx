@@ -189,6 +189,26 @@ describe('RunsSection', () => {
       + 'passing runs, or widen the date range.',
     )).toBeTruthy()
   })
+
+  it('drops the loosen-a-filter advice when the database itself is empty', () => {
+    render(
+      <RunsSection
+        groups={[]}
+        matchingRuns={0}
+        visibleRuns={[]}
+        filter={{ ...filter, node: 'node-1', from: '2026-05-01', to: '2026-05-03' }}
+        setFilter={vi.fn()}
+        pageByOutcome={{}}
+        pageSize={10}
+        setPageSize={vi.fn()}
+        setGroupPage={vi.fn()}
+        databaseEmpty
+      />,
+    )
+
+    expect(screen.getByText('No runs in this database')).toBeTruthy()
+    expect(screen.queryByText(/^Try to/)).toBeNull()
+  })
 })
 
 describe('ParetoCard', () => {

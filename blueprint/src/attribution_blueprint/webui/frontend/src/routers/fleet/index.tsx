@@ -45,8 +45,8 @@ function NoResultsNotice({
 }: {
   title: string
   detail: string
-  actionLabel: string
-  onAction: () => void
+  actionLabel?: string
+  onAction?: () => void
 }) {
   return (
     <Alert role="presentation" className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -57,9 +57,11 @@ function NoResultsNotice({
         </AlertTitle>
         <AlertDescription className="font-mono text-xs">{detail}</AlertDescription>
       </div>
-      <Button variant="outline" size="sm" onClick={onAction}>
-        {actionLabel}
-      </Button>
+      {actionLabel !== undefined && onAction !== undefined && (
+        <Button variant="outline" size="sm" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      )}
     </Alert>
   )
 }
@@ -201,6 +203,8 @@ export function FleetView() {
     !table.isLoading &&
     table.error === null &&
     table.total === 0
+  const databaseEmpty =
+    dashboard !== null && !dashboardLoading && dashboardError === null && dbTotalRuns === 0
   const runCountLabel =
     dashboardError !== null || table.error !== null
       ? 'Run counts unavailable'
@@ -278,6 +282,12 @@ export function FleetView() {
         </div>
 
         <div role="status" aria-live="polite" className="contents">
+          {databaseEmpty && (
+            <NoResultsNotice
+              title="This database has no attribution runs"
+              detail="Nothing has been attributed yet. See blueprint/docs/quickstart.md to run your first attribution, then refresh."
+            />
+          )}
           {showDateNotice && outsideBounds !== null && (
             <NoResultsNotice
               title="Workloads exist outside the selected dates"
@@ -368,6 +378,7 @@ export function FleetView() {
           setPageSize={setPageSize}
           setGroupPage={setGroupPage}
           loading={table.isLoading}
+          databaseEmpty={databaseEmpty}
         />
       </div>
 

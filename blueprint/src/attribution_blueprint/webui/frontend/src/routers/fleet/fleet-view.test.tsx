@@ -286,6 +286,41 @@ describe('FleetView', () => {
     expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Runs' }))
   })
 
+  it('says the database is empty rather than blaming the dates or the filters', () => {
+    mocks.useDashboard.mockReturnValue({ dashboard: null, isLoading: true, error: null })
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: null,
+    })
+    const { rerender } = render(<FleetView />)
+
+    expect(screen.queryByText('This database has no attribution runs')).toBeNull()
+
+    mocks.useDashboard.mockReturnValue({
+      dashboard: {
+        ...dashboard,
+        metrics: { ...dashboard.metrics, windowedRuns: 0 },
+        meta: { ...dashboard.meta, dbTotalRuns: 0, dateBounds: { min: null, max: null } },
+      },
+      isLoading: false,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    const region = screen.getByRole('status')
+    expect(within(region).getByText('This database has no attribution runs')).toBeTruthy()
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
+    // Nothing is left to loosen, so this notice carries no action to take.
+    expect(within(region).queryByRole('button')).toBeNull()
+    expect(mocks.runsProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ databaseEmpty: true }),
+    )
+  })
+
   it('counts the listed runs against the whole database, populated, filtered down, or empty', () => {
     const { rerender } = render(<FleetView />)
 
