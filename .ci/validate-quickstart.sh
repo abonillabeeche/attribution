@@ -125,7 +125,7 @@ if responsible_node_count == 0:
 web_port = os.environ["QUICKSTART_WEB_PORT"]
 with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/api/v1/dashboard", timeout=10) as response:
     web_payload = json.load(response)
-web_run_count = int(web_payload["meta"]["totalRuns"])
+web_run_count = int(web_payload["meta"]["dbTotalRuns"])
 if web_run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} web UI runs, found {web_run_count}")
 
