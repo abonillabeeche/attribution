@@ -787,83 +787,100 @@ class TestIBSymptomCleanup:
         )
 
 
-class TestKernelCrashIbError12Cleanup:
-    """Kernel crashes demote same-node IB Error-12 without affecting other fabrics."""
+class TestKernelCrashIbCascadeCleanup:
+    """Kernel crashes discard their same-node IB cascade."""
 
     _KERNEL = "kernel invalid memory access"
 
-    def test_reference_signature_discards_all_ib_error_12_forms(self, stream, obs_ctx, job_info):
-        """Bare, vendorless, and dynamic vendor forms are all demoted."""
-        ib12_forms = [
+    def test_reference_signature_discards_full_ib_cascade(self, stream, obs_ctx, job_info):
+        """All IB/EFA errors and related network symptoms are discarded."""
+        cascade = [
             "IB Error-12",
             "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
             "IB Error-12 Vendor-1 (IBV_WC_RETRY_EXC_ERR)",
             "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+            "IB Error-13 Vendor-7",
+            "EFA Error-12",
+            "ncclInternalError",
         ]
-        node_syms = [self._KERNEL, *ib12_forms, "ncclInternalError"]
+        node_syms = [self._KERNEL, *cascade]
         symptoms = _make_symptoms(obs_ctx, *node_syms)
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": node_syms})
 
         _run(stream, job_info, symptoms, bad_nodes)
 
         assert self._KERNEL in symptoms
-        assert "ncclInternalError" in symptoms
-        assert all("IB Error-12" not in symptom for symptom in symptoms.symptoms())
-        assert all("IB Error-12" not in symptom for symptom in bad_nodes["node01"].attributions.symptoms())
+        assert all(symptom not in symptoms for symptom in cascade)
+        assert all(symptom not in bad_nodes["node01"].attributions for symptom in cascade)
 
-    def test_preserves_standalone_ib_error_5(self, stream, obs_ctx, job_info):
-        """A standalone IB Error-5 survives the kernel crash cleanup."""
-        ib5 = "IB Error-5 (IBV_WC_WR_FLUSH_ERR)"
-        node_syms = [self._KERNEL, ib5]
+    @pytest.mark.parametrize(
+        "ib_symptom",
+        [
+            "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+            "IB Error-13 Vendor-7",
+        ],
+    )
+    def test_non_error_12_ib_symptom_alone_is_discarded(self, stream, obs_ctx, job_info, ib_symptom):
+        """A kernel crash discards any same-node IB error without Error-12."""
+        node_syms = [self._KERNEL, ib_symptom]
         symptoms = _make_symptoms(obs_ctx, *node_syms)
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": node_syms})
 
         _run(stream, job_info, symptoms, bad_nodes)
 
         assert self._KERNEL in symptoms
-        assert ib5 in symptoms
+        assert ib_symptom not in symptoms
+        assert ib_symptom not in bad_nodes["node01"].attributions
 
-    def test_preserves_efa_error_12(self, stream, obs_ctx, job_info):
-        """EFA Error-12 is a different fabric and remains attributed."""
-        efa12 = "EFA Error-12"
-        node_syms = [self._KERNEL, efa12]
+    def test_related_network_symptoms_without_ib_error_are_unchanged(self, stream, obs_ctx, job_info):
+        """A kernel crash alone does not trigger the IB cascade cleanup."""
+        related = ["EFA Error-12", "ncclInternalError", "Connection closed"]
+        node_syms = [self._KERNEL, *related]
         symptoms = _make_symptoms(obs_ctx, *node_syms)
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": node_syms})
 
         _run(stream, job_info, symptoms, bad_nodes)
 
-        assert self._KERNEL in symptoms
-        assert efa12 in symptoms
+        assert all(symptom in symptoms for symptom in related)
+        assert all(symptom in bad_nodes["node01"].attributions for symptom in related)
 
-    def test_two_node_isolation_keeps_sibling_ib_error_12(self, stream, obs_ctx, job_info):
-        """A sibling node's independent IB Error-12 survives job-wide reconciliation."""
+    def test_two_node_isolation_keeps_sibling_ib_cascade(self, stream, obs_ctx, job_info):
+        """A sibling node's independently reported IB cascade survives."""
         ib12 = "IB Error-12 Vendor-1 (IBV_WC_RETRY_EXC_ERR)"
-        symptoms = _make_symptoms(obs_ctx, self._KERNEL, ib12)
+        ib5 = "IB Error-5 (IBV_WC_WR_FLUSH_ERR)"
+        symptoms = _make_symptoms(obs_ctx, self._KERNEL, ib12, ib5)
         bad_nodes = _make_bad_nodes(
             obs_ctx,
             {
-                "node-crash": [self._KERNEL, ib12],
-                "node-fabric": [ib12],
+                "node-crash": [self._KERNEL, ib12, ib5],
+                "node-fabric": [ib12, ib5],
             },
         )
 
         _run(stream, job_info, symptoms, bad_nodes)
 
         assert ib12 in symptoms
+        assert ib5 in symptoms
         assert ib12 in bad_nodes["node-fabric"].attributions
+        assert ib5 in bad_nodes["node-fabric"].attributions
         assert ib12 not in bad_nodes["node-crash"].attributions
+        assert ib5 not in bad_nodes["node-crash"].attributions
         assert self._KERNEL in bad_nodes["node-crash"].attributions
 
-    def test_ib_error_12_without_kernel_crash_is_unchanged(self, stream, obs_ctx, job_info):
-        """IB Error-12 remains when no kernel crash is present."""
+    def test_ib_cascade_without_kernel_crash_is_unchanged(self, stream, obs_ctx, job_info):
+        """IB errors remain when no kernel invalid memory access is present."""
         ib12 = "IB Error-12 Vendor-1 (IBV_WC_RETRY_EXC_ERR)"
-        symptoms = _make_symptoms(obs_ctx, ib12)
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [ib12]})
+        ib5 = "IB Error-5 (IBV_WC_WR_FLUSH_ERR)"
+        symptoms = _make_symptoms(obs_ctx, ib12, ib5)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [ib12, ib5]})
 
         _run(stream, job_info, symptoms, bad_nodes)
 
         assert ib12 in symptoms
+        assert ib5 in symptoms
         assert ib12 in bad_nodes["node01"].attributions
+        assert ib5 in bad_nodes["node01"].attributions
 
 
 class TestSlurmStateSymptoms:
