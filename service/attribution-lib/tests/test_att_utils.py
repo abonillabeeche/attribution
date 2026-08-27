@@ -36,7 +36,8 @@ class TestGetHostname:
 
     def test_unmapped_ip_is_returned_without_dns(self):
         """An unmapped IP remains unresolved without querying DNS."""
-        assert get_hostname("192.168.1.1") == "192.168.1.1"
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            assert get_hostname("192.168.1.1") == "192.168.1.1"
 
     def test_invalid_hostname_with_non_printable_char_returns_input(self):
         """Test that a hostname containing non-printable bytes (e.g. from corrupted log data) is returned as-is."""
@@ -57,7 +58,8 @@ class TestGetHostname:
 
     def test_ipv6_unmapped_returns_ip(self):
         """An unmapped IPv6 address remains unresolved."""
-        assert get_hostname("2001:db8::2") == "2001:db8::2"
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            assert get_hostname("2001:db8::2") == "2001:db8::2"
 
 
 class TestConvertHostnameToShortFormat:

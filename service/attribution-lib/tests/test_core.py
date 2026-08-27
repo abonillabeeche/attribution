@@ -38,6 +38,7 @@ from attribution_lib.symptoms import (
     translate_and_prune_node_attributions,
 )
 from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
+from attribution_lib.utils import get_hostname
 from test_support.helpers import create_source_set, make_node_to_ranks
 
 
@@ -50,6 +51,7 @@ def test_setup_rules_without_mapping_clears_previous_mapping(monkeypatch):
     core.setup_rules(rules_paths=[], force=True)
 
     assert attribution_lib.ip_to_nodenames == {}
+    assert get_hostname("192.0.2.1") == "192.0.2.1"
 
 
 # Shared job info fixture for multiple test classes

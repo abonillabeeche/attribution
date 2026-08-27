@@ -314,7 +314,7 @@ class TestIBPairRules:
 
         events = self._get_events_by_type(result.event_stream, "Attribution.node.bad_peers")
         assert len(events) >= 1
-        assert "192.0.2.1" in events[0]["payload"]["peer"]
+        assert events[0]["payload"]["peer"] == "192.0.2.1"
 
 
 def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
