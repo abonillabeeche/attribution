@@ -273,9 +273,10 @@ def test_build_payload_shape_and_counts(tmp_path):
     payload = bootstrap.build_payload(db_path)
     assert isinstance(payload["runs"], list) and len(payload["runs"]) == 1
     meta = payload["meta"]
-    assert meta["totalRuns"] == 1 and meta["returnedRuns"] == 1
+    assert meta["windowedRuns"] == 1 and meta["returnedRuns"] == 1
     assert "versions" in meta and "schema" in meta["versions"]
     assert "dateBounds" in meta
+    assert meta["database"] == "m.db"
 
 
 def test_build_payload_empty_db(tmp_path):
@@ -287,7 +288,7 @@ def test_build_payload_empty_db(tmp_path):
     out.close()
     payload = bootstrap.build_payload(str(p))
     assert payload["runs"] == []
-    assert payload["meta"]["totalRuns"] == 0
+    assert payload["meta"]["windowedRuns"] == 0
     assert payload["meta"]["dateBounds"] == {"min": None, "max": None}
 
 

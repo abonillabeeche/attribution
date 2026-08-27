@@ -110,6 +110,8 @@ _REFINER_ORDER = [
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
     "IBSymptomCleanup",
+    # Run after IBSymptomCleanup so the IB hierarchy is already normalized.
+    "KernelCrashIbCascadeCleanup",
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
     "ConnectionClosedCascade",
@@ -414,9 +416,22 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
+_KERNEL_CRASH_SYMPTOMS = frozenset(
+    {
+        "kernel panic",
+        "kernel oops",
+        "kernel invalid memory access",
+    }
+)
+_IB_ERROR_12_PREFIX = "IB Error-12"
 
 
 # IBSymptomCleanup helpers
+
+
+def _is_ib_error_12(symptom: str) -> bool:
+    """Match Error-12 as a complete code, including its formatted variants."""
+    return symptom == _IB_ERROR_12_PREFIX or symptom.startswith(f"{_IB_ERROR_12_PREFIX} ")
 
 
 def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
@@ -1468,6 +1483,52 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if "cudaErrorInvalidValue" in symptoms:
         symptoms.discard("EFA Error-5")
+
+
+@refiner_def(
+    name="KernelCrashIbCascadeCleanup",
+    author="NVIDIA Attribution team",
+    priority=_priority("KernelCrashIbCascadeCleanup"),
+)
+def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
+    """Discard peer IB cascades caused by a node's kernel crash.
+
+    A crashed node stops servicing its queue pairs, so peers can report
+    retry-exceeded IB Error-12 against a healthy fabric. IB evidence on the
+    crashed node itself is preserved.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    crashed_nodes = {
+        node
+        for node, node_group in my_bad_nodes.items()
+        if any(symptom in node_group.attributions for symptom in _KERNEL_CRASH_SYMPTOMS)
+    }
+    if len(crashed_nodes) == 0:
+        return
+
+    discarded: set[str] = set()
+    for node, node_group in my_bad_nodes.items():
+        if node in crashed_nodes:
+            continue
+        errors = node_group.attributions
+        if not any(_is_ib_error_12(symptom) for symptom in errors.symptoms()):
+            continue
+        before = set(errors.symptoms())
+        _discard_ib_cascade(errors)
+        discarded.update(before - set(errors.symptoms()))
+
+    if len(discarded) == 0:
+        return
+
+    surviving = {
+        symptom for _node, node_group in my_bad_nodes.items() for symptom in node_group.attributions.symptoms()
+    }
+    for symptom in discarded - surviving:
+        symptoms.discard(symptom)
 
 
 @refiner_def(
