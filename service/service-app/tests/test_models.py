@@ -88,6 +88,11 @@ def _demote_node_symptom(result: AttributionResult, node: str, symptom: str) -> 
     result.bad_nodes_attr.my_bad_nodes.discard([node], [symptom])
 
 
+def _site_key(site) -> tuple:
+    """Identify a site by everything a caller would notice, so a status flip fails the check."""
+    return (type(site).__name__, getattr(site, "node", None), site.status, site.source.pos)
+
+
 def _set_outcome(result: AttributionResult, outcome: OutcomeAttribution, *driver_sources: LibSource) -> None:
     ss = SourceSet(outcome)
     for s in driver_sources:
@@ -257,8 +262,9 @@ class TestV2Models:
         sites = with_interesting.symptoms["link down(east-west)"]
         assert [(s.source.pos, s.status) for s in sites] == [(2, "interesting"), (10, "bad")]
 
-    def test_interesting_only_node_binding_is_reported_as_a_node_source(self):
-        """A node whose only evidence was demoted is still named, not collapsed to a job-level site."""
+    def test_demoting_a_sources_only_node_binding_keeps_its_job_level_bad_site(self):
+        """A node whose only evidence was demoted is named as interesting, and the job-level
+        bad site it came from is kept rather than replaced by that node binding."""
         src = _lib_source(rule="dataloader")
         result = _empty_result()
         _add_node_symptom(result, "node-b", "DataLoader Exception", src)
@@ -268,9 +274,11 @@ class TestV2Models:
         response = AttributionResponseV2.from_lib_attribution(set(), result, include_interesting=True)
 
         sites = response.symptoms["DataLoader Exception"]
-        assert len(sites) == 1
-        assert isinstance(sites[0], NodeSource)
-        assert (sites[0].node, sites[0].status) == ("node-b", "interesting")
+        assert [(type(s), s.status) for s in sites] == [
+            (ResourcelessSource, "bad"),
+            (NodeSource, "interesting"),
+        ]
+        assert sites[1].node == "node-b"
 
     def test_peer_symptom_emits_one_node_source_per_attributed_node(self):
         """When a single Source is attributed to multiple nodes V2 emits one NodeSource per node."""

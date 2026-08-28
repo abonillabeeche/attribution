@@ -398,13 +398,13 @@ def _sites_for_symptom(
     candidates = bad | interesting if include_interesting else bad
     for lib_source in sorted(candidates, key=_source_sort_key):
         attr_source = AttributionSource.from_lib(lib_source)
-        bindings = nodes_by_key.get((symptom, lib_source))
-        if bindings is None:
-            # No node claims this source, so it is classified by the job-level set
-            # it came from rather than by any node's view of it.
-            unbound_status = SymptomStatus.BAD if lib_source in bad else SymptomStatus.INTERESTING
-            sites.append(ResourcelessSource(status=unbound_status, source=attr_source))
-            continue
+        bindings = nodes_by_key.get((symptom, lib_source), [])
+        has_bad_node_binding = any(status is SymptomStatus.BAD for _node, status in bindings)
+        # Job's verdict, kept even if the only node that reported it demoted its copy.
+        if lib_source in bad and not has_bad_node_binding:
+            sites.append(ResourcelessSource(status=SymptomStatus.BAD, source=attr_source))
+        elif len(bindings) == 0:
+            sites.append(ResourcelessSource(status=SymptomStatus.INTERESTING, source=attr_source))
         for node, node_status in sorted(bindings):
             sites.append(NodeSource(node=node, status=node_status, source=attr_source))
     return sites
