@@ -30,6 +30,7 @@ from app.observation import (
     ObservationSource,
 )
 from app.util import TimeInterval
+from app.v2.models import AttributionResponseV2
 from tests.conftest import (
     make_up_attributor_info,
     post_attributor,
@@ -500,6 +501,7 @@ class TestV2AttributionShape:
 
         assert "verdict" in body
         assert "attributions" not in body
+        assert all("status" in symptom for symptom in body["symptoms"].values())
 
     def test_decision_graph_is_disabled_by_default(self, client):
         att_id = post_attributor(client, make_up_attributor_info("v2"))
