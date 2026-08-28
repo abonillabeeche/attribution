@@ -97,6 +97,10 @@ mv "${STAGING_DIR}" "${CLIENT_DIR}"
 
 echo "==> done"
 
+# Hooks inherit GIT_DIR without GIT_WORK_TREE, which makes the calls below treat
+# this subdirectory as the repository root and report every file as untracked.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 # Only meaningful when the output landed in the repo; a scratch run has nothing
 # for git to compare against.
 if [[ "${OUTPUT_ROOT}" == "${APP_ROOT}" ]] && git -C "${APP_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
