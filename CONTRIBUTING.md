@@ -13,7 +13,6 @@ bash .ci/run-tests.sh all
 ```
 
 The command runs the 118-workload Docker end-to-end tests, the Attribution Library, Attribution Service, and Blueprint Python suites, then tests and builds the Blueprint frontend. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
-The command validates the 118-workload Docker quickstart, runs the Attribution Library, Attribution Service, and Blueprint Python suites, then tests and builds the Blueprint frontend. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
 
 ## Install the pre-commit hook
 
