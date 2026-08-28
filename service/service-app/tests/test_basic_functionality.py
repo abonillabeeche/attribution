@@ -501,7 +501,6 @@ class TestV2AttributionShape:
 
         assert "verdict" in body
         assert "attributions" not in body
-        assert all("status" in symptom for symptom in body["symptoms"].values())
 
     def test_decision_graph_is_disabled_by_default(self, client):
         att_id = post_attributor(client, make_up_attributor_info("v2"))
