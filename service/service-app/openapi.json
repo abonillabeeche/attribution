@@ -481,6 +481,18 @@
               "title": "Include Decision Graph"
             },
             "description": "Include the runtime Decision DAG in the verdict."
+          },
+          {
+            "name": "include_interesting",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include symptoms and node bindings that were demoted to supporting evidence.",
+              "default": false,
+              "title": "Include Interesting"
+            },
+            "description": "Include symptoms and node bindings that were demoted to supporting evidence."
           }
         ],
         "responses": {
@@ -783,6 +795,18 @@
               "title": "Include Decision Graph"
             },
             "description": "Include the runtime Decision DAG in the verdict."
+          },
+          {
+            "name": "include_interesting",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include symptoms and node bindings that were demoted to supporting evidence.",
+              "default": false,
+              "title": "Include Interesting"
+            },
+            "description": "Include symptoms and node bindings that were demoted to supporting evidence."
           }
         ],
         "responses": {
@@ -1961,6 +1985,9 @@
             "type": "string",
             "title": "Node"
           },
+          "status": {
+            "$ref": "#/components/schemas/SymptomStatus"
+          },
           "source": {
             "$ref": "#/components/schemas/AttributionSource"
           }
@@ -1968,6 +1995,7 @@
         "type": "object",
         "required": [
           "node",
+          "status",
           "source"
         ],
         "title": "NodeSource",
@@ -2120,12 +2148,16 @@
             "title": "Type",
             "default": "ResourcelessSource"
           },
+          "status": {
+            "$ref": "#/components/schemas/SymptomStatus"
+          },
           "source": {
             "$ref": "#/components/schemas/AttributionSource"
           }
         },
         "type": "object",
         "required": [
+          "status",
           "source"
         ],
         "title": "ResourcelessSource",
@@ -2354,6 +2386,15 @@
         ],
         "title": "SwitchAttribution",
         "description": "Switch-specific attribution; details TBD"
+      },
+      "SymptomStatus": {
+        "type": "string",
+        "enum": [
+          "bad",
+          "interesting"
+        ],
+        "title": "SymptomStatus",
+        "description": "Whether a source still drives attribution, or was demoted to supporting evidence."
       },
       "TimeInterval": {
         "properties": {

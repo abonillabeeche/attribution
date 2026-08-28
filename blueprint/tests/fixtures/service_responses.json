@@ -28,6 +28,7 @@
         {
           "type": "NodeSource",
           "node": "node-001",
+          "status": "bad",
           "source": {
             "observation_id": 2681252656797335323,
             "source": "syslog",
