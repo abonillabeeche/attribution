@@ -49,7 +49,7 @@ from attribution_lib.rules import (
     rule_processor,
 )
 from attribution_lib.sources import Source, SourceSet
-from attribution_lib.utils import get_hostname
+from attribution_lib.utils import get_hostname, matches_ignored_hostname_prefix
 
 # User should not overwrite these NCCL parameters
 NCCL_PARAMS_OVERWRITE_FORBIDDEN = [
@@ -481,11 +481,12 @@ def ibv_modify_qp_failed_event(
 def connection_closed_by_remote_peer_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    peer_node = get_hostname(groups["hostname"])
-    short_peer = peer_node.split(".")[0]
-    if attribution_lib.ignored_hostname_prefixes:
-        if any(short_peer.startswith(p) for p in attribution_lib.ignored_hostname_prefixes):
-            return []
+    raw_peer = groups["hostname"]
+    peer_node = get_hostname(raw_peer)
+    # Match the resolved identity and the raw log peer. Do not split IPs on
+    # dots: that is a hostname FQDN strip, and it turns 192.0.2.1 into "192".
+    if matches_ignored_hostname_prefix(peer_node) or matches_ignored_hostname_prefix(raw_peer):
+        return []
     return [_bad(peer_node, "Connection closed", source, demotion="Connection closed by remote peer")]
 
 

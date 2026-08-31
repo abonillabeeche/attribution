@@ -12,12 +12,14 @@ from unittest.mock import patch
 
 import pytest
 
+import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions, _normalize_node
 from attribution_lib.sources import SourceSet
 from attribution_lib.utils import (
     applog_extract_node_rank,
     convert_hostname_to_short_format,
     get_hostname,
+    matches_ignored_hostname_prefix,
     syslog_extract_node,
 )
 
@@ -111,6 +113,34 @@ class TestConvertHostnameToShortFormat:
     def test_regular_hostnames(self, input_hostname, expected):
         """Test regular hostname handling."""
         assert convert_hostname_to_short_format(input_hostname) == expected
+
+
+class TestMatchesIgnoredHostnamePrefix:
+    """Ignored prefixes match short hostnames and full IPs, not IPv4 first octets."""
+
+    def test_hostname_prefix_matches_short_and_fqdn(self):
+        prefixes = ["scanner-"]
+        assert matches_ignored_hostname_prefix("scanner-001", prefixes)
+        assert matches_ignored_hostname_prefix("scanner-001.example.com", prefixes)
+        assert not matches_ignored_hostname_prefix("compute-node-003", prefixes)
+
+    def test_unmapped_ipv4_matches_full_address_not_first_octet(self):
+        """Splitting 192.0.2.1 on dots yields '192' and never matches the address."""
+        prefixes = ["192.0.2.1"]
+        assert matches_ignored_hostname_prefix("192.0.2.1", prefixes)
+        assert not matches_ignored_hostname_prefix("192.0.2.1", ["scanner-"])
+        assert "192.0.2.1".split(".")[0] == "192"
+        assert not "192".startswith("192.0.2.1")
+
+    def test_unmapped_ipv6_matches_full_address(self):
+        prefixes = ["2001:db8::1"]
+        assert matches_ignored_hostname_prefix("2001:db8::1", prefixes)
+        assert not matches_ignored_hostname_prefix("2001:db8::2", prefixes)
+
+    def test_defaults_to_library_prefix_list(self):
+        with patch.object(attribution_lib, "ignored_hostname_prefixes", ["scanner-"]):
+            assert matches_ignored_hostname_prefix("scanner-001")
+            assert not matches_ignored_hostname_prefix("compute-node-003")
 
 
 class TestApplogExtractNodeRank:
