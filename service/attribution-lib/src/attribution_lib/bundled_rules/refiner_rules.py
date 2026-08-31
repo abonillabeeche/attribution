@@ -80,6 +80,9 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
+    # Combine only the scheduler failure and surviving independent epilog
+    # non-response evidence after more specific per-node causes are scrubbed.
+    "CorroboratedNodeFailure",
 ]
 
 _SCRUB_BASE = FilterPriority.SCRUB
@@ -281,10 +284,12 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 
 # Symptoms that mean the node became unusable mid-job. Used by cascade-scrub
 # rules whose root cause is "the node went away."
+_CORROBORATED_NODE_FAILURE = "Corroborated node failure"
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
         "Node not responding",
+        _CORROBORATED_NODE_FAILURE,
         "Node unexpectedly rebooted",
     }
 )
@@ -353,6 +358,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%CE deadlock DETECTED%",
     "%JSONDecodeError%",
     "%Node failure reported by slurm%",
+    "%Corroborated node failure%",
     "%Power Supply Unit failure%",
     "%System is powering down%",
     "%EOFError: Ran out of input%",
@@ -672,6 +678,45 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
         # Error 803 is the specific cause behind the generic device-count failure.
         if "cudaErrorSystemDriverMismatch" in my_bad_nodes[k]:
             my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+
+
+@refiner_def(
+    name="CorroboratedNodeFailure",
+    author="NVIDIA Attribution team",
+    priority=_priority("CorroboratedNodeFailure"),
+)
+def corroborated_node_failure_refiner(context: RefinerContext):
+    """Combine independent scheduler and epilog failure evidence on one node.
+
+    A SLURM ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
+    the epilog health check independently reports that the same node did not
+    respond, emit the stronger ``Corroborated node failure`` symptom. A
+    scheduler-derived node reason is not independent evidence and must not
+    trigger this composite.
+    """
+    my_bad_nodes = context.my_bad_nodes
+    if my_bad_nodes is None:
+        return
+
+    slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
+    node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
+    epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
+
+    for _node, node_group in my_bad_nodes.items():
+        node_attributions = node_group.attributions
+        if slurm_failure not in node_attributions or node_not_responding not in node_attributions:
+            continue
+
+        epilog_sources = [source for source in node_attributions[node_not_responding] if source.rule == epilog_rule]
+        if not epilog_sources:
+            continue
+
+        combined_sources = SourceSet(_CORROBORATED_NODE_FAILURE)
+        for source in node_attributions[slurm_failure]:
+            combined_sources.add(source)
+        for source in epilog_sources:
+            combined_sources.add(source)
+        node_group.add(combined_sources)
 
 
 # Raw-keyword promotion rules
