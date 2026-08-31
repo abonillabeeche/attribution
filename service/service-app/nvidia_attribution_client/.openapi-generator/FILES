@@ -51,6 +51,7 @@ nvidia_attribution_client/models/sourced_symptom.py
 nvidia_attribution_client/models/storage_attribution.py
 nvidia_attribution_client/models/straggler_attribution.py
 nvidia_attribution_client/models/switch_attribution.py
+nvidia_attribution_client/models/symptom_status.py
 nvidia_attribution_client/models/symptoms_value_inner.py
 nvidia_attribution_client/models/time_interval.py
 nvidia_attribution_client/models/unknown_attributor_id_error.py

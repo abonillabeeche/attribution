@@ -16,11 +16,15 @@
 # model the API returns. The client is committed to the repo, so the resulting
 # diff belongs in the same PR as the change that caused it.
 #
-#     ./openapi/generate-client.sh [output-root]
+#     ./openapi/generate-client.sh [--fail-on-change] [output-root]
 #
 # output-root defaults to this project directory, so the spec and client land
 # where they are committed. The drift check passes a scratch directory instead,
 # to verify the committed output without rewriting the working tree.
+#
+# --fail-on-change regenerates in place as usual but exits non-zero if that
+# changed anything, so the pre-commit hook repairs the client and still stops the
+# commit.
 #
 # Everything the generator needs is pinned in this project's uv.lock.
 
@@ -28,6 +32,12 @@ set -euo pipefail
 
 TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(dirname "${TOOL_DIR}")"
+
+FAIL_ON_CHANGE=0
+if [[ "${1:-}" == "--fail-on-change" ]]; then
+    FAIL_ON_CHANGE=1
+    shift
+fi
 
 PACKAGE_NAME="nvidia_attribution_client"
 OUTPUT_ROOT="${1:-${APP_ROOT}}"
@@ -87,15 +97,25 @@ mv "${STAGING_DIR}" "${CLIENT_DIR}"
 
 echo "==> done"
 
+# Hooks inherit GIT_DIR without GIT_WORK_TREE, which makes the calls below treat
+# this subdirectory as the repository root and report every file as untracked.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 # Only meaningful when the output landed in the repo; a scratch run has nothing
 # for git to compare against.
 if [[ "${OUTPUT_ROOT}" == "${APP_ROOT}" ]] && git -C "${APP_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
-    # --porcelain lists untracked files too, which a plain `git diff` would miss.
-    CHANGED="$(git -C "${APP_ROOT}" status --porcelain -- "${CLIENT_DIR}" "${SPEC}")"
-    if [[ -n "${CHANGED}" ]]; then
+    CHANGED="$(
+        git -C "${APP_ROOT}" diff --name-only -- "${CLIENT_DIR}" "${SPEC}"
+        git -C "${APP_ROOT}" ls-files --others --exclude-standard -- "${CLIENT_DIR}" "${SPEC}"
+    )"
+    if [[ -z "${CHANGED}" ]]; then
+        echo "no changes; client was already up to date"
+    elif (( FAIL_ON_CHANGE )); then
+        echo "error: the client was out of date and has been regenerated. Stage it:" >&2
+        echo "${CHANGED}" >&2
+        exit 1
+    else
         echo "changed:"
         echo "${CHANGED}"
-    else
-        echo "no changes; client was already up to date"
     fi
 fi
