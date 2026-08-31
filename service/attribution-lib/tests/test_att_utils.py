@@ -141,6 +141,8 @@ class TestMatchesIgnoredHostnamePrefix:
         with patch.object(attribution_lib, "ignored_hostname_prefixes", ["scanner-"]):
             assert matches_ignored_hostname_prefix("scanner-001")
             assert not matches_ignored_hostname_prefix("compute-node-003")
+        with patch.object(attribution_lib, "ignored_hostname_prefixes", []):
+            assert not matches_ignored_hostname_prefix("scanner-001")
 
 
 class TestApplogExtractNodeRank:
