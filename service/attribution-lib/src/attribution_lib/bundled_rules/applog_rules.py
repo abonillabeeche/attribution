@@ -20,7 +20,6 @@ eliminating the need for applog_to_symptom.py and the dynamic dictionary buildin
 
 import json
 import re
-import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -278,11 +277,7 @@ def client_socket_timeout_event(
 def got_completion_from_peer_new_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
 
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
@@ -330,11 +325,7 @@ def got_completion_from_peer_new_event(
 def got_completion_from_peer_old_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
 
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
@@ -382,11 +373,7 @@ def irrecoverable_net_ib_communicator_error_event(
     if local_node is None or local_node == "":
         local_node = node
 
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
     rule_name = "Irrecoverable NET/IB communicator error"
 
@@ -439,11 +426,7 @@ def ibv_modify_qp_failed_event(
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
     remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
 
-    try:
-        peer_node = get_hostname(remote_ip)
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {remote_ip}: {e}")
-        peer_node = remote_ip
+    peer_node = get_hostname(remote_ip)
 
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
