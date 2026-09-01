@@ -55,6 +55,30 @@ def convert_hostname_to_short_format(hostname: str) -> str:
     return hostname
 
 
+def matches_ignored_hostname_prefix(peer: str, prefixes: Optional[Iterable[str]] = None) -> bool:
+    """Return True if *peer* should be skipped by ignored hostname prefixes.
+
+    Hostnames are compared in short form (first DNS label), so
+    ``scanner-001.example.com`` matches prefix ``scanner-``. IP addresses are
+    compared in full; they are not split on dots.
+
+    Args:
+        peer: Hostname or IP after node resolution, or the raw peer string
+            from a log line.
+        prefixes: Prefixes to test. Defaults to
+            ``attribution_lib.ignored_hostname_prefixes``.
+
+    Returns:
+        True if the peer matches an ignored prefix and should be excluded.
+    """
+    if prefixes is None:
+        prefixes = attribution_lib.ignored_hostname_prefixes
+    if not prefixes:
+        return False
+    identity = convert_hostname_to_short_format(peer)
+    return any(identity.startswith(prefix) for prefix in prefixes)
+
+
 def get_hostname(ip_or_hostname: str) -> str:
     """Resolve a node identifier without consulting network services.
 
