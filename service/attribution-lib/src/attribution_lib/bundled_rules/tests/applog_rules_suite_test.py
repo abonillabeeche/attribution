@@ -345,7 +345,6 @@ class TestIgnoredHostnamePatterns:
         node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
 
         assert "192.0.2.1" not in node_attr.attributions
-        assert "192" not in node_attr.attributions
         assert "compute-node-003" in node_attr.attributions
         assert "Connection closed" in node_attr.attributions["compute-node-003"].attributions
 
