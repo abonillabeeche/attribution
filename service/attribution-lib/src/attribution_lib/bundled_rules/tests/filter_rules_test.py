@@ -132,9 +132,41 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     rows_100 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
     assert rows_100[0][0] == 0
 
-    # New interesting event should be created for 100
-    rows_int = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [int_id])
-    assert rows_int[0][0] == 1
+    # New interesting event should preserve source data and use the demotion
+    # rule as provenance, while removing the marker from its payload.
+    rows_int = stream.query_raw(
+        """
+        SELECT
+            e.status,
+            e.timestamp,
+            e.line_num,
+            e.source_datum,
+            e.resources,
+            e.obs_context_id,
+            json_extract_string(e.payload, '$.node'),
+            json_extract_string(e.payload, '$.symptom'),
+            json_exists(e.payload, '$.AFTER_MFU_DEMOTION'),
+            r.name
+        FROM events e
+        LEFT JOIN rules r ON r.id=e.source_rule
+        WHERE e.event_type=? AND e.line_num=100
+        """,
+        [int_id],
+    )
+    assert rows_int == [
+        (
+            1,
+            t1,
+            100,
+            "dummy line",
+            '"AllJobResources"',
+            obs_ctx.id,
+            "node01",
+            "(non-fatal) some error",
+            False,
+            "test_demote",
+        )
+    ]
 
     # Event at 200 is after MFU. Should remain bad.
     rows_200 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=200", [bad_id])
