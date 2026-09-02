@@ -264,11 +264,12 @@ class Format(str, Enum):
         - `resources` (optional): What this entry is about. Either the exact string `"AllJobResources"`
           or an array naming exactly one `{"kind": "node", "hostname": ...}`, optionally alongside
           `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. Absent,
-          null and `"AllJobResources"` all record every job resource. Any array that does not name
-          exactly one node the job owns singles out no node. For exmaple, `[]`, several nodes, replicas
-          with no node, or a hostname outside the job all fall here — and any source that requires a node
-          drops that entry while the rest of the array is still processed.
-      - An entry carrying any other key is rejected.
+          null and `"AllJobResources"` all mean every job resource, so they single out no node. Neither
+          does an array that fails to name exactly one node the job owns — for example `[]`, several
+          nodes, replicas with no node, or a hostname outside the job. Singling out no node is what
+          decides the entry's fate: a source that requires one drops it, a source that does not records
+          it against every job resource. Either way the rest of the array is still processed.
+      - Any other key in an entry is permitted but ignored.
 
       Unlike every other format, entries here are only time-filtered by the observation context's
       `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on

@@ -749,7 +749,9 @@ class TestTimeseriesEntry:
             pytest.param([{"kind": "replica", "name": "worker-0"}], id="replica_without_a_node"),
         ],
     )
-    def test_an_entry_naming_anything_but_one_job_node_raises_unknown_resource_error(self, timeseries_context, syslog_job_info, declared):
+    def test_an_entry_naming_anything_but_one_job_node_raises_unknown_resource_error(
+        self, timeseries_context, syslog_job_info, declared
+    ):
         entry_obj = only_entry(timeseries_context, declared)
 
         with pytest.raises(UnknownResourceError):
