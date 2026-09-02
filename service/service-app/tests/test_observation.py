@@ -265,6 +265,12 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
         {"ts": 1744734437830498000, "resources": [{"kind": "node", "hostname": JOB_NODE}], "body": "first"},
         {"body": "only a body"},
         {"body": "third", "resources": "AllJobResources"},
+        {"body": "explicit nulls", "ts": None, "resources": None},
+        {"body": "empty resources", "resources": []},
+        {
+            "body": "node beside a replica",
+            "resources": [{"kind": "node", "hostname": JOB_NODE}, {"kind": "replica", "name": "worker0"}],
+        },
     ]
     observation = Observation(
         context=ObservationContext(
@@ -285,6 +291,15 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
     # Absent optional keys decode as nulls rather than going missing.
     assert lines[1] == {"body": "only a body", "ts": None, "resources": None}
     assert lines[2]["resources"] == "AllJobResources"
+    # An explicit null is indistinguishable from an absent key once decoded.
+    assert lines[3] == lines[1] | {"body": "explicit nulls"}
+    # An empty array stays empty; it does not collapse to null or to AllJobResources.
+    assert lines[4]["resources"] == []
+    # A replica rides along beside the node, each keyed by its own identifying field.
+    assert lines[5]["resources"] == [
+        {"kind": "node", "key": JOB_NODE, "hostname": JOB_NODE},
+        {"kind": "replica", "key": "worker0", "name": "worker0"},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -314,5 +329,6 @@ def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
         ),
     )
 
+    assert response.status_code == 400, reason
     assert response.json()["model_type"] == "InvalidObservationBodyError", reason
 
