@@ -2400,13 +2400,27 @@
       "TimeInterval": {
         "properties": {
           "start": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Start"
           },
           "end": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "End"
           }
         },
@@ -2415,7 +2429,8 @@
           "start",
           "end"
         ],
-        "title": "TimeInterval"
+        "title": "TimeInterval",
+        "description": "The window an observation declares it covers.\n\nBoth keys are required, so a payload that omits one is a validation error rather than unbounded.\nA null bound means unbounded on that side, and only the `entry_timeseries` format accepts one."
       },
       "UnknownAttributorIdError": {
         "properties": {
