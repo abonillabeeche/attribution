@@ -34,17 +34,20 @@ Primary data for attribution comes from logs, metrics, and telemetry. It is impo
 
 ### State management
 
-Attribution stores the bulk of its state in a relational database. The is non-normatively done in an in-memory database, with tables for rules & events. (Event tables are per-job)
+Attribution stores the bulk of its state in a relational database. The current implementation uses an in-memory database with lookup tables and a shared `events` table. Code accesses the rows for one job through an `EventStream`; throughout this document, **event stream** refers to that per-job interface and **`events` table** refers specifically to its database storage.
 
-The `events` table is the one that grows per-job:
+The `events` table is the only table that grows with job data:
 
 <div align="center">
 
 ```mermaid
 erDiagram
+    accTitle: Events table schema
+    accDescr: The per-job events table stores event identity, type, status, provenance, associated resources, observation context, and a JSON payload.
+
     EVENTS {
         int id PK
-        int context_id FK
+        int context_id PK, FK
         int event_type FK
         timestamptz timestamp
         int status
@@ -105,8 +108,13 @@ Still other events are used to indicate that an anomaly, but not necessarily a f
 
 Attribution is essentially the structured application of a series of rules. Rules have unique names and some metadata that indicate their type and provenance. The rule loader deserializes and initializes rule objects from storage, then passes them to the rule engine for execution.
 
+<div align="center">
+
 ```mermaid
 classDiagram
+    accTitle: Rule type hierarchy
+    accDescr: All rule types share identifying and provenance metadata. Extractors match observations, filters and refiners have execution priorities, and collectors format supplemental results.
+
     class Rule {
         name
         author
@@ -115,27 +123,31 @@ classDiagram
     }
     class ExtractorRule {
         match_re
-        processor
+        source_filters
+    }
+    class ExtractorAccumulatorRule {
+        match_re
+        factory
         source_filters
     }
     class FilterRule {
-        processor
         priority
     }
     class RefinerRule {
-        processor
         priority
     }
     class CollectorRule {
-        processor
         formatter
         params_model
     }
     Rule <|-- ExtractorRule
+    Rule <|-- ExtractorAccumulatorRule
     Rule <|-- FilterRule
     Rule <|-- RefinerRule
     Rule <|-- CollectorRule
 ```
+
+</div>
 
 Every rule, regardless of type, carries a unique `name`, an `author`, and a `location` (source file and line it was defined at, for provenance/debugging). Filter and refiner rules additionally carry a `priority` that places them into the strata described in [Phase 2: Filtering](#phase-2-filtering) and [Phase 3: Refinement](#phase-3-refinement). See [Rule Types](#rule-types) below for the full detail of each rule type.
 
@@ -153,7 +165,35 @@ While we typically think of attribution as a monolithic entity, it is sometimes 
 
 <div align="center">
 
-![Either ingest() or attribute() can be called, in any order, any number of times](images/ingest-attribution-cycle.svg)
+```mermaid
+flowchart LR
+    accTitle: Independent ingestion and attribution calls
+    accDescr: The client passes observations to ingest, which appends extracted events to the per-job event stream. The client separately invokes attribute, which reads the current event state and returns an AttributionResult to the client.
+
+    CLIENT["Client"]
+
+    subgraph API["Attributor"]
+        INGEST["ingest()<br/>or ingest_batch()"]
+        ATTRIBUTE["attribute()"]
+    end
+
+    EVENTS[("Event stream<br/>(per job)")]
+
+    CLIENT -->|observations| INGEST
+    INGEST -->|append events| EVENTS
+    CLIENT -->|invoke| ATTRIBUTE
+    ATTRIBUTE -->|read current state| EVENTS
+    ATTRIBUTE -.->|AttributionResult| CLIENT
+
+    classDef client fill:#f6f8fa,stroke:#57606a,color:#24292f,stroke-width:1.5px
+    classDef action fill:#f3f0ff,stroke:#8250df,color:#24292f,stroke-width:2px
+    classDef data fill:#f3f0ff,stroke:#8250df,color:#24292f,stroke-width:2px
+
+    style API fill:#f8f4ff,stroke:#8250df,color:#24292f,stroke-width:1.5px
+    class CLIENT client
+    class INGEST,ATTRIBUTE action
+    class EVENTS data
+```
 
 </div>
 
@@ -167,16 +207,45 @@ Naturally, attribution prior to any ingestion will have no useful information, a
 
 There are distinct, ordered phases to the attribution process. Each of these deals with a different type of data and uses a different type of rule to effect action in the system. 
 
+<div align="center">
+
 ```mermaid
 flowchart TD
-    E["Extraction<br/>(extractor / extractor-accumulator rules)"] --> F["Filtering<br/>(filter rules, priority EARLY..LATE)"]
-    F --> S["Refinement: SCRUB<br/>(per-node symptoms)"]
-    S --> FI["Refinement: FINAL<br/>(job-wide symptoms)"]
-    FI --> OC[Outcome mapping]
-    OC --> PO["Refinement: POST_OUTCOME<br/>(outcome + remaining symptoms)"]
-    PO --> C["Collection<br/>(collector rules)"]
-    C --> RPT[Reporting]
+    accTitle: Attribution processing phases
+    accDescr: Extraction creates events, filtering processes them, refinement reduces symptoms and selects an outcome, collection gathers supplemental data, and reporting returns the result.
+
+    E["Extraction<br/>(extractor and accumulator rules)"]
+    F["Filtering<br/>(EARLY → MID → STANDARD → LATE)"]
+
+    subgraph REF["Refinement"]
+        direction TD
+        S["SCRUB<br/>(per-node symptoms)"] --> FI["FINAL<br/>(job-wide symptoms)"]
+        FI --> OC["Map outcome"]
+        OC --> PO["POST_OUTCOME<br/>(outcome + remaining symptoms)"]
+    end
+
+    C["Collection<br/>(collector rules)"]
+    RPT["Reporting"]
+
+    E --> F --> REF
+    REF --> C --> RPT
+
+    classDef extraction fill:#dcecff,stroke:#3b6fb6,color:#24292f,stroke-width:2px
+    classDef filtering fill:#fff0cc,stroke:#a86614,color:#24292f,stroke-width:2px
+    classDef refinement fill:#ede3ff,stroke:#805ad5,color:#24292f,stroke-width:2px
+    classDef collection fill:#ddf5ee,stroke:#2f855a,color:#24292f,stroke-width:2px
+    classDef reporting fill:#e7eef3,stroke:#526d82,color:#24292f,stroke-width:2px
+
+    style REF fill:#f8f4ff,stroke:#805ad5,color:#24292f,stroke-width:2px
+
+    class E extraction
+    class F filtering
+    class S,FI,OC,PO refinement
+    class C collection
+    class RPT reporting
 ```
+
+</div>
 
 ### Phase 1: Extraction
 
@@ -184,13 +253,13 @@ Most observations are at least partially unstructured; raw application logs may 
 
 The first phase is extraction, where extractor and extractor-accumulator rules are run. These tend to rely on various forms of text matching to identify and extract data that may be useful for attribution in the form of events. 
 
-Critically, the extractor phase treats the event table as write-only; this is to ensure there is no coupling or dependency between extractor rules. 
+Critically, the extractor phase treats the event stream as write-only; this is to ensure there is no coupling or dependency between extractor rules.
 
 The extractor phase lines up closely with the 'ingestion' component in the [Ingest-Attribution Cycle](#ingest-attribution-cycle); while it is not normative that observations are eagerly extracted into events, this is the natural approach. See [Extraction](#extraction) under Rule Types for the varieties of extractor rule.
 
 ### Phase 2: Filtering
 
-Filter are run next, after extractor rules. Filter rules explicitly can read and write the event table, and their role is to handle inter-event interactions. The most common example of this is when a [bad node event](#bad-nodes) is 'demoted' to an [interesting node](#interesting-nodes) because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. See [Filter](#filter) under Rule Types for the priority strata and an example rule.
+Filter are run next, after extractor rules. Filter rules explicitly can read and write the event stream, and their role is to handle inter-event interactions. The most common example of this is when a [bad node event](#bad-nodes) is 'demoted' to an [interesting node](#interesting-nodes) because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. See [Filter](#filter) under Rule Types for the priority strata and an example rule.
 
 ### Phase 3: Refinement
 
@@ -206,7 +275,7 @@ There is a further sub-phase of `POST_OUTCOME` rules that take the computed outc
 
 ### Phase 4: Collections
 
-Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event table during the attribution process. This may be relevant job parameters or component versions found during the attribution process. See [Collector](#collector) under Rule Types for more detail.
+Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event stream during the attribution process. This may be relevant job parameters or component versions found during the attribution process. See [Collector](#collector) under Rule Types for more detail.
 
 ### Phase 5: Reporting
 
@@ -216,9 +285,9 @@ There not rule specific to the reporting stage; instead, remaining bad nodes are
 
 ### Extraction
 
-As mentioned above, extractor rules are used to prepare unstructured or semi-structured input data into the structured [event table](#events) used by later phases. There are a great number of extractor rules, reflecting the breadth of the space of unstructured observations. See [Phase 1: Extraction](#phase-1-extraction) for where these rules run in the overall process.
+As mentioned above, extractor rules are used to prepare unstructured or semi-structured input data into the structured [event stream](#events) used by later phases. There are a great number of extractor rules, reflecting the breadth of the space of unstructured observations. See [Phase 1: Extraction](#phase-1-extraction) for where these rules run in the overall process.
 
-Extractors are fundamentally string-oriented; they generally have a regular expression that characterizes the basic form they match on, and some logic shape the event or events they produce.  For each observation line ingested, rules engine determines which extractor rule(s) apply to it and executes them, adding the resulting events to the event table. Basic job information can be read by extractor rules, but recall that the event table is write-only during this phase.
+Extractors are fundamentally string-oriented; they generally have a regular expression that characterizes the basic form they match on, and some logic shape the event or events they produce.  For each observation line ingested, rules engine determines which extractor rule(s) apply to it and executes them, adding the resulting events to the event stream. Basic job information can be read by extractor rules, but recall that the event stream is write-only during this phase.
 
 Extractor rules are almost exclusively expressed in declarative form (TOML), with some support functions in Python plugins. 
 
@@ -306,7 +375,7 @@ This rule operates on `context.symptoms`, the aggregated job-wide symptom set, r
 
 ### Collector
 
-Collector rules read the event table and return dictionaries, generally with keys that identify semantically useful fields and bodies composed of the digested events. They are the simplest form of rule, and are run at the end of attribution. They are solely declared as Python plugins. See [Phase 4: Collections](#phase-4-collections) for where these rules run in the overall process.
+Collector rules read the event stream and return dictionaries, generally with keys that identify semantically useful fields and bodies composed of the digested events. They are the simplest form of rule, and are run at the end of attribution. They are solely declared as Python plugins. See [Phase 4: Collections](#phase-4-collections) for where these rules run in the overall process.
 
 <!-- TODO(content) cover outcome mapping -->
 <!-- TODO(content) cover checkpointing  -->
