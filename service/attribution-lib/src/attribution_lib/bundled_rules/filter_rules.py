@@ -98,14 +98,14 @@ def _sql_demote_events(
         type_id_map: Map of 'bad' type IDs to 'interesting' type IDs
     """
     # Queries below must see every event and every preloaded rule/type ID.
-    event_stream._flush()
+    event_stream.flush()
 
     demote_path = f"$.{demote_key}"
     bad_type_ids = list(type_id_map)
 
     # Demotion rules become the replacement events' provenance. Register every
     # distinct rule before the INSERT so the foreign key resolves.
-    event_stream._conn.execute(
+    event_stream.execute(
         f"""
         INSERT INTO rules (name)
         SELECT DISTINCT demote_rule
@@ -129,7 +129,7 @@ def _sql_demote_events(
         # Transform bad events into interesting events in one set operation.
         # json_merge_patch removes the demotion key when its patch value is
         # NULL, while preserving every other payload field.
-        event_stream._conn.execute(
+        event_stream.execute(
             f"""
             WITH selected AS (
                 SELECT
