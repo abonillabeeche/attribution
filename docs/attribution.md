@@ -24,7 +24,7 @@ The fundamental element in attribution is the symptom. This is a piece of concre
 
 An outcome is a category that helps identify the type of failure that occurred. Outcomes are computed from the remaining symptoms at the end of [Phase 3: Refinement](#phase-3-refinement), after the `FINAL` sub-phase and before `POST_OUTCOME`.
 
-N.B. Outcomes will become compound in the feature future, allowing a set of semantically orthogonal values to be combined.
+N.B. Outcomes will become compound in the future, allowing a set of semantically orthogonal values to be combined.
 
 ### Sources
 
@@ -199,7 +199,7 @@ flowchart LR
 
 Either call, in any order, any number of times: `ingest()`/`ingest_batch()` only extracts events (write-only, as noted above) and adds them to the stream; `attribute()` runs filtering and refinement over whatever has been ingested so far and produces a result, without consuming or requiring anything further to be ingested first.
 
-For this reason, the entire attribution process has two independent, repeatable components: ingestion, where observations are fed to the system and processed, and attribution, where attribution is preformed using whatever observations have been ingested thus for. These two operations may be performed repeatedly, in any combination of orders.
+For this reason, the entire attribution process has two independent, repeatable components: ingestion, where observations are fed to the system and processed, and attribution, where attribution is performed using whatever observations have been ingested thus for. These two operations may be performed repeatedly, in any combination of orders.
 
 Naturally, attribution prior to any ingestion will have no useful information, and it is similarly redundant to request repeated attributions without ingestion between them. Finally, ingestion without subsequent attribution leaves that data unused. 
 
@@ -259,7 +259,7 @@ The extractor phase lines up closely with the 'ingestion' component in the [Inge
 
 ### Phase 2: Filtering
 
-Filter are run next, after extractor rules. Filter rules explicitly can read and write the event stream, and their role is to handle inter-event interactions. The most common example of this is when a [bad node event](#bad-nodes) is 'demoted' to an [interesting node](#interesting-nodes) because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. See [Filter](#filter) under Rule Types for the priority strata and an example rule.
+Filters are run next, after extractor rules. Filter rules explicitly can read and write the event stream, and their role is to handle inter-event interactions. The most common example of this is when a [bad node event](#bad-nodes) is 'demoted' to an [interesting node](#interesting-nodes) because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. See [Filter](#filter) under Rule Types for the priority strata and an example rule.
 
 ### Phase 3: Refinement
 
@@ -279,7 +279,7 @@ Collector rules do not strictly affect the attribution result; instead, they exi
 
 ### Phase 5: Reporting
 
-There not rule specific to the reporting stage; instead, remaining bad nodes are collected, and the outcome, plus the root cause symptom and any collector results are formatted and returned in the attribution result. 
+There are no rules specific to the reporting stage; instead, remaining bad nodes are collected, and the outcome, plus the root cause symptom and any collector results are formatted and returned in the attribution result. 
 
 ## Rule Types
 
@@ -314,11 +314,11 @@ Extractor family rules are essentially a shorthand convenience for a group of ex
 
 #### Catalog 
 
-Extractor catalog rules exist as a way to conveniently include a catalog lookup as an compound extractor rule. There are no expanded at load time and stand as a one-to-many lookup rule.
+Extractor catalog rules exist as a way to conveniently include a catalog lookup as a compound extractor rule. There are  expanded at load time and stand as a one-to-many lookup rule.
 
 #### Extractor-Accumulator
 
-Extractor-accumulator rules are a special case that stand distinct from the usual extractor rule. They are run during the extractor phase, but they are state machines that can consider multiple lines at once. Extractor-accumulator rules have an initial trigger pattern, and then are fed subsequent lines from the same observation until the opt out. When finalized, they may produce some events. 
+Extractor-accumulator rules are a special case that stand distinct from the usual extractor rule. They are run during the extractor phase, but they are state machines that can consider multiple lines at once. Extractor-accumulator rules have an initial trigger pattern, and then are fed subsequent lines from the same observation until they opt out. When finalized, they may produce some events. 
 
 Extractor-accumulator rules are very niche and complex, and are only supported as Python plugins. 
 
@@ -384,21 +384,21 @@ Near the end of the attribution process (specifically, in the refiner phase, aft
 
 Outcome is intended to convey a category (or multiple categories) for the attribution. Each symptom has an outcome associated with it as well as a ranking. The highest-priority remaining symptom is chosen as the root cause, and the outcome selected from that.
 
-# Appendices
+## Appendices
 
-## Initialization order
+### Initialization order
 
-1. Idempotency check: if already initialized and force=True isn't passed, setup_rules() returns immediately.
-2. Resolve rule paths: defaults to the package's bundled bundled_rules/ directory unless explicit paths are given. 
+1. Idempotency check: if already initialized and force=True isn't passed, `setup_rules()` returns immediately.
+2. Resolve rule paths: defaults to the package's bundled `bundled_rules/` directory unless explicit paths are given. 
 3. Set global config: marks attribution_lib.initialized = True, stores the node-domain resolver, and optionally configures node-name-mapping / ignored-hostname-prefix settings. 
-4. RuleLoader.load_all() does the actual loading pass:
-   - Registers the four built-in rule types (collector, extractor, filter, refiner) via their @rule_type decorators.
-   - Globs the rules directory for top-level *.py and *.toml files only (non-recursive, so bundled_rules/common/*.py is never loaded directly: only imported by the top-level rule modules), sorted, skipping *.test.toml.
-   - Each .py file is exec'd fresh (module globals bound to the loader so its decorators register rules/symptoms); each .toml file goes through the declarative loader instead. Duplicate/conflicting registrations raise immediately.
-   - loader.build() freezes everything into an immutable RuleEngine.
-5. Store the engine as attribution_lib._rules_engine.
-6. Compile the symptom registry: builds the runtime GeneratedSymptomRegistry (registered symptoms, outcome rules, metadata, aliases, docs) once from the loaded declarations, stored as attribution_lib._symptom_registry. 
+4. `RuleLoader.load_all()` does the actual loading pass:
+   - Registers the four built-in rule types (collector, extractor, filter, refiner) via their `@rule_type` decorators.
+   - Globs the rules directory for top-level `*.py` and `*.toml` files only (non-recursive, so `bundled_rules/common/*.py` is never loaded directly: only imported by the top-level rule modules), sorted, skipping `*.test.toml`.
+   - Each `.py` file is exec'd fresh (module globals bound to the loader so its decorators register rules/symptoms); each `.toml` file goes through the declarative loader instead. Duplicate/conflicting registrations raise immediately.
+   - `loader.build()` freezes everything into an immutable `RuleEngine`.
+5. Store the engine as `attribution_lib._rules_engine`.
+6. Compile the symptom registry: builds the runtime `GeneratedSymptomRegistry` (registered symptoms, outcome rules, metadata, aliases, docs) once from the loaded declarations, stored as `attribution_lib._symptom_registry`. 
 
-## Checkpointing
+### Checkpointing
 
 The [Ingest-Attribution Cycle](#ingest-attribution-cycle) process is made possible by careful handling of the event table during the attribution process. Since ingestion is append-only, and attribution has stages that can cause destructive modification to the event table, we create a snapshot of the event table before beginning attribution, and we restore this checkpoint before another ingestion begins. This checkpoint can be done in-memory, as part of a database restore point, or on disk. 
