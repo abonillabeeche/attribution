@@ -377,8 +377,12 @@ This rule operates on `context.symptoms`, the aggregated job-wide symptom set, r
 
 Collector rules read the event stream and return dictionaries, generally with keys that identify semantically useful fields and bodies composed of the digested events. They are the simplest form of rule, and are run at the end of attribution. They are solely declared as Python plugins. See [Phase 4: Collections](#phase-4-collections) for where these rules run in the overall process.
 
-<!-- TODO(content) cover outcome mapping -->
-<!-- TODO(content) cover checkpointing  -->
+
+## Outcome mapping 
+
+Near the end of the attribution process (specifically, in the refiner phase, after the `FINAL` sub-phase but before `POST_OUTCOME`), the aggregate set of symptoms is collectively analyzed and the outcome for the attribution determined. 
+
+Outcome is intended to convey a category (or multiple categories) for the attribution. Each symptom has an outcome associated with it as well as a ranking. The highest-priority remaining symptom is chosen as the root cause, and the outcome selected from that.
 
 # Appendices
 
@@ -394,3 +398,7 @@ Collector rules read the event stream and return dictionaries, generally with ke
    - loader.build() freezes everything into an immutable RuleEngine.
 5. Store the engine as attribution_lib._rules_engine.
 6. Compile the symptom registry: builds the runtime GeneratedSymptomRegistry (registered symptoms, outcome rules, metadata, aliases, docs) once from the loaded declarations, stored as attribution_lib._symptom_registry. 
+
+## Checkpointing
+
+The [Ingest-Attribution Cycle](#ingest-attribution-cycle) process is made possible by careful handling of the event table during the attribution process. Since ingestion is append-only, and attribution has stages that can cause destructive modification to the event table, we create a snapshot of the event table before beginning attribution, and we restore this checkpoint before another ingestion begins. This checkpoint can be done in-memory, as part of a database restore point, or on disk. 
