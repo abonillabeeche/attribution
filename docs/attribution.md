@@ -5,23 +5,30 @@ There are many parts involved in a system that does automated job attribution: s
 
 This document aims to describe how the rule processing component of attribution works; this is the core logic that analyses the evidence available to the system and produces the report.
 
+- [Elements of Attribution](#elements-of-attribution): symptoms, outcomes, sources
+- [Attribution Process Overview](#attribution-process-overview): state, events, rules, rule engine/loader
+- [Ingest-Attribution Cycle](#ingest-attribution-cycle): calling `ingest()`/`attribute()` in any order
+- [Detailed Attribution Phases](#detailed-attribution-phases): extraction through reporting
+- [Rule Types](#rule-types): extractor, filter, refiner, collector
+- [Appendices](#appendices): initialization order
+
 ## Elements of Attribution
 
 This covers the core concepts of attribution.
 
 ### Symptoms
 
-The fundamental element in attribution is the symptom. This is a piece of concrete evidence that the attribution system recognizes. One can associate them with human-readable items like "ECC Error" or "IB Error-12", but they also carry other semantic information that is used in attribution. 
+The fundamental element in attribution is the symptom. This is a piece of concrete evidence that the attribution system recognizes. One can associate them with human-readable items like "ECC Error" or "IB Error-12", but they also carry other semantic information that is used in attribution. Symptoms are carried by [bad node and interesting node events](#bad-nodes) and are ultimately consumed by [refiner rules](#refiner) and mapped to an outcome in [Phase 3: Refinement](#phase-3-refinement).
 
 ### Outcomes
 
-An outcome is a category that helps identify the type of failure that occurred. 
+An outcome is a category that helps identify the type of failure that occurred. Outcomes are computed from the remaining symptoms at the end of [Phase 3: Refinement](#phase-3-refinement), after the `FINAL` sub-phase and before `POST_OUTCOME`.
 
 N.B. Outcomes will become compound in the feature future, allowing a set of semantically orthogonal values to be combined.
 
 ### Sources
 
-Primary data for attribution comes from logs, metrics, and telemetry. It is important to track this information throughout the attribution process, so information about the provenance of a given internal representation (symptom, outcome, event, etc) is carried with it. A source will often say from which rule the item originated, as well as the line number, time, and type of data that produced it.
+Primary data for attribution comes from logs, metrics, and telemetry. It is important to track this information throughout the attribution process, so information about the provenance of a given internal representation (symptom, outcome, event, etc) is carried with it. A source will often say from which rule the item originated, as well as the line number, time, and type of data that produced it. See [Events](#events) for how source information is represented on an event record.
 
 ## Attribution Process Overview
 
@@ -29,13 +36,62 @@ Primary data for attribution comes from logs, metrics, and telemetry. It is impo
 
 Attribution stores the bulk of its state in a relational database. The is non-normatively done in an in-memory database, with tables for rules & events. (Event tables are per-job)
 
-<!-- TODO(figure) add diagram showing basic database layout -->
+The `events` table is the one that grows per-job:
+
+<div align="center">
+
+```mermaid
+erDiagram
+    EVENTS {
+        int id PK
+        int context_id FK
+        int event_type FK
+        timestamptz timestamp
+        int status
+        int line_num
+        varchar source_datum
+        int source_rule FK
+        varchar resources
+        bigint obs_context_id FK
+        json payload
+    }
+```
+
+</div>
+
+`context_id`, `event_type`, and `source_rule` are foreign keys into `contexts`, `event_types`, and `rules` respectively: small lookup tables (string name to integer ID) that are shared/preloaded from the rule engine, so events store IDs rather than repeating strings. `obs_context_id` points at `observation_contexts`, which records the time range, source, and format of the observation batch an event came from, itself referencing `obs_sources` and `obs_formats`. `events` is the only one of these tables that grows per-job.
 
 ### Events
 
 The main objects manipulated during attributions are semi-structured records called "events"; these include source information, type information, resource association, and an unstructured "payload" that is specific to each type. 
 
-<!-- TODO(figure) add diagram showing event layout -->
+For example, the `NVRXInjectedException` extractor rule (shown in full below) would produce an event roughly like this when it matches a line of applog:
+
+```json
+{
+  "event_type": "Attribution.node.bad",
+  "timestamp": "2026-06-01T03:14:02Z",
+  "line_num": 118,
+  "source_datum": "...InjectedException: nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException...",
+  "source_rule": "NVRXInjectedException",
+  "resources": "node0042",
+  "payload": { "node": "node0042", "symptom": "NVRx synthetic fault injection" }
+}
+```
+
+A rule matching against node-metric telemetry instead of applog text might produce an "interesting node" event, whose only structural difference is the `event_type` and (typically) a less severe `symptom`:
+
+```json
+{
+  "event_type": "Attribution.node.interesting",
+  "timestamp": "2026-06-01T03:15:47Z",
+  "source_rule": "node-metric-roce-adp-retrans",
+  "resources": "node0017",
+  "payload": { "node": "node0017", "symptom": "performance_roce_adp_retrans_high" }
+}
+```
+
+There is no separate "bad node event" or "interesting node event" class; both are plain events whose `event_type` is one of a small set of well-known type names (e.g. `Attribution.node.bad`, `Attribution.node.interesting`, and peer-scoped variants like `Attribution.node.bad_peers`), which downstream code branches on when materializing per-node attributions.
 
 #### Bad nodes
 
@@ -49,11 +105,43 @@ Still other events are used to indicate that an anomaly, but not necessarily a f
 
 Attribution is essentially the structured application of a series of rules. Rules have unique names and some metadata that indicate their type and provenance. The rule loader deserializes and initializes rule objects from storage, then passes them to the rule engine for execution.
 
-<!-- TODO(figure) show required elements for rule representation -->
+```mermaid
+classDiagram
+    class Rule {
+        name
+        author
+        location
+        tags
+    }
+    class ExtractorRule {
+        match_re
+        processor
+        source_filters
+    }
+    class FilterRule {
+        processor
+        priority
+    }
+    class RefinerRule {
+        processor
+        priority
+    }
+    class CollectorRule {
+        processor
+        formatter
+        params_model
+    }
+    Rule <|-- ExtractorRule
+    Rule <|-- FilterRule
+    Rule <|-- RefinerRule
+    Rule <|-- CollectorRule
+```
+
+Every rule, regardless of type, carries a unique `name`, an `author`, and a `location` (source file and line it was defined at, for provenance/debugging). Filter and refiner rules additionally carry a `priority` that places them into the strata described in [Phase 2: Filtering](#phase-2-filtering) and [Phase 3: Refinement](#phase-3-refinement). See [Rule Types](#rule-types) below for the full detail of each rule type.
 
 ### Rule Engine
 
-As mentioned above, the rule engine accepts initialized rules from the rule loader and organizes them for execution. Attribution runs in distinct phases, as described below, and the rule engine marshals the proper rules to be executed at the correct time. It also prepares environments and contexts for rules to be applied properly, and arranges the interface with the rule & event database. 
+As mentioned above, the rule engine accepts initialized rules from the rule loader and organizes them for execution. Attribution runs in distinct phases, as described in [Detailed Attribution Phases](#detailed-attribution-phases), and the rule engine marshals the proper rules to be executed at the correct time. It also prepares environments and contexts for rules to be applied properly, and arranges the interface with the rule & event database (see [State management](#state-management)). 
 
 ### Rule Loader
 
@@ -63,7 +151,13 @@ The rule loader is responsible for  preparing rules for execution. For 'plugin'-
 
 While we typically think of attribution as a monolithic entity, it is sometimes useful to perform it incrementally; this reflects a natural pattern in production environments where some signals from a job may become available more quickly than others. It can be desirable to obtain a preliminary attribution based on whatever information is available initially, and to refine that as slower signals arrive.
 
-<!-- TODO(figure) ingestion-attribution cycle diagram -->
+<div align="center">
+
+![Either ingest() or attribute() can be called, in any order, any number of times](images/ingest-attribution-cycle.svg)
+
+</div>
+
+Either call, in any order, any number of times: `ingest()`/`ingest_batch()` only extracts events (write-only, as noted above) and adds them to the stream; `attribute()` runs filtering and refinement over whatever has been ingested so far and produces a result, without consuming or requiring anything further to be ingested first.
 
 For this reason, the entire attribution process has two independent, repeatable components: ingestion, where observations are fed to the system and processed, and attribution, where attribution is preformed using whatever observations have been ingested thus for. These two operations may be performed repeatedly, in any combination of orders.
 
@@ -73,7 +167,16 @@ Naturally, attribution prior to any ingestion will have no useful information, a
 
 There are distinct, ordered phases to the attribution process. Each of these deals with a different type of data and uses a different type of rule to effect action in the system. 
 
-<!-- TODO(figure) add diagram showing phases -->
+```mermaid
+flowchart TD
+    E["Extraction<br/>(extractor / extractor-accumulator rules)"] --> F["Filtering<br/>(filter rules, priority EARLY..LATE)"]
+    F --> S["Refinement: SCRUB<br/>(per-node symptoms)"]
+    S --> FI["Refinement: FINAL<br/>(job-wide symptoms)"]
+    FI --> OC[Outcome mapping]
+    OC --> PO["Refinement: POST_OUTCOME<br/>(outcome + remaining symptoms)"]
+    PO --> C["Collection<br/>(collector rules)"]
+    C --> RPT[Reporting]
+```
 
 ### Phase 1: Extraction
 
@@ -83,11 +186,11 @@ The first phase is extraction, where extractor and extractor-accumulator rules a
 
 Critically, the extractor phase treats the event table as write-only; this is to ensure there is no coupling or dependency between extractor rules. 
 
-The extractor phase lines up closely with the 'ingestion' component in the ingestion-attribution cycle; while it is not normative that observations are eagerly extracted into events, this is the natural approach. 
+The extractor phase lines up closely with the 'ingestion' component in the [Ingest-Attribution Cycle](#ingest-attribution-cycle); while it is not normative that observations are eagerly extracted into events, this is the natural approach. See [Extraction](#extraction) under Rule Types for the varieties of extractor rule.
 
 ### Phase 2: Filtering
 
-Filter are run next, after extractor rules. Filter rules explicitly can read and write the event table, and their role is to handle inter-event interactions. The most common example of this is when a bad node event is 'demoted' to an interesting node because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. 
+Filter are run next, after extractor rules. Filter rules explicitly can read and write the event table, and their role is to handle inter-event interactions. The most common example of this is when a [bad node event](#bad-nodes) is 'demoted' to an [interesting node](#interesting-nodes) because of some other event that occurred. Filter rules each have a priority, which are effectively used to produce discrete strata, and are applied in priority order. See [Filter](#filter) under Rule Types for the priority strata and an example rule.
 
 ### Phase 3: Refinement
 
@@ -99,11 +202,11 @@ After `SCRUB`, all remaining symptoms across all nodes are aggregated into a set
 
 After `FINAL`, the remaining symptoms are mapped to an outcome, which is used in the final report. 
 
-There is a further sub-phase of `POST_OUTCOME` rules that take the computed outcome as well as the remaining symptoms to inform the final result.
+There is a further sub-phase of `POST_OUTCOME` rules that take the computed outcome as well as the remaining symptoms to inform the final result. See [Refiner](#refiner) under Rule Types for the priority strata and an example rule.
 
 ### Phase 4: Collections
 
-Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event table during the attribution process. This may be relevant job parameters or component versions found during the attribution process. 
+Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event table during the attribution process. This may be relevant job parameters or component versions found during the attribution process. See [Collector](#collector) under Rule Types for more detail.
 
 ### Phase 5: Reporting
 
@@ -113,7 +216,7 @@ There not rule specific to the reporting stage; instead, remaining bad nodes are
 
 ### Extraction
 
-As mentioned above, extractor rules are used to prepare unstructured or semi-structured input data into the structured event table used by later phases. There are a great number of extractor rules, reflecting the breadth of the space of unstructured observations. 
+As mentioned above, extractor rules are used to prepare unstructured or semi-structured input data into the structured [event table](#events) used by later phases. There are a great number of extractor rules, reflecting the breadth of the space of unstructured observations. See [Phase 1: Extraction](#phase-1-extraction) for where these rules run in the overall process.
 
 Extractors are fundamentally string-oriented; they generally have a regular expression that characterizes the basic form they match on, and some logic shape the event or events they produce.  For each observation line ingested, rules engine determines which extractor rule(s) apply to it and executes them, adding the resulting events to the event table. Basic job information can be read by extractor rules, but recall that the event table is write-only during this phase.
 
@@ -125,7 +228,16 @@ Basic extractor rules come in three varieties:
 
 These are simply discrete extractor rules, expressing some unique pattern of interest. They stand in contrast to catalog and family-based extractor rules. 
 
-<!-- TODO(figure) example of an individual declarative extractor rule -->
+An individual extractor rule, simplified from `bundled_rules/nvrx_leaf_rules.toml`:
+
+```toml
+[[extractor]]
+name     = "NVRXInjectedException"
+match_re = 'nvidia_resiliency_ext\.shared_utils\.inject_fault\.InjectedException'
+emit     = { type = "bad_node", symptom = "NVRx synthetic fault injection" }
+```
+
+`match_re` is the pattern applied to observation lines; when it matches, `emit` describes the event the rule produces, here a bad-node event carrying the given symptom.
 
 #### Family 
 
@@ -145,17 +257,27 @@ Extractor rules are so numerous, and are applied to so many incoming lines of ob
 
 ### Filter
 
-As mentioned above, filter rules handle inter-event interactions. Filter rules most commonly demote events based on other events that have occurred. Some events produced during extraction actively indicate what types of demotion they may be eligible for, while others are demoted by markers that a given filter rule might identify---for example, a certain type of symptom. 
+As mentioned above, filter rules handle inter-event interactions. Filter rules most commonly demote events based on other events that have occurred. Some events produced during extraction actively indicate what types of demotion they may be eligible for, while others are demoted by markers that a given filter rule might identify---for example, a certain type of symptom. See [Phase 2: Filtering](#phase-2-filtering) for where these rules run in the overall process.
 
 To control the order filter rules are executed in, their definitions are accompanied by a priority, generally managed in discrete strata: `EARLY`, `MID`, `STANDARD`, `LATE`. 
 
 Filters are exclusively written as Python plugins. 
 
-<!-- TODO(figure) example filter rule -->
+A filter rule, simplified from `bundled_rules/filter_rules.py`:
+
+```python
+@filter_def(name="DemoteInsufficientPermissions", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_insufficient_permissions(context: FilterContext):
+    """Demote insufficient-permissions telemetry from bad to interesting."""
+    symptom = "NV_ERR_INSUFFICIENT_PERMISSIONS"
+    _demote_bad_by_symptom(context.event_stream, frozenset((symptom,)), "DemoteInsufficientPermissions")
+```
+
+The rule reads and writes the event stream directly via `context.event_stream`, demoting any bad-node event carrying this symptom to an interesting-node event.
 
 ### Refiner
 
-Refiner rules are focused on manipulating sets of symptoms to capture known cascading and other interactions. The intention is to reduce the number of symptoms present during the final stages of attribution for a clearer signal. 
+Refiner rules are focused on manipulating sets of [symptoms](#symptoms) to capture known cascading and other interactions. The intention is to reduce the number of symptoms present during the final stages of attribution for a clearer signal. See [Phase 3: Refinement](#phase-3-refinement) for where these rules run in the overall process.
 
 Like filter rules, refiner rules have a priority, also managed in discrete strata: `SCRUB`, `FINAL`, `POST_OUTCOME`. Unlike filter rules, the refiner priorities have distinct boundaries with different semantics.
 
@@ -163,11 +285,28 @@ Rules that are `SCRUB` or later (but before `FINAL`) operate on node-centric set
 
 Refiner rules are exclusively written as Python plugins. 
 
-<!-- TODO(figure) example filter rule -->
+A refiner rule at `FINAL` priority (job-wide symptoms), simplified from `bundled_rules/refiner_rules.py`:
+
+```python
+@refiner_def(name="Xid171Cascade", author="NVIDIA Attribution team", priority=_priority("Xid171Cascade"))
+def xid_171_cascade(context: RefinerContext):
+    """XID-171 (UNCORRECTABLE_DRAM_ERROR) -> discard less specific cascaded symptoms."""
+    symptoms = context.symptoms
+    if symptoms is None:
+        return
+    if any(sym.startswith("XID-171") for sym in symptoms.symptoms()):
+        _discard_xid_cascade_from_symptoms_and_nodes(
+            symptoms,
+            context.my_bad_nodes,
+            ["XID-48-", "XID-63-", "XID-94-", "cudaErrorContained"],
+        )
+```
+
+This rule operates on `context.symptoms`, the aggregated job-wide symptom set, rather than a single node's events, characteristic of `FINAL`-priority refiners, as opposed to `SCRUB`-priority refiners which see one node's symptoms at a time.
 
 ### Collector
 
-Collector rules read the event table and return dictionaries, generally with keys that identify semantically useful fields and bodies composed of the digested events. They are the simplest form of rule, and are run at the end of attribution. They are solely declared as Python plugins. 
+Collector rules read the event table and return dictionaries, generally with keys that identify semantically useful fields and bodies composed of the digested events. They are the simplest form of rule, and are run at the end of attribution. They are solely declared as Python plugins. See [Phase 4: Collections](#phase-4-collections) for where these rules run in the overall process.
 
 <!-- TODO(content) cover outcome mapping -->
 <!-- TODO(content) cover checkpointing  -->
