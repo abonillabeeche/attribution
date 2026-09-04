@@ -24,7 +24,7 @@ from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import DemotionTypes, EventStream, sql_placeholders
 from attribution_lib.rules import FilterContext, FilterPriority, declare_event_types, filter_def
 from attribution_lib.sources import Source
-from attribution_lib.symptoms import INFORMATIONAL_XIDS
+from attribution_lib.symptoms import INFORMATIONAL_XIDS, RegisteredSymptoms
 
 _DEMOTION_KEYS = frozenset(e.value for e in DemotionTypes)
 
@@ -636,6 +636,20 @@ def clean_informational_xids(context: FilterContext):
     _demote_bad_by_symptom(context.event_stream, INFORMATIONAL_XIDS, "CleanInformationalXids")
 
 
+@filter_def(name="DemoteNonFatalRowRemap", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_row_remap(context: FilterContext):
+    """Demote non-fatal row-remap telemetry to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset((RegisteredSymptoms.ROW_REMAP.value,)),
+        "DemoteNonFatalRowRemap",
+    )
+
+
 @filter_def(name="DemoteInsufficientPermissions", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
 def demote_insufficient_permissions(context: FilterContext):
     """Demote insufficient-permissions telemetry from bad to interesting.
@@ -673,6 +687,20 @@ def demote_buffer_too_small_journal(context: FilterContext):
         context.event_stream,
         ["NV_ERR_BUFFER_TOO_SMALL journal.c"],
         "DemoteBufferTooSmallJournal",
+    )
+
+
+@filter_def(name="DemoteNonFatalInvalidState", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_invalid_state(context: FilterContext):
+    """Demote the non-fatal osapi invalid-state symptom to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset(("NV_ERR_INVALID_STATE osapi.c",)),
+        "DemoteNonFatalInvalidState",
     )
 
 
