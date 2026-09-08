@@ -135,8 +135,9 @@ def build_doc_name_index(
     """Map every resolving documentation id to its declared names.
 
     Each docs-owned manifest entry provides a canonical id, title, aliases, and
-    redirect ids. Redirect ids inherit the canonical page's declared names while also
-    declaring their own normalized id.
+    redirect ids. Aliases mean additional emitted names covered by that page; they do
+    not imply equivalent outcomes or runtime deduplication. Redirect ids inherit the
+    canonical page's declared names while also declaring their own normalized id.
     """
     names_by_id: dict[str, set[str]] = {}
     redirect_ids_by_id: dict[str, list[str]] = {}
