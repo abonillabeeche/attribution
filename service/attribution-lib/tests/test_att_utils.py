@@ -8,6 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +21,7 @@ from attribution_lib.utils import (
     applog_extract_node_rank,
     convert_hostname_to_short_format,
     get_hostname,
+    hostname_mapping,
     matches_ignored_hostname_prefix,
     syslog_extract_node,
 )
@@ -62,6 +65,41 @@ class TestGetHostname:
         """An unmapped IPv6 address remains unresolved."""
         with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
             assert get_hostname("2001:db8::2") == "2001:db8::2"
+
+    def test_context_mapping_wins_is_copied_and_restores_after_exception(self):
+        mapping = {"192.0.2.1": "job-node"}
+        with patch.dict("attribution_lib.ip_to_nodenames", {"192.0.2.1": "configured-node"}, clear=True):
+            with pytest.raises(RuntimeError, match="stop"):
+                with hostname_mapping(mapping):
+                    mapping["192.0.2.1"] = "mutated-node"
+                    assert get_hostname("192.0.2.1") == "job-node"
+                    raise RuntimeError("stop")
+            assert get_hostname("192.0.2.1") == "configured-node"
+
+    def test_nested_context_replaces_instead_of_merging_outer_mapping(self):
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            with hostname_mapping({"192.0.2.1": "outer-node"}):
+                assert get_hostname("192.0.2.1") == "outer-node"
+                with hostname_mapping({"192.0.2.2": "inner-node"}):
+                    assert get_hostname("192.0.2.1") == "192.0.2.1"
+                    assert get_hostname("192.0.2.2") == "inner-node"
+                assert get_hostname("192.0.2.1") == "outer-node"
+
+    def test_context_mapping_is_isolated_between_threads(self):
+        barrier = Barrier(2)
+
+        def resolve(node: str) -> str:
+            with hostname_mapping({"192.0.2.1": node}):
+                barrier.wait(timeout=2)
+                return get_hostname("192.0.2.1")
+
+        with (
+            patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            results = list(executor.map(resolve, ["node-001", "node-002"]))
+
+        assert results == ["node-001", "node-002"]
 
 
 class TestConvertHostnameToShortFormat:

@@ -10,7 +10,9 @@
 
 import logging
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
@@ -23,6 +25,11 @@ if TYPE_CHECKING:
 
 import attribution_lib
 from attribution_lib.exceptions import UnawareDatetimeError
+
+_hostname_mapping_overlay: ContextVar[Mapping[str, str] | None] = ContextVar(
+    "attribution_hostname_mapping_overlay",
+    default=None,
+)
 
 
 def check_datetime(dt: datetime) -> datetime:
@@ -79,6 +86,29 @@ def matches_ignored_hostname_prefix(peer: str, prefixes: Optional[Iterable[str]]
     return any(identity.startswith(prefix) for prefix in prefixes)
 
 
+@contextmanager
+def hostname_mapping(mapping: Mapping[str, str]) -> Iterator[None]:
+    """Temporarily provide an I/O-free hostname mapping for this context.
+
+    The overlay takes precedence over the process-wide mapping configured by
+    :func:`attribution_lib.core.setup_rules`. It is copied on entry and fully
+    replaced by nested contexts, so concurrent jobs cannot observe or mutate
+    one another's mappings.
+
+    Args:
+        mapping: Node identifier overrides scoped to attribution performed
+            inside this context.
+
+    Yields:
+        None. The previous context is restored on exit, including exceptions.
+    """
+    token = _hostname_mapping_overlay.set(dict(mapping))
+    try:
+        yield
+    finally:
+        _hostname_mapping_overlay.reset(token)
+
+
 def get_hostname(ip_or_hostname: str) -> str:
     """Resolve a node identifier without consulting network services.
 
@@ -94,6 +124,9 @@ def get_hostname(ip_or_hostname: str) -> str:
         A mapped node name, normalized hostname, or the original unmapped IP.
     """
     if is_ipv4(ip_or_hostname) or is_ipv6(ip_or_hostname):
+        overlay = _hostname_mapping_overlay.get()
+        if overlay is not None and ip_or_hostname in overlay:
+            return overlay[ip_or_hostname]
         return attribution_lib.ip_to_nodenames.get(ip_or_hostname, ip_or_hostname)
     return convert_hostname_to_short_format(ip_or_hostname)
 
