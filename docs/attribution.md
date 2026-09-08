@@ -5,6 +5,8 @@ There are many parts involved in a system that does automated job attribution: s
 
 This document aims to describe how the rule processing component of attribution works; this is the core logic that analyses the evidence available to the system and produces the report.
 
+For a compact end-to-end example with concrete observations and intermediate data, see [A Small Attribution Walkthrough](attribution-walkthrough.md).
+
 - [Elements of Attribution](#elements-of-attribution): symptoms, outcomes, sources
 - [Attribution Process Overview](#attribution-process-overview): state, events, rules, rule engine/loader
 - [Ingest-Attribution Cycle](#ingest-attribution-cycle): calling `ingest()`/`attribute()` in any order

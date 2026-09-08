@@ -1,0 +1,72 @@
+name: Attribution Tour PR Preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - closed
+    paths:
+      - .github/workflows/attribution-tour-pages.yml
+      - .github/workflows/attribution-tour-preview.yml
+      - docs/attribution-tour/**
+
+# Production and preview deployments share gh-pages. Serialize their pushes so
+# one deployment cannot overwrite another deployment's branch update.
+concurrency:
+  group: attribution-tour-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pages: read
+  pull-requests: write
+
+jobs:
+  preview:
+    # Fork pull requests receive a read-only token and are not supported by the
+    # preview publisher. Same-repository branches are safe to publish here.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: linux-arm64-cpu16
+    steps:
+      - name: Check out repository
+        if: github.event.action != 'closed'
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        if: github.event.action != 'closed'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        if: github.event.action != 'closed'
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
+      - name: Install dependencies
+        if: github.event.action != 'closed'
+        working-directory: docs/attribution-tour
+        run: pnpm install --frozen-lockfile
+
+      - name: Build relocatable preview
+        if: github.event.action != 'closed'
+        working-directory: docs/attribution-tour
+        run: pnpm build --base ./ --out dist
+
+      - name: Read GitHub Pages address
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v6
+
+      - name: Publish PR preview
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          action: ${{ github.event.action == 'closed' && 'remove' || 'deploy' }}
+          source-dir: docs/attribution-tour/dist
+          preview-branch: gh-pages
+          pages-base-url: ${{ format('{0}{1}', steps.pages.outputs.host, steps.pages.outputs.base_path) }}
+          wait-for-pages-deployment: ${{ steps.pages.outcome == 'success' }}
+          qr-code: false
