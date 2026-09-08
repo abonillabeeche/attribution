@@ -12,7 +12,10 @@
 
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 from attribution_lib.symptoms.doc_validation import (
+    build_doc_name_index,
+    find_undeclared_symptom_names,
     find_unresolved_symptom_docs,
+    normalize_symptom_name,
     stale_baseline_entries,
     symptom_requires_doc,
 )
@@ -71,11 +74,10 @@ class TestFindUnresolvedSymptomDocs:
         ]
         assert find_unresolved_symptom_docs(declarations, VALID_DOC_IDS) == []
 
-    def test_baselined_slug_is_grandfathered(self):
-        # A known-missing slug in the baseline is not reported, so the gate can land
-        # without backfilling every existing gap first.
+    def test_baselined_declaration_pair_is_grandfathered(self):
         declarations = [_symptom("kernel-oops", doc="kernel-oops")]
-        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=frozenset({"kernel-oops"}))
+        baseline = frozenset({("kernel-oops", "kernel-oops")})
+        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=baseline)
         assert result == []
 
     def test_new_unresolved_still_flagged_despite_baseline(self):
@@ -83,27 +85,88 @@ class TestFindUnresolvedSymptomDocs:
             _symptom("kernel-oops", doc="kernel-oops"),
             _symptom("brand-new", doc="brand-new"),
         ]
-        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=frozenset({"kernel-oops"}))
+        baseline = frozenset({("kernel-oops", "kernel-oops")})
+        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=baseline)
         assert [d.prefix for d in result] == ["brand-new"]
 
-    def test_missing_doc_not_grandfathered_by_placeholder(self):
-        # The baseline is matched by raw slug only; a symptom with no doc slug has
-        # nothing to match on, so a placeholder-style entry must not suppress it -
-        # it keeps failing until it declares a real slug.
-        declarations = [_symptom("XID-99", doc=None)]
-        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=frozenset({"<missing-doc:XID-99>"}))
-        assert [d.prefix for d in result] == ["XID-99"]
+    def test_new_symptom_cannot_reuse_baselined_slug(self):
+        declarations = [_symptom("Brand new symptom", doc="kernel-oops")]
+        baseline = frozenset({("kernel-oops", "kernel-oops")})
+        result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=baseline)
+        assert [d.prefix for d in result] == ["Brand new symptom"]
 
 
 class TestStaleBaselineEntries:
-    def test_baseline_slug_that_now_resolves_is_reported(self):
-        # Documentation was added for a previously-missing symptom; its slug must be
-        # dropped from the baseline so the ratchet tightens.
+    def test_baseline_pair_that_now_resolves_is_reported(self):
         declarations = [_symptom("oom", doc="oom-kill-of-user-task")]
-        stale = stale_baseline_entries(declarations, VALID_DOC_IDS, frozenset({"oom-kill-of-user-task"}))
-        assert stale == ["oom-kill-of-user-task"]
+        baseline = frozenset({("oom", "oom-kill-of-user-task")})
+        stale = stale_baseline_entries(declarations, VALID_DOC_IDS, baseline)
+        assert stale == [("oom", "oom-kill-of-user-task")]
 
-    def test_still_missing_baseline_slug_is_not_stale(self):
+    def test_still_missing_baseline_pair_is_not_stale(self):
         declarations = [_symptom("kernel-oops", doc="kernel-oops")]
-        stale = stale_baseline_entries(declarations, VALID_DOC_IDS, frozenset({"kernel-oops"}))
+        baseline = frozenset({("kernel-oops", "kernel-oops")})
+        stale = stale_baseline_entries(declarations, VALID_DOC_IDS, baseline)
         assert stale == []
+
+    def test_baseline_pair_is_stale_when_declaration_disappears(self):
+        baseline = frozenset({("retired-symptom", "retired-symptom")})
+        assert stale_baseline_entries([], VALID_DOC_IDS, baseline) == [("retired-symptom", "retired-symptom")]
+
+
+def _name_index(*, aliases: list[str] | None = None) -> dict[str, frozenset[str]]:
+    return build_doc_name_index(
+        [
+            {
+                "id": "not-responding",
+                "title": "Not responding",
+                "aliases": aliases or [],
+                "redirect_ids": [],
+            }
+        ]
+    )
+
+
+class TestSymptomNameDeclarations:
+    def test_normalization_ignores_case_whitespace_and_punctuation(self):
+        assert normalize_symptom_name(" XID 48 / DBE ") == "xid-48-dbe"
+
+    def test_canonical_document_name_passes(self):
+        assert find_undeclared_symptom_names([_symptom("Not responding", doc="not-responding")], _name_index()) == []
+
+    def test_declared_alias_passes(self):
+        declarations = [_symptom("Corroborated node failure", doc="not-responding")]
+        assert (
+            find_undeclared_symptom_names(
+                declarations,
+                _name_index(aliases=["Corroborated node failure"]),
+            )
+            == []
+        )
+
+    def test_existing_but_undeclared_document_is_flagged(self):
+        declarations = [_symptom("Corroborated node failure", doc="not-responding")]
+        assert find_undeclared_symptom_names(declarations, _name_index()) == declarations
+
+    def test_dynamic_fallback_is_exempt(self):
+        declarations = [_symptom("XID-", doc="not-responding", fallback_prefix=True)]
+        assert find_undeclared_symptom_names(declarations, _name_index()) == []
+
+    def test_redirect_inherits_target_names(self):
+        index = build_doc_name_index(
+            [
+                {
+                    "id": "xid-48",
+                    "title": "XID 48",
+                    "aliases": [],
+                    "redirect_ids": ["xid-48-gpu-ecc-dbe"],
+                }
+            ]
+        )
+        assert (
+            find_undeclared_symptom_names(
+                [_symptom("XID-48", doc="xid-48-gpu-ecc-dbe")],
+                index,
+            )
+            == []
+        )
