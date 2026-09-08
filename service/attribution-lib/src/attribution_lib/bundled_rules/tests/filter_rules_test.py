@@ -132,13 +132,113 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     rows_100 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
     assert rows_100[0][0] == 0
 
-    # New interesting event should be created for 100
-    rows_int = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [int_id])
-    assert rows_int[0][0] == 1
+    # New interesting event should preserve source data and use the demotion
+    # rule as provenance, while removing the marker from its payload.
+    rows_int = stream.query_raw(
+        """
+        SELECT
+            e.status,
+            e.timestamp,
+            e.line_num,
+            e.source_datum,
+            e.resources,
+            e.obs_context_id,
+            json_extract_string(e.payload, '$.node'),
+            json_extract_string(e.payload, '$.symptom'),
+            json_exists(e.payload, '$.AFTER_MFU_DEMOTION'),
+            r.name
+        FROM events e
+        LEFT JOIN rules r ON r.id=e.source_rule
+        WHERE e.event_type=? AND e.line_num=100
+        """,
+        [int_id],
+    )
+    assert rows_int == [
+        (
+            1,
+            t1,
+            100,
+            "dummy line",
+            '"AllJobResources"',
+            obs_ctx.id,
+            "node01",
+            "(non-fatal) some error",
+            False,
+            "test_demote",
+        )
+    ]
 
     # Event at 200 is after MFU. Should remain bad.
     rows_200 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=200", [bad_id])
     assert rows_200[0][0] == 1
+
+
+def test_demote_tflops_symptoms_edge_cases(stream, obs_ctx, job_info):
+    before_mfu = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", DemotionTypes.AFTER_MFU_DEMOTION: "no-symptom-demotion"},
+        before_mfu,
+        80,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "keep active", DemotionTypes.AFTER_MFU_DEMOTION: ""},
+        before_mfu,
+        90,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.interesting",
+        {"node": "node01", "symptom": "already interesting", DemotionTypes.AFTER_MFU_DEMOTION: "discard"},
+        before_mfu,
+        100,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Application.mfu",
+        {"tflops": 100},
+        datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC")),
+        150,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    # A replacement without a symptom still drops the demotion marker.
+    replacement = stream.query_raw(
+        """
+        SELECT e.status,
+               json_exists(e.payload, '$.symptom'),
+               json_exists(e.payload, '$.AFTER_MFU_DEMOTION'),
+               r.name
+        FROM events e
+        LEFT JOIN rules r ON r.id=e.source_rule
+        WHERE e.event_type=? AND e.line_num=80
+        """,
+        [interesting_id],
+    )
+    assert replacement == [(1, False, False, "no-symptom-demotion")]
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=80", [bad_id]) == [(0,)]
+
+    # An empty demotion value is not actionable and leaves the event untouched.
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=90", [bad_id]) == [(1,)]
+    assert stream.query_raw("SELECT count(*) FROM events WHERE event_type=? AND line_num=90", [interesting_id]) == [
+        (0,)
+    ]
+
+    # Preserve the established behavior for selected types that have no
+    # bad-to-interesting mapping: deactivate them without making a replacement.
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [interesting_id]) == [(0,)]
 
 
 def test_demote_watchdog_errors(stream, obs_ctx, job_info):
