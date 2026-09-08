@@ -10,6 +10,8 @@
 
 """Tests for symptom-to-documentation resolution."""
 
+import pytest
+
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 from attribution_lib.symptoms.doc_validation import (
     build_doc_name_index,
@@ -125,6 +127,65 @@ def _name_index(*, aliases: list[str] | None = None) -> dict[str, frozenset[str]
             }
         ]
     )
+
+
+class TestDocNameIndexValidation:
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("aliases", None),
+            ("aliases", "not-a-list"),
+            ("aliases", [""]),
+            ("aliases", [123]),
+            ("redirect_ids", None),
+            ("redirect_ids", "not-a-list"),
+            ("redirect_ids", [""]),
+            ("redirect_ids", [123]),
+        ],
+    )
+    def test_rejects_malformed_manifest_collections(self, field: str, value: object):
+        entry: dict[str, object] = {
+            "id": "not-responding",
+            "title": "Not responding",
+            "aliases": [],
+            "redirect_ids": [],
+        }
+        entry[field] = value
+
+        with pytest.raises(ValueError):
+            build_doc_name_index([entry])
+
+    def test_omitted_manifest_collections_default_to_empty(self):
+        index = build_doc_name_index([{"id": "not-responding", "title": "Not responding"}])
+
+        assert index["not-responding"] == frozenset({"not-responding"})
+
+    def test_rejects_duplicate_canonical_document_ids(self):
+        entries = [
+            {"id": "not-responding", "title": "Not responding"},
+            {"id": "not-responding", "title": "Node not responding"},
+        ]
+
+        with pytest.raises(ValueError, match="duplicate documentation id"):
+            build_doc_name_index(entries)
+
+    def test_rejects_redirect_owned_by_multiple_documents(self):
+        entries = [
+            {"id": "first", "title": "First", "redirect_ids": ["legacy"]},
+            {"id": "second", "title": "Second", "redirect_ids": ["legacy"]},
+        ]
+
+        with pytest.raises(ValueError, match="maps to both"):
+            build_doc_name_index(entries)
+
+    def test_rejects_redirect_that_shadows_another_canonical_id(self):
+        entries = [
+            {"id": "first", "title": "First", "redirect_ids": ["second"]},
+            {"id": "second", "title": "Second"},
+        ]
+
+        with pytest.raises(ValueError, match="conflicts with a canonical documentation id"):
+            build_doc_name_index(entries)
 
 
 class TestSymptomNameDeclarations:

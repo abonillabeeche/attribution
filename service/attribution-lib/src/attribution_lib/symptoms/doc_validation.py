@@ -146,6 +146,8 @@ def build_doc_name_index(
         title = entry.get("title")
         if not isinstance(doc_id, str) or doc_id == "":
             continue
+        if doc_id in names_by_id:
+            raise ValueError(f"duplicate documentation id: {doc_id!r}")
         declared_names = {normalize_symptom_name(doc_id)}
         if isinstance(title, str) and title != "":
             declared_names.add(normalize_symptom_name(title))
@@ -165,9 +167,20 @@ def build_doc_name_index(
         names_by_id[doc_id] = declared_names
         redirect_ids_by_id[doc_id] = redirect_ids
 
+    redirect_owner_by_id: dict[str, str] = {}
     for doc_id, redirect_ids in redirect_ids_by_id.items():
         for redirect_id in redirect_ids:
-            names_by_id[redirect_id] = names_by_id[doc_id] | {normalize_symptom_name(redirect_id)}
+            if redirect_id in names_by_id and redirect_id != doc_id:
+                raise ValueError(
+                    f"redirect id {redirect_id!r} for {doc_id!r} conflicts with a canonical documentation id"
+                )
+            existing_owner = redirect_owner_by_id.get(redirect_id)
+            if existing_owner is not None and existing_owner != doc_id:
+                raise ValueError(f"redirect id {redirect_id!r} maps to both {existing_owner!r} and {doc_id!r}")
+            redirect_owner_by_id[redirect_id] = doc_id
+
+    for redirect_id, doc_id in redirect_owner_by_id.items():
+        names_by_id[redirect_id] = names_by_id[doc_id] | {normalize_symptom_name(redirect_id)}
 
     return {doc_id: frozenset(names) for doc_id, names in names_by_id.items()}
 
