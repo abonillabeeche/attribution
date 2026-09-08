@@ -68,11 +68,16 @@ class TestGetHostname:
 
     def test_context_mapping_wins_is_copied_and_restores_after_exception(self):
         mapping = {"192.0.2.1": "job-node"}
-        with patch.dict("attribution_lib.ip_to_nodenames", {"192.0.2.1": "configured-node"}, clear=True):
+        configured_mapping = {
+            "192.0.2.1": "configured-node",
+            "192.0.2.2": "configured-only-node",
+        }
+        with patch.dict("attribution_lib.ip_to_nodenames", configured_mapping, clear=True):
             with pytest.raises(RuntimeError, match="stop"):
                 with hostname_mapping(mapping):
                     mapping["192.0.2.1"] = "mutated-node"
                     assert get_hostname("192.0.2.1") == "job-node"
+                    assert get_hostname("192.0.2.2") == "configured-only-node"
                     raise RuntimeError("stop")
             assert get_hostname("192.0.2.1") == "configured-node"
 

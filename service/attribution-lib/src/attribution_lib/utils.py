@@ -88,7 +88,7 @@ def matches_ignored_hostname_prefix(peer: str, prefixes: Optional[Iterable[str]]
 
 @contextmanager
 def hostname_mapping(mapping: Mapping[str, str]) -> Iterator[None]:
-    """Temporarily provide an I/O-free hostname mapping for this context.
+    """Provide an I/O-free hostname mapping scoped to the current execution context.
 
     The overlay takes precedence over the process-wide mapping configured by
     :func:`attribution_lib.core.setup_rules`. It is copied on entry and fully
