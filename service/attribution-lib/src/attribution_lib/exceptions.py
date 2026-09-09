@@ -10,7 +10,7 @@
 
 """Exception hierarchy for the attribution library."""
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import ValidationError
 
@@ -297,6 +297,27 @@ class UnexpectedEmptyQueryResultError(DatabaseError):
     def __init__(self, query: str, params: Any) -> None:
         self.query = query
         self.params = params
+
+
+class StableIdCollisionError(DatabaseError):
+    """Raised when two distinct names hash to the same content-addressed id."""
+
+    def __init__(self, table: str, id_val: int, requested_name: str, persisted_name: Optional[str]) -> None:
+        self.table = table
+        self.id_val = id_val
+        self.requested_name = requested_name
+        self.persisted_name = persisted_name
+        if persisted_name is None:
+            message = (
+                f"Stable id collision in {table}: id {id_val} for {requested_name!r} "
+                f"was not found under any name after insertion (unexpected)"
+            )
+        else:
+            message = (
+                f"Stable id collision in {table}: id {id_val} is registered to "
+                f"{persisted_name!r}, but {requested_name!r} hashes to the same id"
+            )
+        super().__init__(message)
 
 
 class RuleEngineError(AttributeError):

@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import json
+import zlib
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -15,7 +16,12 @@ from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 
 import duckdb
 
-from attribution_lib.exceptions import UndeclaredEventTypeError, UndeclaredRuleError, UnexpectedEmptyQueryResultError
+from attribution_lib.exceptions import (
+    StableIdCollisionError,
+    UndeclaredEventTypeError,
+    UndeclaredRuleError,
+    UnexpectedEmptyQueryResultError,
+)
 
 if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
@@ -69,17 +75,39 @@ def sql_placeholders(count: int) -> str:
     return ",".join(["?"] * count)
 
 
-# Schema with lookup tables for string->int mappings
+def _stable_id(name: str) -> int:
+    """Content-addressed id for a lookup-table (event_types/rules/obs_sources/
+    obs_formats) name: a function of the name's own bytes only, stable across
+    processes and independent of insertion order or what other names are
+    present in the same build.
+
+    Python's built-in hash() is randomized per-process for strings
+    (PYTHONHASHSEED) specifically to prevent this kind of reliance, so
+    it cannot be used here; zlib.crc32 is not randomized. Masked into
+    DuckDB INTEGER's signed 32-bit range. A collision between two
+    different names is detected by preload(), which raises rather than
+    silently misattributing.
+
+    This is what lets from_snapshot() restore a snapshot's lookup rows
+    directly rather than needing them to match whatever a freshly built
+    EventManager happens to assign: a name's id is the same regardless of
+    which process or in what order it was computed.
+
+    """
+    return zlib.crc32(name.encode()) & 0x7FFFFFFF
+
+
+# Schema with lookup tables for string->int mappings. event_types/rules/
+# obs_sources/obs_formats ids are content-addressed (_stable_id), not
+# sequence-assigned, so they need no DEFAULT clause.
 SCHEMA = """
-CREATE SEQUENCE event_types_seq START 1;
 CREATE TABLE event_types (
-    id INTEGER PRIMARY KEY DEFAULT nextval('event_types_seq'),
+    id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL
 );
 
-CREATE SEQUENCE rules_seq START 1;
 CREATE TABLE rules (
-    id INTEGER PRIMARY KEY DEFAULT nextval('rules_seq'),
+    id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL
 );
 
@@ -89,15 +117,13 @@ CREATE TABLE contexts (
     name VARCHAR UNIQUE NOT NULL
 );
 
-CREATE SEQUENCE obs_sources_seq START 1;
 CREATE TABLE obs_sources (
-    id INTEGER PRIMARY KEY DEFAULT nextval('obs_sources_seq'),
+    id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL
 );
 
-CREATE SEQUENCE obs_formats_seq START 1;
 CREATE TABLE obs_formats (
-    id INTEGER PRIMARY KEY DEFAULT nextval('obs_formats_seq'),
+    id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL
 );
 
@@ -331,34 +357,49 @@ class _ReadOnlyLookup:
         self._str_cache: dict[int, str] = {}
 
     def preload(self, names: set[str]) -> None:
-        """Bulk-insert names and warm both caches."""
-        if not names:
+        """Bulk-insert names and warm both caches.
+
+        ids are computed directly via _stable_id() rather than assigned by
+        the database, so unlike a sequence-based scheme there's no need to
+        read the id back after insert to learn what id a name got. But
+        _stable_id() is a 31-bit hash, so two distinct names can collide: if
+        that happens, INSERT OR IGNORE silently keeps whichever name claimed
+        the id first, leaving the second name's row missing. We verify each
+        computed id actually persisted under the requested name before
+        caching anything, so a collision raises instead of silently
+        aliasing two names to one id.
+        """
+        missing = [n for n in names if n not in self._id_cache]
+        if not missing:
             return
 
-        name_list = list(names)
-        values_clause = ",".join(["(?)"] * len(name_list))
-        # INSERT OR IGNORE + RETURNING gives back only newly inserted rows
-        new_rows = self._conn.execute(
-            f"INSERT OR IGNORE INTO {self._table.value} (name) VALUES {values_clause} RETURNING name, id",
-            name_list,
+        id_by_name = {name: _stable_id(name) for name in missing}
+
+        values_clause = ",".join(["(?, ?)"] * len(missing))
+        params = [param for name in missing for param in (id_by_name[name], name)]
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO {self._table.value} (id, name) VALUES {values_clause}",
+            params,
+        )
+
+        ids = list(id_by_name.values())
+        id_placeholders = ",".join(["?"] * len(ids))
+        rows = self._conn.execute(
+            f"SELECT id, name FROM {self._table.value} WHERE id IN ({id_placeholders})",
+            ids,
         ).fetchall()
-        for name, id_val in new_rows:
+        persisted_name_by_id = {id_val: persisted_name for id_val, persisted_name in rows}
+
+        for name in missing:
+            id_val = id_by_name[name]
+            persisted_name = persisted_name_by_id.get(id_val)
+            if persisted_name != name:
+                raise StableIdCollisionError(self._table.value, id_val, name, persisted_name)
+
+        for name in missing:
+            id_val = id_by_name[name]
             self._id_cache[name] = id_val
             self._str_cache[id_val] = name
-
-        # Any names that already existed won't appear in RETURNING;
-        # look them up only if some were skipped.
-        if len(new_rows) < len(name_list):
-            missing = [n for n in name_list if n not in self._id_cache]
-            if missing:
-                placeholders = ",".join(["?"] * len(missing))
-                existing = self._conn.execute(
-                    f"SELECT name, id FROM {self._table.value} WHERE name IN ({placeholders})",
-                    missing,
-                ).fetchall()
-                for name, id_val in existing:
-                    self._id_cache[name] = id_val
-                    self._str_cache[id_val] = name
 
     def get_id(self, name: str) -> int:
         """Get ID for a preloaded name. Raises *error_type* if unknown."""
@@ -465,7 +506,13 @@ class EventManager:
 
     # Bump when DuckDB table schemas change (columns, types, new tables).
     # Snapshots written with a different version are rejected on load.
-    _SNAPSHOT_SCHEMA_VERSION = 1
+    #
+    # 1 -> 2: event_types/rules/obs_sources/obs_formats ids switched from
+    # sequence-assigned (nextval()) to content-addressed (_stable_id()). A
+    # version-1 snapshot's ids for those tables are arbitrary and have no
+    # relationship to _stable_id(name), so importing one under version-2 code
+    # would silently mix unrelated ids -- reject it instead.
+    _SNAPSHOT_SCHEMA_VERSION = 2
     _SCHEMA_VERSION_FILE = "schema_version"
 
     # All DuckDB tables in dependency-safe import order.
@@ -550,8 +597,11 @@ class EventManager:
 
         # Advance sequences past imported IDs so new inserts don't collide.
         # DuckDB lacks setval(), so we consume nextval() until we're past max(id).
-        # observation_contexts uses an externally-supplied ID, no sequence.
-        # TODO: switch to content-based IDs to eliminate sequence advancement and avoid initialization order issues.
+        # Only contexts/events still use sequences -- event_types/rules/
+        # obs_sources/obs_formats ids are content-addressed (_stable_id), so
+        # they need no advancement: a restored id and a freshly-computed one
+        # for the same name always agree. observation_contexts uses an
+        # externally-supplied ID, no sequence either.
         for table in cls._SNAPSHOT_TABLES:
             seq_name = f"{table}_seq"
             if not mgr._conn.execute("SELECT 1 FROM duckdb_sequences() WHERE sequence_name=?", [seq_name]).fetchone():

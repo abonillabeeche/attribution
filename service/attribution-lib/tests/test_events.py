@@ -15,7 +15,7 @@ import pytest
 from pydantic import AwareDatetime, BaseModel
 
 from attribution_lib.event_helpers import query_events_with_source
-from attribution_lib.events import EventManager
+from attribution_lib.events import EventManager, _stable_id
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
@@ -44,6 +44,133 @@ def sample_source(dummy_ctx):
         resources=AllJobResources,
         rule="thermal_monitor_rule",
     )
+
+
+class TestContentAddressedLookupIds:
+    """event_types/rules/obs_sources/obs_formats ids must depend only on the
+    name's own bytes, not on insertion order or what other names are present
+    in the same build -- otherwise two independently-built EventManagers
+    (e.g. across process restarts, where Python's hash-seed randomization
+    makes set iteration order differ) can silently disagree on a name's id.
+    This matters for from_snapshot(): a snapshot's ids must remain valid
+    against a freshly built EventManager, not just the one that exported it.
+    """
+
+    def test_same_name_gets_same_id_regardless_of_insertion_order(self):
+        class EngineA:
+            all_rule_names = {"rule_x", "rule_y", "rule_z"}
+            all_event_types: set[str] = set()
+
+        class EngineB:
+            all_rule_names = {"rule_z", "rule_y", "rule_x", "rule_extra"}
+            all_event_types: set[str] = set()
+
+        mgr_a = EventManager(EngineA())
+        mgr_b = EventManager(EngineB())
+        try:
+            for name in ("rule_x", "rule_y", "rule_z"):
+                assert mgr_a.rules.get_id(name) == mgr_b.rules.get_id(name), (
+                    f"{name} got different ids in two independently-built EventManagers"
+                )
+        finally:
+            mgr_a.close()
+            mgr_b.close()
+
+    def test_id_is_stable_across_separate_processes(self):
+        """Same guarantee as above, but forcing an actual separate Python
+        process (a fresh, randomized PYTHONHASHSEED) rather than relying on
+        two in-process builds to exercise the same non-determinism."""
+        import os
+        import subprocess
+        import sys
+
+        script = (
+            "from attribution_lib.events import EventManager\n"
+            "class E:\n"
+            "    all_rule_names = {'rule_x', 'rule_y', 'rule_z'}\n"
+            "    all_event_types = set()\n"
+            "mgr = EventManager(E())\n"
+            "print(mgr.rules.get_id('rule_x'), mgr.rules.get_id('rule_y'), mgr.rules.get_id('rule_z'))\n"
+            "mgr.close()\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
+        outputs = set()
+        for _ in range(3):
+            result = subprocess.run(
+                [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env
+            )
+            outputs.add(result.stdout.strip())
+        assert len(outputs) == 1, f"id assignment differed across process runs: {outputs}"
+
+        expected = " ".join(str(_stable_id(n)) for n in ("rule_x", "rule_y", "rule_z"))
+        assert outputs == {expected}, f"subprocess ids {outputs} disagree with in-process ids {expected!r}"
+
+
+class TestStableIdCollisionDetection:
+    """_stable_id() is a 31-bit hash of the name, so two distinct names can in
+    principle collide. preload() must detect this rather than silently
+    letting the second name's cache entry point at the first name's row.
+    """
+
+    def test_colliding_name_raises_instead_of_silently_aliasing(self, monkeypatch):
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = set()
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            mgr.preload_rule_names({"rule_a"})
+            colliding_id = mgr.rules.get_id("rule_a")
+
+            monkeypatch.setattr(events_module, "_stable_id", lambda name: colliding_id)
+
+            with pytest.raises(events_module.StableIdCollisionError):
+                mgr.preload_rule_names({"rule_b"})
+
+            # The cache must not have been polluted by the failed preload.
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_b")
+        finally:
+            mgr.close()
+
+    def test_collision_within_same_batch_raises(self, monkeypatch):
+        """Same guarantee, but both colliding names are new and preloaded in
+        one preload_rule_names() call -- INSERT OR IGNORE only persists one
+        of the two rows, so the other must be detected via the readback too.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = set()
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            monkeypatch.setattr(events_module, "_stable_id", lambda name: 999)
+
+            with pytest.raises(events_module.StableIdCollisionError):
+                mgr.preload_rule_names({"rule_c", "rule_d"})
+
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_c")
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_d")
+        finally:
+            mgr.close()
+
+    def test_message_when_persisted_name_is_missing(self):
+        """persisted_name is None when the id wasn't found under any name at
+        all after insertion -- an unexpected state distinct from a genuine
+        collision, so it gets its own diagnostic message.
+        """
+        from attribution_lib.exceptions import StableIdCollisionError
+
+        error = StableIdCollisionError("rules", 999, "rule_e", None)
+
+        assert "not found under any name" in str(error)
+        assert "rule_e" in str(error)
 
 
 class TestEnumPopulation:
