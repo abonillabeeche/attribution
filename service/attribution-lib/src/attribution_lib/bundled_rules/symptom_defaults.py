@@ -968,6 +968,7 @@ outcome_symptom(
     cascade_discards=(
         "Connection reset by peer",
         "Connection timed out",
+        "Broken pipe",
         "Connection closed",
         "Call to ibv_modify_qp failed",
         "Call to ibv_set_ece failed",
@@ -1136,6 +1137,7 @@ outcome_symptom(
     cascade_discards=(
         "Connection reset by peer",
         "Connection timed out",
+        "Broken pipe",
         "Connection closed",
         "Software caused connection abort",
     ),
@@ -1150,6 +1152,7 @@ outcome_symptom(
     cascade_discards=(
         "Connection reset by peer",
         "Connection timed out",
+        "Broken pipe",
         "Connection closed",
         "Software caused connection abort",
         "Call to ibv_modify_qp failed",
@@ -1590,6 +1593,13 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="connection-timed-out",
+)
+
+outcome_symptom(
+    "Broken pipe",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="broken-pipe",
 )
 
 outcome_symptom(
@@ -2335,6 +2345,7 @@ cascade_symptom(
         "ncclInternalError",
         "Connection reset by peer",
         "Connection timed out",
+        "Broken pipe",
         "Connection closed",
         "Call to ibv_modify_qp failed",
         "Call to ibv_set_ece failed",
