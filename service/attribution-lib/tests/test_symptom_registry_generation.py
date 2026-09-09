@@ -598,6 +598,8 @@ def test_generated_registry_facade_exposes_cascade_metadata():
 
     assert metadata is not None
     assert "Connection reset by peer" in metadata.cascade_discards
+    for strerror in ("Connection timed out", "Broken pipe"):
+        assert registry.resolve_symptom(strerror) in metadata.cascade_discards
     assert registry.cascade_discards_for("Call to ibv_set_ece failed") == list(metadata.cascade_discards)
 
 
