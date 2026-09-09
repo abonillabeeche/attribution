@@ -28,7 +28,8 @@ jobs:
     # Fork pull requests receive a read-only token and are not supported by the
     # preview publisher. Same-repository branches are safe to publish here.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: linux-arm64-cpu16
+    # Pull-request workflows cannot run on NVIDIA's self-hosted runners.
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         if: github.event.action != 'closed'
