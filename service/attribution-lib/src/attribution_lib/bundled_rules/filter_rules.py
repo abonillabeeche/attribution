@@ -103,22 +103,23 @@ def _sql_demote_events(
     demote_path = f"$.{demote_key}"
     bad_type_ids = list(type_id_map)
 
-    # Demotion rules become the replacement events' provenance. Register every
-    # distinct rule before the INSERT so the foreign key resolves.
-    event_stream.execute(
+    # Demotion rules become the replacement events' provenance. Resolve every
+    # distinct rule through the mgr's rules lookup rather than writing to the
+    # `rules` table directly: ids are computed by _stable_id(), not a DEFAULT
+    # column expression, so a bare INSERT omitting id would violate the NOT
+    # NULL/PRIMARY KEY constraint. preload_rule_names() does the batched
+    # insert-if-missing + cache warm.
+    demote_rule_rows = event_stream.query_raw(
         f"""
-        INSERT INTO rules (name)
-        SELECT DISTINCT demote_rule
-        FROM (
-            SELECT json_extract_string(e.payload, ?) AS demote_rule
-            FROM events e
-            WHERE {where_clause}
-        ) selected
-        WHERE COALESCE(demote_rule, '') <> ''
-        ON CONFLICT (name) DO NOTHING
+        SELECT DISTINCT json_extract_string(e.payload, ?) AS demote_rule
+        FROM events e
+        WHERE {where_clause}
         """,
         [demote_path] + params,
     )
+    demote_rule_names = {row[0] for row in demote_rule_rows if row[0]}
+    if demote_rule_names:
+        event_stream.mgr.preload_rule_names(demote_rule_names)
 
     if bad_type_ids:
         type_case_sql = " ".join(
