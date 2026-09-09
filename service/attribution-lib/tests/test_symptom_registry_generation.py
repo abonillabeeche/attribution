@@ -436,6 +436,85 @@ def test_substring_aliases_reject_empty_substring():
         substring_aliases_from_declarations(declarations)
 
 
+def test_resolution_precedence_preserves_contains_exact_and_longest_fallback_order():
+    """Lock the compatibility resolution order for the selector migration."""
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="alias", resolve_contains="[alias]"),
+            SymptomDeclaration(prefix="exact [alias]"),
+            SymptomDeclaration(prefix="family-", fallback_prefix=True),
+            SymptomDeclaration(prefix="family-special-", fallback_prefix=True),
+            SymptomDeclaration(prefix="family-exact"),
+        ]
+    )
+
+    # Contains aliases intentionally run before both exact and fallback lookup.
+    assert registry.resolve_symptom("exact [alias]") == "alias"
+    assert registry.resolve_symptom("family-dynamic [alias]") == "alias"
+    # Without an alias, exact lookup precedes fallback lookup.
+    assert registry.resolve_symptom("family-exact") == "family-exact"
+    # Overlapping fallbacks choose the longest, most-specific prefix.
+    assert registry.resolve_symptom("family-special-dynamic") == "family-special-"
+
+
+@pytest.mark.parametrize(
+    ("prefixes", "expected_prefix"),
+    [
+        (("fault", "fault-specific"), "fault"),
+        (("fault-specific", "fault"), "fault-specific"),
+    ],
+)
+def test_outcome_selection_preserves_declaration_order_within_a_tier(prefixes, expected_prefix):
+    """Lock first-declared prefix selection when one symptom matches both."""
+    declarations = [
+        SymptomDeclaration(
+            prefix=prefix,
+            outcome=f"outcome:{prefix}",
+            priority=OutcomePriority.LOW,
+        )
+        for prefix in prefixes
+    ]
+    registry = registry_from_declarations(declarations)
+
+    match = registry.outcome_for(["fault-specific detail"])
+
+    assert match is not None
+    assert match.matched_prefix == expected_prefix
+    assert match.outcome == f"outcome:{expected_prefix}"
+
+
+@pytest.mark.parametrize(
+    "symptoms",
+    [
+        ("fault-specific", "fault-z"),
+        ("fault-z", "fault-specific"),
+    ],
+)
+def test_outcome_selection_preserves_broader_same_tier_override(symptoms):
+    """Lock the broader-prefix override across distinct symptoms."""
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(
+                prefix="fault-specific",
+                outcome="specific outcome",
+                priority=OutcomePriority.LOW,
+            ),
+            SymptomDeclaration(
+                prefix="fault-",
+                outcome="family outcome",
+                priority=OutcomePriority.LOW,
+            ),
+        ]
+    )
+
+    match = registry.outcome_for(symptoms)
+
+    assert match is not None
+    assert match.symptom == "fault-z"
+    assert match.matched_prefix == "fault-"
+    assert match.outcome == "family outcome"
+
+
 def test_outcome_generation_rejects_missing_hw_cause():
     declarations = [
         SymptomDeclaration(
