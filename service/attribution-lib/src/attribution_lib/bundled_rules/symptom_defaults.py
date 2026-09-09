@@ -967,6 +967,7 @@ outcome_symptom(
     hw_cause="Fabric Manager Not Running",
     cascade_discards=(
         "Connection reset by peer",
+        "Connection timed out",
         "Connection closed",
         "Call to ibv_modify_qp failed",
         "Call to ibv_set_ece failed",
@@ -1132,7 +1133,12 @@ outcome_symptom(
     doc="call-to-ibv-modify-qp-failed",
     hw_cause="Known NCCL Cause - No retry on modify QP failure",
     fallback_prefix=True,
-    cascade_discards=("Connection reset by peer", "Connection closed", "Software caused connection abort"),
+    cascade_discards=(
+        "Connection reset by peer",
+        "Connection timed out",
+        "Connection closed",
+        "Software caused connection abort",
+    ),
 )
 
 outcome_symptom(
@@ -1143,6 +1149,7 @@ outcome_symptom(
     hw_cause="Known NCCL Cause - unstable feature or bug in a NCCL version prior 2.24",
     cascade_discards=(
         "Connection reset by peer",
+        "Connection timed out",
         "Connection closed",
         "Software caused connection abort",
         "Call to ibv_modify_qp failed",
@@ -1576,6 +1583,13 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="connection-reset-by-peer",
+)
+
+outcome_symptom(
+    "Connection timed out",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="connection-timed-out",
 )
 
 outcome_symptom(
@@ -2320,6 +2334,7 @@ cascade_symptom(
         "ncclTimeout",
         "ncclInternalError",
         "Connection reset by peer",
+        "Connection timed out",
         "Connection closed",
         "Call to ibv_modify_qp failed",
         "Call to ibv_set_ece failed",
