@@ -90,6 +90,11 @@ class TestGetHostname:
                     assert get_hostname("192.0.2.2") == "inner-node"
                 assert get_hostname("192.0.2.1") == "outer-node"
 
+    def test_empty_context_uses_configured_mapping(self):
+        with patch.dict("attribution_lib.ip_to_nodenames", {"192.0.2.1": "configured-node"}, clear=True):
+            with hostname_mapping({}):
+                assert get_hostname("192.0.2.1") == "configured-node"
+
     def test_context_mapping_is_isolated_between_threads(self):
         barrier = Barrier(2)
 
