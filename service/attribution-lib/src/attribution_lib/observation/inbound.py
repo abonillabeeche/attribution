@@ -256,7 +256,8 @@ class Format(str, Enum):
 
       Details:
       - Each entry object contains:
-        - `body` (string): *Required*. No rank-like prefix is expected or parsed.
+        - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the
+          `applog` fallbacks described below.
         - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
           has no timestamp for this entry. It means "this entry occurred no later than this time".
           Rounded up to microsecond precision internally, since that is all a `datetime` holds. An
@@ -274,6 +275,14 @@ class Format(str, Enum):
       Unlike every other format, entries here are only time-filtered by the observation context's
       `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on
       that side, so an interval of two nulls disables time filtering for the observation entirely.
+
+      Only source `applog` fills in what the producer leaves out, so a producer that has neither a
+      timestamp nor a node for a line gets exactly what `raw_log` gives it today:
+      - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against
+        the workload's `job_end_time`.
+      - `resources` absent or null: an attempt is made to read the node from the rank-like text prefix,
+        or node name prefix. A line with no usable prefix is recorded against every job resource,
+        never dropped. An explicit `"AllJobResources"` skips the prefix parse altogether.
 
       Example:
       ```json
