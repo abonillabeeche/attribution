@@ -41,7 +41,7 @@ jobs:
 
       - name: Build relocatable tour
         working-directory: docs/attribution-tour
-        run: pnpm build --base ./ --out dist
+        run: pnpm build --base /attribution-tour/ --out dist
 
       - name: Stage Pages landing page
         run: |

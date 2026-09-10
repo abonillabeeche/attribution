@@ -6,6 +6,7 @@ info: An interactive, data-driven tour of attribution-lib
 canvasWidth: 1280
 aspectRatio: 16/9
 drawings: false
+routerMode: hash
 ---
 
 <AttributionStoryboard />

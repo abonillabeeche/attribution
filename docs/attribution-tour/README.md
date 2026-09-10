@@ -52,8 +52,8 @@ The `Attribution Tour PR Preview` workflow publishes same-repository pull
 requests beneath `pr-preview/pr-<number>/`, adds a persistent preview link to
 the PR, updates the preview after each push, and removes it when the PR closes.
 Fork pull requests do not receive previews because GitHub gives them a read-only
-token. The deck uses relative asset paths, so the same build works at both the
-production and preview locations.
+token. Each workflow builds with its deployment-specific base path, and the deck
+uses hash routing so slide navigation and reloads stay inside that path.
 
 ### First-time Pages setup
 
