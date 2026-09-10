@@ -57,6 +57,25 @@ jobs:
         working-directory: docs/attribution-tour
         run: pnpm build --base ./ --out dist
 
+      # Pages requires an entry file at the publishing root. The production
+      # workflow normally creates it after merge, so bootstrap it for the first
+      # PR preview as well.
+      - name: Stage Pages landing page
+        if: github.event.action != 'closed'
+        run: |
+          mkdir -p .pages-root
+          cp docs/attribution-tour/pages-landing.html .pages-root/index.html
+
+      - name: Publish Pages landing page
+        if: github.event.action != 'closed'
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: .pages-root
+          keep_files: true
+          full_commit_message: Ensure Pages landing page exists for PR ${{ github.event.number }}
+
       - name: Read GitHub Pages address
         id: pages
         continue-on-error: true
