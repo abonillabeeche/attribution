@@ -245,6 +245,86 @@ class TestOutOfMemoryHandling:
             mgr.close()
 
 
+class TestCheckpointRestoreAtomicity:
+    """`checkpoint()`/`restore()` each run a paired DROP/CREATE or
+    DELETE/INSERT. DuckDB auto-commits each statement independently unless
+    wrapped in an explicit transaction, so if the second statement fails,
+    the first one's effect (dropping the prior checkpoint, or deleting all
+    events) would otherwise already be permanently committed.
+    """
+
+    @staticmethod
+    def _insert_event(stream, line_num):
+        stream.mgr.preload_event_types({"Test.checkpoint_event"})
+        type_id = stream.mgr.types.get_id("Test.checkpoint_event")
+        stream.execute(
+            "INSERT INTO events (context_id, event_type, status, line_num, payload) VALUES (?, ?, 1, ?, '{}')",
+            [stream.ctx_id, type_id, line_num],
+        )
+
+    def test_checkpoint_failure_rolls_back_without_destroying_prior_checkpoint(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            (count_before,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_before == 1
+
+            self._insert_event(stream, 2)
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if 'CREATE TABLE "_ckpt_v1"' in sql:
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.checkpoint("v1")
+
+            # The prior checkpoint must survive: the DROP TABLE that ran
+            # before the failing CREATE TABLE must have been rolled back too.
+            (count_after,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_after == 1
+        finally:
+            mgr.close()
+
+    def test_restore_failure_rolls_back_without_emptying_events_table(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if sql.strip().startswith("INSERT INTO events SELECT"):
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            # The DELETE FROM events that ran before the failing INSERT must
+            # have been rolled back too, not left with an emptied table.
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+
 class TestEnumPopulation:
     """Test that observation source and format enums are automatically populated."""
 

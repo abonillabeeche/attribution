@@ -82,6 +82,23 @@ def _translate_out_of_memory():
         raise EventStorageOutOfMemoryError(str(e)) from e
 
 
+@contextlib.contextmanager
+def _atomic(conn: duckdb.DuckDBPyConnection):
+    """Run a block of statements as one transaction, rolling back on any
+    failure (including `EventStorageOutOfMemoryError` from
+    `_translate_out_of_memory`) so a mid-block error can't leave a paired
+    DROP/CREATE or DELETE/INSERT half-applied.
+    """
+    conn.begin()
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+
+
 def _get_or_create_id(conn: duckdb.DuckDBPyConnection, table: TableName, name: str) -> int:
     """Get or create an ID for a string in a lookup table. Returns None if name is None."""
     with _translate_out_of_memory():
@@ -693,14 +710,14 @@ class EventManager:
         for stream in self._streams.values():
             stream.flush()
         shadow = f"_ckpt_{name}"
-        with _translate_out_of_memory():
+        with _atomic(self._conn), _translate_out_of_memory():
             self._conn.execute(f'DROP TABLE IF EXISTS "{shadow}"')
             self._conn.execute(f'CREATE TABLE "{shadow}" AS SELECT * FROM events')
 
     def restore(self, name: str) -> None:
         """Restore the events table from a previous checkpoint."""
         shadow = f"_ckpt_{name}"
-        with _translate_out_of_memory():
+        with _atomic(self._conn), _translate_out_of_memory():
             self._conn.execute("DELETE FROM events")
             self._conn.execute(f'INSERT INTO events SELECT * FROM "{shadow}"')
 
