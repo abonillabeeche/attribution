@@ -97,6 +97,89 @@ class TestSnapshotRoundTrip:
         assert rows[0][0] == "specific_datum"
         restored.close()
 
+    def test_restoring_a_name_already_in_shared_tier_does_not_duplicate(self, tmp_path, dummy_ctx):
+        """A rule name that's both in the exported snapshot and in the
+        current rules_engine's shared tier must resolve to exactly one id
+        after restore, not a duplicate row split across the shared tier
+        and a restored local overlay. `from_snapshot()` builds its shared
+        lookup db from the union of rules_engine's names and the snapshot's
+        own names (see `_SnapshotRuleNames`). Since that union is a plain
+        Python set, a name present in both collapses to one row by
+        construction, not via a runtime dedup check.
+        """
+        rules_engine = attribution_lib.get_rules_engine()
+        shared_rule_name = next(iter(rules_engine.all_rule_names))
+
+        mgr = EventManager(rules_engine=rules_engine)
+        mgr.preload_event_types({"Test.shared_rule_event"})
+        stream = mgr.create_stream("job_1")
+        stream.register_observation_context(dummy_ctx)
+        stream.add_event(
+            "Test.shared_rule_event",
+            {"k": "v"},
+            Source(
+                source_context=dummy_ctx,
+                line_num=1,
+                datum="d",
+                time=datetime.now(),
+                resources=AllJobResources,
+                rule=shared_rule_name,
+            ),
+        )
+        stream.flush()
+        mgr.export_snapshot(tmp_path / "snap")
+        original_id = mgr.rules.get_id(shared_rule_name)
+        mgr.close()
+
+        restored = EventManager.from_snapshot(tmp_path / "snap", rules_engine)
+        try:
+            (count,) = restored._conn.execute(
+                "SELECT COUNT(*) FROM rules WHERE name = ?", [shared_rule_name]
+            ).fetchone()
+            assert count == 1, f"expected exactly one row for {shared_rule_name!r}, found {count}"
+            assert restored.rules.get_id(shared_rule_name) == original_id
+        finally:
+            restored.close()
+
+    def test_restoring_a_name_not_in_current_rules_engine_still_resolves(self, tmp_path, dummy_ctx):
+        """A rule name that was only ever registered via `preload_rule_names()`
+        (never declared to rules_engine, e.g. a since-retired rule) must
+        still resolve correctly after restore, even though it's absent from
+        the current rules_engine's `all_rule_names`. `from_snapshot()` folds the
+        snapshot's own rule names into the shared lookup db it builds, not
+        just rules_engine's (see `_SnapshotRuleNames`).
+        """
+        rules_engine = attribution_lib.get_rules_engine()
+        assert "never_declared_rule" not in rules_engine.all_rule_names
+
+        mgr = EventManager(rules_engine=rules_engine)
+        mgr.preload_rule_names({"never_declared_rule"})
+        mgr.preload_event_types({"Test.retired_rule_event"})
+        stream = mgr.create_stream("job_1")
+        stream.register_observation_context(dummy_ctx)
+        stream.add_event(
+            "Test.retired_rule_event",
+            {"k": "v"},
+            Source(
+                source_context=dummy_ctx,
+                line_num=1,
+                datum="d",
+                time=datetime.now(),
+                resources=AllJobResources,
+                rule="never_declared_rule",
+            ),
+        )
+        stream.flush()
+        mgr.export_snapshot(tmp_path / "snap")
+        original_id = mgr.rules.get_id("never_declared_rule")
+        mgr.close()
+
+        restored = EventManager.from_snapshot(tmp_path / "snap", rules_engine)
+        try:
+            assert restored.rules.get_id("never_declared_rule") == original_id
+        finally:
+            restored.close()
+
     def test_lookup_helpers_work_after_import(self, tmp_path, dummy_ctx):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         _add_events(mgr, "job_1", dummy_ctx, count=2)

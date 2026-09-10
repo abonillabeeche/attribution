@@ -7,8 +7,13 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
+import atexit
 import contextlib
 import json
+import shutil
+import tempfile
+import threading
+import weakref
 import zlib
 from collections.abc import Callable
 from enum import Enum, auto
@@ -129,42 +134,29 @@ def _stable_id(name: str) -> int:
     different names is detected by preload(), which raises rather than
     silently misattributing.
 
-    This is what lets from_snapshot() restore a snapshot's lookup rows
-    directly rather than needing them to match whatever a freshly built
-    EventManager happens to assign: a name's id is the same regardless of
-    which process or in what order it was computed.
-
+    This is what lets every EventManager for a given rules_engine share one
+    read-only lookup database (see _build_shared_lookup_db below) and what
+    lets from_snapshot() restore a snapshot's lookup rows directly, without
+    needing them to match whatever a freshly built EventManager happens to
+    assign: a name's id is the same regardless of which process, in what
+    order, or how many other names were computed alongside it.
     """
     return zlib.crc32(name.encode()) & 0x7FFFFFFF
 
 
-# Schema with lookup tables for string->int mappings. event_types/rules/
-# obs_sources/obs_formats ids are content-addressed (_stable_id), not
-# sequence-assigned, so they need no DEFAULT clause.
+# Per-connection schema for the tables that are genuinely unique to this
+# EventManager instance. event_types/rules/obs_sources/obs_formats live in a
+# shared, read-only ATTACHed database instead (see _build_shared_lookup_db /
+# _LOCAL_OVERLAY_SCHEMA below), since their content is static for the
+# process's lifetime and duplicating it per instance is pure overhead. FK
+# references to those tables are dropped here since they now live in a
+# different attached catalog; the _ReadOnlyLookup class is the sole path by
+# which ids for those tables are produced (via get_id()), so referential
+# integrity is enforced there instead of by the database.
 SCHEMA = """
-CREATE TABLE event_types (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR UNIQUE NOT NULL
-);
-
-CREATE TABLE rules (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR UNIQUE NOT NULL
-);
-
 CREATE SEQUENCE contexts_seq START 1;
 CREATE TABLE contexts (
     id INTEGER PRIMARY KEY DEFAULT nextval('contexts_seq'),
-    name VARCHAR UNIQUE NOT NULL
-);
-
-CREATE TABLE obs_sources (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR UNIQUE NOT NULL
-);
-
-CREATE TABLE obs_formats (
-    id INTEGER PRIMARY KEY,
     name VARCHAR UNIQUE NOT NULL
 );
 
@@ -172,8 +164,8 @@ CREATE TABLE observation_contexts (
     id BIGINT PRIMARY KEY,
     time_start TIMESTAMPTZ,
     time_end TIMESTAMPTZ,
-    source INTEGER REFERENCES obs_sources(id),
-    format INTEGER REFERENCES obs_formats(id),
+    source INTEGER,
+    format INTEGER,
     timezone VARCHAR
 );
 
@@ -181,12 +173,12 @@ CREATE SEQUENCE events_seq START 1;
 CREATE TABLE events (
     id INTEGER DEFAULT nextval('events_seq'),
     context_id INTEGER NOT NULL REFERENCES contexts(id),
-    event_type INTEGER NOT NULL REFERENCES event_types(id),
+    event_type INTEGER NOT NULL,
     timestamp TIMESTAMPTZ,
     status INTEGER DEFAULT 1,
     line_num INTEGER,
     source_datum VARCHAR,
-    source_rule INTEGER REFERENCES rules(id),
+    source_rule INTEGER,
     resources VARCHAR,
     obs_context_id BIGINT REFERENCES observation_contexts(id),
     payload JSON,
@@ -198,6 +190,108 @@ CREATE INDEX idx_events_ctx_timestamp ON events(context_id, timestamp);
 """
 
 _COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,resources,obs_context_id,payload"
+
+# Schema for the shared, read-only lookup database ATTACHed by every
+# EventManager for a given rules_engine. Built once (see
+# _build_shared_lookup_db) and never written to again. ids are
+# content-addressed (_stable_id), not sequence-assigned, so no DEFAULT clause.
+_SHARED_LOOKUP_SCHEMA = """
+CREATE TABLE event_types (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE rules (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE obs_sources (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE obs_formats (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+"""
+
+# Small per-instance overlay for names registered after construction
+# (`preload_rule_names`/`preload_event_types`) or restored from a snapshot. ids
+# are content-addressed (`_stable_id`) exactly like the shared tier, so a
+# name's id is the same whichever tier it ends up in. The two tiers can
+# only "collide" by holding an identical (id, name) row for the same name,
+# which `preload()` and `from_snapshot()` both avoid by skipping names already
+# resolvable from the shared tier. A UNION ALL view combines both tiers
+# under the plain unqualified table name (`rules`, `event_types`, ...) so
+# existing raw-SQL joins/queries elsewhere in the codebase keep working
+# unmodified.
+_LOCAL_OVERLAY_SCHEMA = """
+CREATE TABLE local_event_types (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE local_rules (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE local_obs_sources (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+CREATE TABLE local_obs_formats (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
+
+CREATE VIEW event_types AS SELECT * FROM lookup.event_types UNION ALL SELECT * FROM local_event_types;
+CREATE VIEW rules AS SELECT * FROM lookup.rules UNION ALL SELECT * FROM local_rules;
+CREATE VIEW obs_sources AS SELECT * FROM lookup.obs_sources UNION ALL SELECT * FROM local_obs_sources;
+CREATE VIEW obs_formats AS SELECT * FROM lookup.obs_formats UNION ALL SELECT * FROM local_obs_formats;
+"""
+
+# name -> local overlay table, for the 2 lookup tables from_snapshot() still
+# restores via the local-overlay-merge path (see from_snapshot() for why
+# rules/event_types don't need this: their names are folded into the shared
+# lookup db at construction time instead, via _SnapshotRuleNames).
+_LOOKUP_LOCAL_TABLES = {
+    "obs_sources": "local_obs_sources",
+    "obs_formats": "local_obs_formats",
+}
+
+_shared_lookup_lock = threading.Lock()
+_shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, Path]" = weakref.WeakKeyDictionary()
+_shared_lookup_tmpdir: Optional[str] = None
+# Monotonically increasing; NOT len(_shared_lookup_cache), which can shrink
+# as entries are garbage-collected and would then produce a reused filename
+# for an unrelated rules_engine, colliding with that file's existing schema.
+_shared_lookup_counter = 0
+
+
+def _get_shared_lookup_tmpdir() -> str:
+    global _shared_lookup_tmpdir
+    if _shared_lookup_tmpdir is None:
+        _shared_lookup_tmpdir = tempfile.mkdtemp(prefix="attribution_lib_shared_lookup_")
+        atexit.register(shutil.rmtree, _shared_lookup_tmpdir, ignore_errors=True)
+    return _shared_lookup_tmpdir
+
+
+def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[str]) -> None:
+    if not names:
+        return
+    name_list = list(names)
+    values_clause = ",".join(["(?, ?)"] * len(name_list))
+    params = [param for name in name_list for param in (_stable_id(name), name)]
+    conn.execute(f"INSERT INTO {table} (id, name) VALUES {values_clause}", params)
+
+
+def _build_shared_lookup_db(rules_engine: "RuleEngine") -> Path:
+    """Build (once per rules_engine instance, cached) a small file-backed
+    DuckDB database holding the event_types/rules/obs_sources/obs_formats
+    lookup tables, fully preloaded from rules_engine and the observation
+    source/format enums. Every EventManager constructed with this
+    rules_engine ATTACHes this file read-only instead of rebuilding its own
+    private copy of this static data.
+
+    Cached in a WeakKeyDictionary keyed by the rules_engine object itself
+    (not id()) so a GC'd-and-reused id can never spuriously match a live,
+    different rules_engine.
+    """
+    with _shared_lookup_lock:
+        cached = _shared_lookup_cache.get(rules_engine)
+        if cached is not None:
+            return cached
+
+        global _shared_lookup_counter
+        _shared_lookup_counter += 1
+        path = Path(_get_shared_lookup_tmpdir()) / f"lookup_{_shared_lookup_counter}.duckdb"
+        conn = duckdb.connect(str(path))
+        try:
+            conn.execute(_SHARED_LOOKUP_SCHEMA)
+            _bulk_insert_names(conn, "obs_sources", {m.value for m in ObsSource if m.value})
+            _bulk_insert_names(conn, "obs_formats", {m.value for m in ObsFormat if m.value})
+            _bulk_insert_names(conn, "rules", set(rules_engine.all_rule_names))
+            _bulk_insert_names(conn, "event_types", set(rules_engine.all_event_types))
+        finally:
+            # Release the write lock so other connections can ATTACH ... READ_ONLY.
+            conn.close()
+
+        _shared_lookup_cache[rules_engine] = path
+        return path
 
 
 class EventStream:
@@ -388,31 +482,60 @@ def execute_fetch_one(conn: duckdb.DuckDBPyConnection, sql: str, params: list = 
 
 
 class _ReadOnlyLookup:
-    """Read-only string<->ID lookup backed by a preloaded DuckDB table.
+    """Read-only string<->ID lookup, backed by two tiers of DuckDB storage:
 
-    All names must be registered via ``preload()`` before use.
-    ``get_id()`` raises *error_type* for unknown names.
+    - a shared, read-only table (ATTACHed from another database, see
+      `_build_shared_lookup_db`) holding the static names known at
+      `EventManager` construction time, shared across every `EventManager` for
+      the same rules_engine, never written to by this class.
+    - a small local overlay table, private to this instance, for names
+      registered after construction (`preload()`) or restored from a snapshot.
+
+    ``view_name`` is a UNION ALL view combining both tiers under the plain
+    unqualified table name, so raw-SQL joins elsewhere in the codebase don't
+    need to know about the split. All names must be registered via
+    ``load_from_shared()`` and/or ``preload()`` before use. ``get_id()``
+    raises *error_type* for unknown names.
     """
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection, table: TableName, *, error_type: type[Exception] = KeyError):
+    def __init__(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        view_name: str,
+        local_table: str,
+        *,
+        error_type: type[Exception] = KeyError,
+    ):
         self._conn = conn
-        self._table = table
+        self._view_name = view_name
+        self._local_table = local_table
         self._error_type = error_type
         self._id_cache: dict[str, int] = {}
         self._str_cache: dict[int, str] = {}
 
-    def preload(self, names: set[str]) -> None:
-        """Bulk-insert names and warm both caches.
+    def load_from_shared(self) -> None:
+        """Warm the cache from the shared, already-preloaded table. Read-only."""
+        with _translate_out_of_memory():
+            rows = self._conn.execute(f"SELECT name, id FROM {self._view_name}").fetchall()
+        for name, id_val in rows:
+            self._id_cache[name] = id_val
+            self._str_cache[id_val] = name
 
-        ids are computed directly via _stable_id() rather than assigned by
-        the database, so unlike a sequence-based scheme there's no need to
-        read the id back after insert to learn what id a name got. But
-        _stable_id() is a 31-bit hash, so two distinct names can collide: if
-        that happens, INSERT OR IGNORE silently keeps whichever name claimed
-        the id first, leaving the second name's row missing. We verify each
-        computed id actually persisted under the requested name before
-        caching anything, so a collision raises instead of silently
-        aliasing two names to one id.
+    def preload(self, names: set[str]) -> None:
+        """Register additional names not already known, warming both caches.
+
+        Writes only to this instance's local overlay table. The shared
+        table is never touched. ids are computed directly via `_stable_id()`
+        rather than assigned by the database, so unlike a sequence-based
+        scheme there's no need to read the id back after insert to learn
+        what id a name got. But `_stable_id()` is a 31-bit hash, so two
+        distinct names can collide: if that happens, `INSERT OR IGNORE`
+        silently keeps whichever name claimed the id first, leaving the
+        second name's row missing. We verify each computed id actually
+        persisted under the requested name, checked against the combined
+        view since the id may have already been claimed by a name in
+        either tier, before caching anything, so a collision raises
+        instead of silently aliasing two names to one id.
         """
         missing = [n for n in names if n not in self._id_cache]
         if not missing:
@@ -424,14 +547,14 @@ class _ReadOnlyLookup:
         params = [param for name in missing for param in (id_by_name[name], name)]
         with _translate_out_of_memory():
             self._conn.execute(
-                f"INSERT OR IGNORE INTO {self._table.value} (id, name) VALUES {values_clause}",
+                f"INSERT OR IGNORE INTO {self._local_table} (id, name) VALUES {values_clause}",
                 params,
             )
 
             ids = list(id_by_name.values())
             id_placeholders = ",".join(["?"] * len(ids))
             rows = self._conn.execute(
-                f"SELECT id, name FROM {self._table.value} WHERE id IN ({id_placeholders})",
+                f"SELECT id, name FROM {self._view_name} WHERE id IN ({id_placeholders})",
                 ids,
             ).fetchall()
         persisted_name_by_id = {id_val: persisted_name for id_val, persisted_name in rows}
@@ -440,7 +563,7 @@ class _ReadOnlyLookup:
             id_val = id_by_name[name]
             persisted_name = persisted_name_by_id.get(id_val)
             if persisted_name != name:
-                raise StableIdCollisionError(self._table.value, id_val, name, persisted_name)
+                raise StableIdCollisionError(self._view_name, id_val, name, persisted_name)
 
         for name in missing:
             id_val = id_by_name[name]
@@ -452,7 +575,7 @@ class _ReadOnlyLookup:
         try:
             return self._id_cache[name]
         except KeyError:
-            raise self._error_type(f"Unknown {self._table.value} name: {name!r}")
+            raise self._error_type(f"Unknown {self._view_name} name: {name!r}")
 
     def get_ids(self, names: list[str]) -> list[int]:
         """Get IDs for multiple preloaded names. Raises *error_type* if any are unknown."""
@@ -462,14 +585,29 @@ class _ReadOnlyLookup:
         """Get string for an ID, or None if not found."""
         return self._str_cache.get(id)
 
-    def rebuild_cache(self) -> None:
-        """Repopulate caches from the underlying DuckDB table."""
-        rows = self._conn.execute(f"SELECT name, id FROM {self._table.value}").fetchall()
-        self._id_cache.clear()
-        self._str_cache.clear()
-        for name, id_val in rows:
-            self._id_cache[name] = id_val
-            self._str_cache[id_val] = name
+
+class _SnapshotRuleNames:
+    """Adapts a live rules_engine plus a restored snapshot's own rule/event-type
+    names into the interface `_build_shared_lookup_db` expects (`all_rule_names`/
+    `all_event_types`).
+
+    Used only by `from_snapshot()`: a restored snapshot's events can reference a
+    rule or event-type name the live rules_engine no longer declares (e.g. a
+    retired rule). Building the shared lookup db from the union up front means
+    every name the restored data needs is already there, with no separate
+    write-into-a-local-overlay-and-filter-duplicates step required. This is
+    unlike `obs_sources`/`obs_formats` (see `_LOOKUP_LOCAL_TABLES`), which aren't
+    rules_engine-derived and so still go through that path.
+
+    A fresh instance each call, so it never collides with the real
+    rules_engine's entry in `_shared_lookup_cache`. Restoring a snapshot always
+    builds its own one-off shared lookup db rather than reusing (or polluting)
+    the cache shared by every other `EventManager` for that rules_engine.
+    """
+
+    def __init__(self, rules_engine: "RuleEngine", extra_rule_names: set[str], extra_event_types: set[str]):
+        self.all_rule_names = set(rules_engine.all_rule_names) | extra_rule_names
+        self.all_event_types = set(rules_engine.all_event_types) | extra_event_types
 
 
 class EventManager:
@@ -516,23 +654,20 @@ class EventManager:
         self._streams: dict[str, EventStream] = {}
         self._closed = False  # Track if already closed to prevent double-logging
 
-        # Provide convenient lookup helpers
-        self._types = _ReadOnlyLookup(self._conn, TableName.EVENT_TYPES, error_type=UndeclaredEventTypeError)
-        self._rules = _ReadOnlyLookup(self._conn, TableName.RULES, error_type=UndeclaredRuleError)
-        self._obs_sources = _ReadOnlyLookup(self._conn, TableName.OBSERVATION_SOURCES)
-        self._obs_formats = _ReadOnlyLookup(self._conn, TableName.OBSERVATION_FORMATS)
+        lookup_path = _build_shared_lookup_db(rules_engine)
+        # Path is generated internally (tempfile), but escape defensively
+        # in case a caller's platform ever produces a path with a quote.
+        self._conn.execute(f"ATTACH '{str(lookup_path).replace(chr(39), chr(39) * 2)}' AS lookup (READ_ONLY)")
+        self._conn.execute(_LOCAL_OVERLAY_SCHEMA)
 
-        # Populate obs_sources and obs_formats from their enums
-        self._populate_enum_tables()
+        # Provide convenient lookup helpers, warmed from the shared tier.
+        self._types = _ReadOnlyLookup(self._conn, "event_types", "local_event_types", error_type=UndeclaredEventTypeError)
+        self._rules = _ReadOnlyLookup(self._conn, "rules", "local_rules", error_type=UndeclaredRuleError)
+        self._obs_sources = _ReadOnlyLookup(self._conn, "obs_sources", "local_obs_sources")
+        self._obs_formats = _ReadOnlyLookup(self._conn, "obs_formats", "local_obs_formats")
 
-        # Preload rule names and event types from the rules engine
-        self._rules.preload(rules_engine.all_rule_names)
-        self._types.preload(rules_engine.all_event_types)
-
-    def _populate_enum_tables(self):
-        """Populate obs_sources and obs_formats tables with enum values."""
-        self._obs_sources.preload({m.value for m in ObsSource if m.value})
-        self._obs_formats.preload({m.value for m in ObsFormat if m.value})
+        for lookup in (self._types, self._rules, self._obs_sources, self._obs_formats):
+            lookup.load_from_shared()
 
     def preload_rule_names(self, names: set[str]) -> None:
         """Pre-populate the rules lookup table and warm caches.
@@ -662,15 +797,71 @@ class EventManager:
         except (PermissionError, OSError) as e:
             raise RuntimeError(f"Cannot read schema version from {snapshot_dir}: {e}") from e
 
-        mgr = cls(rules_engine)
+        for table in ("rules", "event_types"):
+            src = snapshot_dir / f"{table}.parquet"
+            if not src.exists():
+                raise FileNotFoundError(f"Snapshot file missing: {src}")
+
+        try:
+            with duckdb.connect(":memory:") as scratch:
+                extra_rule_names = {
+                    row[0]
+                    for row in scratch.execute(
+                        f"SELECT name FROM read_parquet('{snapshot_dir / 'rules.parquet'}')"
+                    ).fetchall()
+                }
+                extra_event_types = {
+                    row[0]
+                    for row in scratch.execute(
+                        f"SELECT name FROM read_parquet('{snapshot_dir / 'event_types.parquet'}')"
+                    ).fetchall()
+                }
+        except (PermissionError, OSError) as e:
+            raise PermissionError(f"Cannot read snapshot rule/event-type names: {e}") from e
+        except duckdb.IOException as e:
+            raise RuntimeError(f"DuckDB I/O error reading snapshot rule/event-type names: {e}") from e
+        except duckdb.Error as e:
+            raise RuntimeError(f"DuckDB error reading snapshot rule/event-type names: {e}") from e
+
+        # Building the shared lookup db from rules_engine's names union'd with
+        # whatever this snapshot's events actually reference means every name
+        # the restored data needs is already there, including a retired
+        # rule/event-type the live rules_engine no longer declares. No
+        # separate write-into-local-overlay-and-dedup step needed for these
+        # two tables (contrast with `obs_sources`/`obs_formats` below, which
+        # aren't rules_engine-derived and so still need one).
+        mgr = cls(_SnapshotRuleNames(rules_engine, extra_rule_names, extra_event_types))
 
         for table in cls._SNAPSHOT_TABLES:
+            if table in ("rules", "event_types"):
+                continue  # already fully seeded above, via the shared lookup db itself
             src = snapshot_dir / f"{table}.parquet"
             if not src.exists():
                 raise FileNotFoundError(f"Snapshot file missing: {src}")
             try:
-                mgr._conn.execute(f"DELETE FROM {table}")
-                mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
+                local_table = _LOOKUP_LOCAL_TABLES.get(table)
+                if local_table is not None:
+                    # `table` (`obs_sources`/`obs_formats`) is a read-only view
+                    # (shared tier ∪ this instance's local overlay), so
+                    # DELETE/INSERT can't target it directly. Write into the
+                    # local overlay instead, skipping any name already
+                    # resolvable from the shared tier: a name's id is
+                    # content-addressed (`_stable_id`), so it's identical
+                    # whichever tier it ends up in. Skipping duplicates isn't
+                    # lossy, it just avoids a harmless-but-wasteful duplicate
+                    # row for names the current enum already covers.
+                    # (The schema-version bump to 2 is what guarantees every
+                    # snapshot reaching this point already used
+                    # content-addressed ids, see `_SNAPSHOT_SCHEMA_VERSION`.)
+                    mgr._conn.execute(f"DELETE FROM {local_table}")
+                    mgr._conn.execute(
+                        f"""INSERT INTO {local_table}
+                            SELECT * FROM read_parquet('{src}')
+                            WHERE name NOT IN (SELECT name FROM {table})"""
+                    )
+                else:
+                    mgr._conn.execute(f"DELETE FROM {table}")
+                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:
@@ -682,9 +873,9 @@ class EventManager:
         # DuckDB lacks setval(), so we consume nextval() until we're past max(id).
         # Only contexts/events still use sequences -- event_types/rules/
         # obs_sources/obs_formats ids are content-addressed (_stable_id), so
-        # they need no advancement: a restored id and a freshly-computed one
-        # for the same name always agree. observation_contexts uses an
-        # externally-supplied ID, no sequence either.
+        # they need no advancement, and the loop below skips them
+        # automatically (no matching sequence to find). observation_contexts
+        # uses an externally-supplied ID, no sequence either.
         for table in cls._SNAPSHOT_TABLES:
             seq_name = f"{table}_seq"
             if not mgr._conn.execute("SELECT 1 FROM duckdb_sequences() WHERE sequence_name=?", [seq_name]).fetchone():
@@ -699,7 +890,7 @@ class EventManager:
                     cur = next_row[0]
 
         for lookup in (mgr._types, mgr._rules, mgr._obs_sources, mgr._obs_formats):
-            lookup.rebuild_cache()
+            lookup.load_from_shared()
 
         # Keep historical names referenced by restored events, then merge names
         # introduced by the current runtime so new rules can process old snapshots.
