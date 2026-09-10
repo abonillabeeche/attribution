@@ -73,8 +73,8 @@ jobs:
           retention-days: 1
 
   publish:
-    # This job receives only the static artifact; it never checks out or runs
-    # pull-request code with its write-capable token.
+    # This job checks out only the trusted base revision and receives the static
+    # artifact; it never checks out or runs pull-request code with its token.
     needs: build
     if: >-
       always() &&
@@ -87,6 +87,13 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
+      # The deployment actions require a Git worktree for their own commits.
+      - name: Check out trusted base revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
       - name: Download preview artifact
         if: github.event.action != 'closed'
         uses: actions/download-artifact@v4
