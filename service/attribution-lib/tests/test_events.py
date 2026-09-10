@@ -200,6 +200,50 @@ class TestConnectionTuning:
         assert "GiB" not in memory_limit
         mgr.close()
 
+    def test_disk_spill_enabled_by_default(self):
+        """Unchanged from today's DuckDB default: deployments with disk to
+        spare (e.g. bare metal) get graceful degradation instead of a hard
+        failure when memory_limit is exceeded."""
+        mgr = EventManager(RuleLoader().build())
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir != ""
+        mgr.close()
+
+    def test_disk_spill_can_be_disabled(self):
+        """Deployments with no writable disk (e.g. read-only containers) need
+        to opt out of DuckDB's default spill-to-disk-on-overflow behavior."""
+        mgr = EventManager(RuleLoader().build(), allow_disk_spill=False)
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir == ""
+        mgr.close()
+
+
+class TestOutOfMemoryHandling:
+    """With disk spill disabled, exceeding memory_limit must surface as a
+    catchable, stable library exception. It should not force every caller
+    to know about (and catch) duckdb's own exception hierarchy."""
+
+    def test_overflow_raises_library_exception_not_raw_duckdb_exception(self):
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB", allow_disk_spill=False)
+        stream = mgr.create_stream("job_1")
+        try:
+            with pytest.raises(EventStorageOutOfMemoryError):
+                stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+    def test_overflow_with_disk_spill_enabled_does_not_raise(self):
+        """Same oversized write, but with disk spill allowed (the default).
+        It should succeed by spilling to disk instead of erroring."""
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB")
+        stream = mgr.create_stream("job_1")
+        try:
+            stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
 
 class TestEnumPopulation:
     """Test that observation source and format enums are automatically populated."""
