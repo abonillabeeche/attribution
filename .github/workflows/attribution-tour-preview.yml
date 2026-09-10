@@ -19,41 +19,38 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pages: read
-  pull-requests: write
+  contents: read
 
 jobs:
-  preview:
-    # Fork pull requests receive a read-only token and are not supported by the
-    # preview publisher. Same-repository branches are safe to publish here.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+  build:
+    # Only same-repository pull requests receive published previews. Keep this
+    # job read-only because it checks out and executes pull-request code.
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
     # Pull-request workflows cannot run on NVIDIA's self-hosted runners.
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        if: github.event.action != 'closed'
         uses: actions/checkout@v6
 
       - name: Set up Node.js
-        if: github.event.action != 'closed'
         uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Enable pnpm
-        if: github.event.action != 'closed'
         run: |
           corepack enable
           corepack prepare pnpm@10.11.0 --activate
 
       - name: Install dependencies
-        if: github.event.action != 'closed'
         working-directory: docs/attribution-tour
         run: pnpm install --frozen-lockfile
 
       - name: Build relocatable preview
-        if: github.event.action != 'closed'
         working-directory: docs/attribution-tour
         run: pnpm build --base /pr-preview/pr-${{ github.event.number }}/ --out dist
 
@@ -61,10 +58,41 @@ jobs:
       # workflow normally creates it after merge, so bootstrap it for the first
       # PR preview as well.
       - name: Stage Pages landing page
-        if: github.event.action != 'closed'
         run: |
-          mkdir -p .pages-root
-          cp docs/attribution-tour/pages-landing.html .pages-root/index.html
+          mkdir -p pages-root
+          cp docs/attribution-tour/pages-landing.html pages-root/index.html
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attribution-walkthrough-preview
+          path: |
+            docs/attribution-tour/dist
+            pages-root
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # This job receives only the static artifact; it never checks out or runs
+    # pull-request code with its write-capable token.
+    needs: build
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'closed' || needs.build.result == 'success')
+    permissions:
+      actions: read
+      contents: write
+      pages: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download preview artifact
+        if: github.event.action != 'closed'
+        uses: actions/download-artifact@v4
+        with:
+          name: attribution-walkthrough-preview
+          path: .preview-artifact
 
       - name: Publish Pages landing page
         if: github.event.action != 'closed'
@@ -72,7 +100,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
-          publish_dir: .pages-root
+          publish_dir: .preview-artifact/pages-root
           keep_files: true
           full_commit_message: Ensure Pages landing page exists for PR ${{ github.event.number }}
 
@@ -81,13 +109,21 @@ jobs:
         continue-on-error: true
         uses: actions/configure-pages@v6
 
+      - name: Normalize GitHub Pages address
+        id: pages_base
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          normalized_url="${PAGES_BASE_URL#*://}"
+          printf 'value=%s\n' "${normalized_url%/}" >> "$GITHUB_OUTPUT"
+
       - name: Publish PR preview
         uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
         with:
           action: ${{ github.event.action == 'closed' && 'remove' || 'deploy' }}
-          source-dir: docs/attribution-tour/dist
+          source-dir: .preview-artifact/docs/attribution-tour/dist
           preview-branch: gh-pages
           # The preview action prepends https://, so pass the scheme-free host.
-          pages-base-url: ${{ format('{0}{1}', steps.pages.outputs.host, steps.pages.outputs.base_path) }}
+          pages-base-url: ${{ steps.pages_base.outputs.value }}
           wait-for-pages-deployment: ${{ steps.pages.outcome == 'success' }}
           qr-code: false
