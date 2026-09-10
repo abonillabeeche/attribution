@@ -87,6 +87,7 @@ jobs:
           action: ${{ github.event.action == 'closed' && 'remove' || 'deploy' }}
           source-dir: docs/attribution-tour/dist
           preview-branch: gh-pages
-          pages-base-url: ${{ steps.pages.outputs.base_url }}
+          # The preview action prepends https://, so pass the scheme-free host.
+          pages-base-url: ${{ format('{0}{1}', steps.pages.outputs.host, steps.pages.outputs.base_path) }}
           wait-for-pages-deployment: ${{ steps.pages.outcome == 'success' }}
           qr-code: false
