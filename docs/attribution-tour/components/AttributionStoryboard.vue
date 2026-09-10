@@ -27,7 +27,9 @@ interface ObservationLine {
   severity?: Severity
 }
 
-const DOCS_BASE = 'https://github.com/NVIDIA/attribution/blob/main/docs/attribution.md'
+const DOCS_BASE =
+  import.meta.env.VITE_ATTRIBUTION_DOCS_BASE ||
+  'https://github.com/NVIDIA/attribution/blob/main/docs/attribution.md'
 
 const motionPresets: Record<MotionSpeed, { label: string; title: string; fast: string; medium: string; slow: string }> = {
   normal: { label: '1×', title: 'Normal motion', fast: '180ms', medium: '480ms', slow: '820ms' },
@@ -68,7 +70,7 @@ const subphaseGroups: Partial<
 const scenes: Scene[] = [
   {
     id: 'overview',
-    kicker: 'attribution-lib · worked example',
+    kicker: 'NVIDIA Attribution · worked example',
     title: 'Watch evidence become an explanation',
     summary: 'One continuous, inspectable path from completed job information to one root cause.',
     short: 'Overview',
@@ -79,7 +81,7 @@ const scenes: Scene[] = [
     phase: 'initialize',
     kicker: 'Initialize',
     title: 'Attribution starts with the completed job',
-    summary: 'Before observations arrive, the attributor knows the job boundary, terminal state, and nodes in scope.',
+    summary: 'Before observations arrive, the attribution run knows the job boundary, terminal state, and nodes in scope.',
     short: 'Initialize',
     docAnchor: '#initialization-order',
   },
@@ -203,7 +205,7 @@ const scenes: Scene[] = [
   {
     id: 'result',
     phase: 'result',
-    kicker: 'AttributionResult',
+    kicker: 'Attribution result',
     title: 'One result preserves the complete reasoning chain',
     summary: 'Outcome, root cause, supporting evidence, collectors, and provenance remain inspectable.',
     short: 'Result',
@@ -446,7 +448,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
     </nav>
 
     <a class="docs-link" :href="docsHref" target="_blank" rel="noreferrer">
-      Read this phase in the Markdown docs <span>↗</span>
+      Read the canonical process documentation <span>↗</span>
     </a>
 
     <header v-if="!sceneIs('overview')" class="story-header">
@@ -457,7 +459,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
 
     <main class="story-canvas">
       <section class="overview-scene" :class="{ visible: sceneIs('overview') }">
-        <div class="overview-eyebrow">attribution-lib · interactive walkthrough</div>
+        <div class="overview-eyebrow">NVIDIA Attribution · interactive walkthrough</div>
         <h1>Evidence becomes<br><span>an explanation</span></h1>
         <p>Follow the same job context, observations, events, and symptoms as they change shape across the pipeline.</p>
         <div class="overview-chain">
@@ -482,12 +484,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
           </div>
         </article>
         <div class="initialization-arrow"><span>initialize once</span><i>→</i></div>
-        <article class="attributor-card">
-          <div class="attributor-mark">A</div>
-          <span>ATTRIBUTOR</span>
+        <article class="run-card">
+          <div class="run-mark">A</div>
+          <span>ATTRIBUTION RUN</span>
           <strong>Initialized</strong>
           <p>Job scope and terminal state are now available to every later phase.</p>
-          <div><i />ready for <code>ingest()</code></div>
+          <div><i />ready for observations</div>
         </article>
       </section>
 

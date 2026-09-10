@@ -1,10 +1,17 @@
 # Interactive attribution walkthrough
 
-This [Slidev](https://sli.dev/) deck is an interactive companion to
-[`docs/attribution.md`](../attribution.md). It follows one compact example,
-verified against the bundled rules, and publishes as a static GitHub Pages
-site. The separate [prose walkthrough](../attribution-walkthrough.md) remains a
-useful non-interactive example.
+This standalone [Slidev](https://sli.dev/) deck is an interactive companion to
+the repository-level [How Attribution Works](../attribution.md) documentation.
+It follows one compact example across the shared NVIDIA Attribution process,
+verified against the bundled rules. The separate
+[prose walkthrough](../attribution-walkthrough.md) remains a useful
+non-interactive example.
+
+The deck is a self-contained static application so a broader documentation
+site can mount it without coupling its runtime or navigation. Set
+`VITE_ATTRIBUTION_DOCS_BASE` at build time to point its phase links at a
+rendered documentation route; by default, they point to the canonical Markdown
+file on GitHub.
 
 ## Preview locally
 
@@ -43,17 +50,19 @@ corepack pnpm build
 
 ## Publish and review on GitHub Pages
 
-The `Attribution Tour Pages` workflow builds the deck when files in this
-directory change on `main`. It publishes the production deck to
-`attribution-tour/` on the `gh-pages` branch and keeps the branch's active PR
-previews intact.
+The `Attribution Process Walkthrough Pages` workflow builds the deck when files
+in this directory change on `main`. It publishes the production deck to
+`walkthroughs/attribution-process/` on the `gh-pages` branch and keeps the
+branch's active PR previews intact. The Pages root remains a small, replaceable
+landing page for a future comprehensive documentation site.
 
-The `Attribution Tour PR Preview` workflow publishes same-repository pull
-requests beneath `pr-preview/pr-<number>/`, adds a persistent preview link to
-the PR, updates the preview after each push, and removes it when the PR closes.
-Fork pull requests do not receive previews because GitHub gives them a read-only
-token. Each workflow builds with its deployment-specific base path, and the deck
-uses hash routing so slide navigation and reloads stay inside that path.
+The `Attribution Process Walkthrough PR Preview` workflow publishes
+same-repository pull requests beneath `pr-preview/pr-<number>/`, adds a
+persistent preview link to the PR, updates the preview after each push, and
+removes it when the PR closes. Fork pull requests do not receive previews
+because GitHub gives them a read-only token. Each workflow builds with its
+deployment-specific base path, and the deck uses hash routing so slide
+navigation and reloads stay inside that path.
 
 ### First-time Pages setup
 

@@ -259,11 +259,11 @@
 .begin-button:hover { background: var(--ingest); }
 
 .initialization-stage { align-items: center; display: flex; gap: 34px; justify-content: center; padding-bottom: 28px; }
-.job-info-card, .attributor-card { background: #fff; border: 1px solid var(--line); border-radius: 13px; box-shadow: 0 12px 32px rgba(23, 33, 43, 0.08); }
+.job-info-card, .run-card { background: #fff; border: 1px solid var(--line); border-radius: 13px; box-shadow: 0 12px 32px rgba(23, 33, 43, 0.08); }
 .job-info-card { overflow: hidden; width: 430px; }
 .job-info-card > header { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 14px 16px; }
 .job-info-card > header div { display: flex; flex-direction: column; }
-.job-info-card > header span, .job-info-card dt, .job-nodes > span, .attributor-card > span { color: var(--initialize); font-size: 8px; font-weight: 850; letter-spacing: 0.09em; text-transform: uppercase; }
+.job-info-card > header span, .job-info-card dt, .job-nodes > span, .run-card > span { color: var(--initialize); font-size: 8px; font-weight: 850; letter-spacing: 0.09em; text-transform: uppercase; }
 .job-info-card > header strong { font-size: 16px; margin-top: 3px; }
 .job-info-card > header > b { background: #f1f4f7; border-radius: 999px; color: #677789; font-size: 7px; padding: 5px 8px; text-transform: uppercase; }
 .job-info-card dl { display: grid; grid-template-columns: 0.8fr 1.25fr 1.25fr; margin: 0; }
@@ -276,13 +276,13 @@
 .job-nodes > b { background: #fff; border: 1px solid #cbd5df; border-radius: 6px; font-size: 9px; padding: 6px 10px; }
 .initialization-arrow { align-items: center; color: #7e8c9a; display: flex; flex-direction: column; font-size: 8px; gap: 2px; text-transform: uppercase; }
 .initialization-arrow i { color: var(--initialize); font-size: 28px; font-style: normal; line-height: 1; }
-.attributor-card { border: 2px solid var(--initialize); display: flex; flex-direction: column; padding: 18px; width: 275px; }
-.attributor-mark { align-items: center; background: var(--initialize); border-radius: 9px; color: #fff; display: flex; font-size: 17px; font-weight: 850; height: 34px; justify-content: center; margin-bottom: 13px; width: 34px; }
-.attributor-card > strong { font-size: 21px; margin: 4px 0 7px; }
-.attributor-card > p { color: var(--muted); font-size: 10px; line-height: 1.4; margin: 0 0 15px; }
-.attributor-card > div:last-child { align-items: center; background: #eff8f2; border-radius: 7px; color: var(--result); display: flex; font-size: 9px; font-weight: 750; gap: 7px; padding: 8px 9px; }
-.attributor-card > div:last-child i { background: var(--result); border-radius: 999px; height: 7px; width: 7px; }
-.attributor-card > div:last-child code { background: transparent; color: var(--result); padding: 0; }
+.run-card { border: 2px solid var(--initialize); display: flex; flex-direction: column; padding: 18px; width: 275px; }
+.run-mark { align-items: center; background: var(--initialize); border-radius: 9px; color: #fff; display: flex; font-size: 17px; font-weight: 850; height: 34px; justify-content: center; margin-bottom: 13px; width: 34px; }
+.run-card > strong { font-size: 21px; margin: 4px 0 7px; }
+.run-card > p { color: var(--muted); font-size: 10px; line-height: 1.4; margin: 0 0 15px; }
+.run-card > div:last-child { align-items: center; background: #eff8f2; border-radius: 7px; color: var(--result); display: flex; font-size: 9px; font-weight: 750; gap: 7px; padding: 8px 9px; }
+.run-card > div:last-child i { background: var(--result); border-radius: 999px; height: 7px; width: 7px; }
+.run-card > div:last-child code { background: transparent; color: var(--result); padding: 0; }
 
 .persistent-observation {
   background: #fff;

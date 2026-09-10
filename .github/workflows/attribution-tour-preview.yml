@@ -1,4 +1,4 @@
-name: Attribution Tour PR Preview
+name: Attribution Process Walkthrough PR Preview
 
 on:
   pull_request:

@@ -8,7 +8,7 @@ An interactive visualization driven by an actual attribution run is feasible
 without redesigning the attribution engine. The repository already has an
 optional decision recorder and can assemble a presentation-independent decision
 DAG. The current storyboard could therefore evolve from a hard-coded example
-into a viewer for trace data produced by `attribution-lib`.
+into a viewer for trace data produced by the attribution engine.
 
 The main work would be completing the execution trace and making the visual
 presentation cope gracefully with arbitrary input sizes. A small, honest
@@ -82,7 +82,7 @@ about attribution internals:
 job record + observations
             |
             v
-attribution-lib in trace mode
+attribution engine in trace mode
             |
             v
 versioned trace JSON
@@ -154,7 +154,7 @@ rule type and large production jobs or may intentionally target small traces.
 
 ## Recommended first milestone if revisited
 
-Use one existing, sanitized test fixture and run it through the real library to
+Use one existing, sanitized test fixture and run it through the real attribution engine to
 produce a checked-in or build-generated trace JSON file. Refactor the existing
 storyboard to render that trace while preserving its current visual language.
 

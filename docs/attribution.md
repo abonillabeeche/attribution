@@ -1,11 +1,11 @@
 How Attribution Works
 =====================
 
-There are many parts involved in a system that does automated job attribution: scheduler interfaces, telemetry and log ingestion, rule processing, reporting, and aggregation. 
+There are many parts involved in a system that does automated job attribution: scheduler interfaces, telemetry and log ingestion, rule processing, reporting, and aggregation.
 
-This document aims to describe how the rule processing component of attribution works; this is the core logic that analyses the evidence available to the system and produces the report.
+This repository-level document describes the rule-processing model at the center of NVIDIA Attribution. The Blueprint supplies normalized observations to the Service, the Service manages the attribution lifecycle, and the attribution library analyzes that evidence and produces a result.
 
-For a compact end-to-end example with concrete observations and intermediate data, see [A Small Attribution Walkthrough](attribution-walkthrough.md).
+For concrete examples, see [A Small Attribution Walkthrough](attribution-walkthrough.md) or the [interactive attribution process walkthrough](attribution-tour/README.md).
 
 - [Elements of Attribution](#elements-of-attribution): symptoms, outcomes, sources
 - [Attribution Process Overview](#attribution-process-overview): state, events, rules, rule engine/loader

@@ -1,4 +1,4 @@
-name: Attribution Tour Pages
+name: Attribution Process Walkthrough Pages
 
 on:
   push:
@@ -39,9 +39,9 @@ jobs:
         working-directory: docs/attribution-tour
         run: pnpm install --frozen-lockfile
 
-      - name: Build relocatable tour
+      - name: Build relocatable walkthrough
         working-directory: docs/attribution-tour
-        run: pnpm build --base /attribution-tour/ --out dist
+        run: pnpm build --base /walkthroughs/attribution-process/ --out dist
 
       - name: Stage Pages landing page
         run: |
@@ -55,13 +55,13 @@ jobs:
           publish_branch: gh-pages
           publish_dir: .pages-root
           keep_files: true
-          full_commit_message: Publish attribution tour landing page from ${{ github.sha }}
+          full_commit_message: Publish documentation landing page from ${{ github.sha }}
 
-      - name: Publish production tour
+      - name: Publish production walkthrough
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: docs/attribution-tour/dist
-          destination_dir: attribution-tour
-          full_commit_message: Publish attribution tour from ${{ github.sha }}
+          destination_dir: walkthroughs/attribution-process
+          full_commit_message: Publish attribution process walkthrough from ${{ github.sha }}
