@@ -197,7 +197,13 @@ class TestConnectionTuning:
     def test_memory_limit_can_be_capped(self):
         mgr = EventManager(RuleLoader().build(), memory_limit="128MB")
         (memory_limit,) = mgr._conn.execute("SELECT current_setting('memory_limit')").fetchone()
-        assert "GiB" not in memory_limit
+        # DuckDB reports this as a normalized "<value> <unit>" string (e.g.
+        # "122.0 MiB" for a 128MB request). "GiB" not in memory_limit alone
+        # would pass for any non-GiB-scale value, including a wrong one, so
+        # parse it and check it's actually ~128MB.
+        value, unit = memory_limit.split()
+        assert unit == "MiB", f"expected a MiB-scale memory_limit, got {memory_limit!r}"
+        assert float(value) == pytest.approx(128_000_000 / 1024**2, rel=0.01)
         mgr.close()
 
     def test_disk_spill_enabled_by_default(self):
