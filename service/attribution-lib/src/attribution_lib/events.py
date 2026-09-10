@@ -428,8 +428,31 @@ class _ReadOnlyLookup:
 
 
 class EventManager:
-    def __init__(self, rules_engine: "RuleEngine"):
+    def __init__(
+        self,
+        rules_engine: "RuleEngine",
+        *,
+        threads: Optional[int] = None,
+        memory_limit: Optional[str] = None,
+    ):
+        """
+        Args:
+            rules_engine: rules engine to preload rule/event-type names from.
+            threads: DuckDB worker thread count for this connection. Defaults to
+                DuckDB's own default (the host's full CPU count) when omitted.
+                Each EventManager's dataset is one unit of work's worth of events
+                and rarely benefits from intra-query parallelism, so callers that
+                create many EventManagers (e.g. one per job) should pass a small
+                value (often 1) to avoid host-sized per-connection overhead.
+            memory_limit: DuckDB memory_limit for this connection (e.g. "128MB").
+                Defaults to DuckDB's own default (~80% of system RAM) when
+                omitted.
+        """
         self._conn = duckdb.connect(":memory:")
+        if threads is not None:
+            self._conn.execute("SET threads = ?", [threads])
+        if memory_limit is not None:
+            self._conn.execute("SET memory_limit = ?", [memory_limit])
         self._conn.execute(SCHEMA)
         self._streams: dict[str, EventStream] = {}
         self._closed = False  # Track if already closed to prevent double-logging
