@@ -460,7 +460,7 @@ def body_fallbacks_for(source: ObservationSource, job_info: JobInfo) -> BodyFall
     fallbacks = config.body_fallbacks if config is not None else BodyFallbacks()
     if not fallbacks.parse_timestamp:
         return fallbacks
-    # Job end survives an unbounded declared interval; None (job still running) keeps the current-year parse.
+    # job_info.job_end_time, not the interval end: entry_timeseries intervals may be unbounded.
     return replace(fallbacks, year_fallback=job_info.job_end_time)
 
 

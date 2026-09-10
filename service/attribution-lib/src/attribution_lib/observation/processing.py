@@ -96,6 +96,19 @@ E = TypeVar("E")
 T_co = TypeVar("T_co", bound=EntryBase, covariant=True)
 
 
+@dataclass(frozen=True)
+class BodyFallbacks:
+    """What an `entry_timeseries` entry may parse out of its body when the producer left it out.
+
+    `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
+    and a parsed date after it rolls back a year. None (job end unknown) means current year.
+    """
+
+    parse_node: bool = False
+    parse_timestamp: bool = False
+    year_fallback: Optional[datetime] = None
+
+
 class EntrySourceBase(ABC, Generic[E, T_co]):
     """Abstract base for observation sources that yield typed entries.
 
@@ -112,13 +125,13 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
 
     @staticmethod
     def from_observation(
-        observation: Observation[Any], *, body_fallbacks: Optional["BodyFallbacks"] = None
+        observation: Observation[Any], *, body_fallbacks: BodyFallbacks = BodyFallbacks()
     ) -> "EntrySourceBase[Any, EntryBase]":
         """Factory that dispatches to the correct concrete subclass by format.
 
         Args:
-        - observation: The observation to convert to an entry source.
-        - body_fallbacks: What `entry_timeseries` may parse out of the body; other formats ignore it.
+            observation: The observation to convert to an entry source.
+            body_fallbacks: What `entry_timeseries` may parse out of the body; other formats ignore it.
         """
         match observation.context.format:
             case Format.STRING_LIST:
@@ -857,19 +870,6 @@ class PrometheusMetricsEntrySource(EntrySourceBase[dict[str, Any], MetricEntry])
         )
 
 
-@dataclass(frozen=True)
-class BodyFallbacks:
-    """What an `entry_timeseries` entry may parse out of its body when the producer left it out.
-
-    `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
-    and a parsed date after it rolls back a year. None (job end unknown) means current year.
-    """
-
-    parse_node: bool = False
-    parse_timestamp: bool = False
-    year_fallback: Optional[datetime] = None
-
-
 class TimeseriesEntryObj(EntryBase):
     """Entry for the `entry_timeseries` format.
 
@@ -917,7 +917,8 @@ class TimeseriesEntryObj(EntryBase):
     def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
         """The declared resources, with the declared node checked against the job.
 
-        ANY only when nothing or `AllJobResources` was declared. Replicas ride along unread.
+        ANY when `AllJobResources` was declared, or nothing was and `parse_node` is off. Replicas ride
+        along unread.
 
         Raises UnidentifiableNodeError unless exactly one node is declared (or, with `parse_node`,
         found in the body), UnknownNodeError when that node is not in the job.
@@ -935,10 +936,8 @@ class TimeseriesEntryObj(EntryBase):
                 node_count += 1
                 verified.append(NodeResource(hostname=job_info.verify_node(resource.hostname)))
             else:
-                # Replicas and other resources ride along unread.
                 verified.append(resource)
 
-        # If no node given, fallback to parsing the body if allowed.
         if node_count == 0 and self._body_fallbacks.parse_node:
             verified.append(NodeResource(hostname=job_info.extract_node(self._body, self._context.source)))
             node_count = 1
@@ -974,9 +973,9 @@ class TimeseriesEntryObj(EntryBase):
 class TimeseriesEntrySource(EntrySourceBase[TimeseriesEntry, TimeseriesEntryObj]):
     """Process `entry_timeseries` entries."""
 
-    def __init__(self, observation: Observation[Any], body_fallbacks: Optional[BodyFallbacks] = None) -> None:
+    def __init__(self, observation: Observation[Any], body_fallbacks: BodyFallbacks = BodyFallbacks()) -> None:
         super().__init__(observation)
-        self._body_fallbacks = body_fallbacks or BodyFallbacks()
+        self._body_fallbacks = body_fallbacks
 
     @classmethod
     def make_line_iter(cls, lines: Any) -> Iterator[TimeseriesEntry]:

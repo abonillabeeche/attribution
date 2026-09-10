@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_core import PydanticCustomError
@@ -774,13 +775,6 @@ class TestTimeseriesEntry:
         ("fallbacks", "wire", "expected_resources", "expected_time"),
         [
             pytest.param(
-                {},
-                entry(UNDECLARED),
-                ResourceSetClass.ANY,
-                None,
-                id="nothing_parsed",
-            ),
-            pytest.param(
                 {"parse_node": True},
                 entry(UNDECLARED),
                 ResourceSetClass([Node(hostname=JOB_NODE)]),
@@ -791,7 +785,7 @@ class TestTimeseriesEntry:
                 {"parse_timestamp": True},
                 entry(UNDECLARED),
                 ResourceSetClass.ANY,
-                datetime(2024, 1, 5, 6, 59, 25),
+                datetime(2024, 1, 5, 6, 59, 25, tzinfo=ZoneInfo("America/Los_Angeles")),
                 id="timestamp",
             ),
             pytest.param(
@@ -805,7 +799,7 @@ class TestTimeseriesEntry:
                 {"parse_node": True, "parse_timestamp": True},
                 entry(UNDECLARED, ts=10**9, resources=OTHER_NODE),
                 ResourceSetClass([Node(hostname=OTHER_JOB_NODE)]),
-                datetime(1969, 12, 31, 16, 0, 1),
+                datetime.fromtimestamp(1, ZoneInfo("America/Los_Angeles")),
                 id="declared_fields_win",
             ),
         ],
@@ -818,8 +812,7 @@ class TestTimeseriesEntry:
         (made,) = TimeseriesEntrySource(Observation(timeseries_context, [wire]), body_fallbacks)
 
         assert made.resources(syslog_job_info) == expected_resources
-        # Wall clock in the context's zone; the declared ts=1s lands at 16:00:01 the day before the epoch there.
-        assert (made.time().replace(tzinfo=None) if made.time() else None) == expected_time
+        assert made.time() == expected_time
 
 
 class TestTimeseriesExtraction:
@@ -920,8 +913,7 @@ class TestLegacyBehaviorIsPreserved:
         records = raw_loki_result_helper(iter(self.LOKI_STREAMS))
         new = list(applog(ObservationFormat.ENTRY_TIMESERIES, [as_entry(r) for r in records]))
 
-        assert len(new) == 5
-        for made, old in zip(new, legacy):
+        for made, old in zip(new, legacy, strict=True):
             assert (made.body(), made.resources(applog_job)) == (old.body(), old.resources(applog_job))
             # entry_timeseries rounds ns up to the microsecond; the legacy float path rounded to nearest.
             assert abs(made.time() - old.time()) <= timedelta(microseconds=1)

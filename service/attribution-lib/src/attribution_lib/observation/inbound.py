@@ -110,7 +110,7 @@ class Format(str, Enum):
 
     Furthermore, some sources expect slightly different fields in formats.
 
-    In particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional.
+    In particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional. `entry_timeseries` is the exception: it parses the prefix only out of an entry that declares no `resources`, and a body timestamp only when `ts` is null (see below).
 
     For `syslog` and `health_check`, the rank-like prefix is not expected, and `host-specifier` fields are mandatory.
 
@@ -267,22 +267,23 @@ class Format(str, Enum):
           `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. Absent,
           null and `"AllJobResources"` all mean every job resource, so they single out no node. Neither
           does an array that fails to name exactly one node the job owns — for example `[]`, several
-          nodes, replicas with no node, or a hostname outside the job. Singling out no node is what
-          decides the entry's fate: a source that requires one drops it, a source that does not records
-          it against every job resource. Either way the rest of the array is still processed.
+          nodes, replicas with no node (except under `applog`, see below), or a hostname outside the job.
+          Singling out no node is what decides the entry's fate: a source that requires one drops it, a
+          source that does not records it against every job resource. Either way the rest of the array is still processed.
       - Any other key in an entry is permitted but ignored.
 
       Unlike every other format, entries here are only time-filtered by the observation context's
       `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on
       that side, so an interval of two nulls disables time filtering for the observation entirely.
 
-      Only source `applog` fills in what the producer leaves out, so a producer that has neither a
-      timestamp nor a node for a line gets exactly what `raw_log` gives it today:
-      - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against
-        the workload's `job_end_time`.
-      - `resources` absent or null: an attempt is made to read the node from the rank-like text prefix,
-        or node name prefix. A line with no usable prefix is recorded against every job resource,
-        never dropped. An explicit `"AllJobResources"` skips the prefix parse altogether.
+      Key Source Behavior:
+      - `applog`:
+        - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against
+          the workload's `job_end_time`.
+        - `resources` absent, null, or an array naming no node (for example replicas only): the node is
+          read from the rank-like or node-name text prefix, and declared replicas are kept. A line with
+          no usable prefix is recorded against every job resource, never dropped. An explicit
+          `"AllJobResources"` skips the prefix parse altogether.
 
       Example:
       ```json
