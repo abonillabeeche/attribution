@@ -69,8 +69,8 @@ def test_shared_lookup_is_not_writable_by_construction():
     rules_engine = RuleLoader().build()
     mgr = EventManager(rules_engine)
     try:
-        with pytest.raises(duckdb.Error):
-            mgr._conn.execute("INSERT INTO lookup.rules (name) VALUES ('should_not_be_allowed')")
+        with pytest.raises(duckdb.Error, match="read-only"):
+            mgr._conn.execute("INSERT INTO lookup.rules (id, name) VALUES (999999999, 'should_not_be_allowed')")
     finally:
         mgr.close()
 
