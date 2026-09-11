@@ -265,8 +265,25 @@ def _get_shared_lookup_tmpdir() -> str:
 
 
 def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[str]) -> None:
+    """Seed `table` with `names`, each keyed by its `_stable_id()`.
+
+    `_stable_id()` is a 31-bit hash, so two distinct names can in principle
+    collide. Detected here up front, before the INSERT, so a collision
+    raises the library's own `StableIdCollisionError` naming both names
+    instead of surfacing as an opaque DuckDB primary-key constraint
+    violation (this table's initial seed is the only bulk multi-row insert
+    of `_stable_id()`-derived ids; `preload()`'s incremental path already
+    has its own collision check, see `_ReadOnlyLookup.preload`).
+    """
     if not names:
         return
+    name_by_id: dict[int, str] = {}
+    for name in names:
+        id_val = _stable_id(name)
+        existing = name_by_id.get(id_val)
+        if existing is not None:
+            raise StableIdCollisionError(table, id_val, name, existing)
+        name_by_id[id_val] = name
     name_list = list(names)
     values_clause = ",".join(["(?, ?)"] * len(name_list))
     params = [param for name in name_list for param in (_stable_id(name), name)]

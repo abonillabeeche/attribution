@@ -160,6 +160,24 @@ class TestStableIdCollisionDetection:
         finally:
             mgr.close()
 
+    def test_collision_among_rules_engine_names_raises_at_construction(self, monkeypatch):
+        """The same collision hazard exists when `EventManager.__init__` bulk-seeds
+        the shared lookup db from `rules_engine.all_rule_names`, not just when
+        `preload_rule_names()` later adds to the local overlay. Without a check
+        here, two colliding names would instead surface as an opaque DuckDB
+        primary-key constraint violation.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = {"rule_e", "rule_f"}
+            all_event_types: set[str] = set()
+
+        monkeypatch.setattr(events_module, "_stable_id", lambda name: 999)
+
+        with pytest.raises(events_module.StableIdCollisionError):
+            EventManager(Engine())
+
     def test_message_when_persisted_name_is_missing(self):
         """persisted_name is None when the id wasn't found under any name at
         all after insertion -- an unexpected state distinct from a genuine
