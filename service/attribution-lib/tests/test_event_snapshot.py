@@ -176,6 +176,10 @@ class TestSnapshotRoundTrip:
 
         restored = EventManager.from_snapshot(tmp_path / "snap", rules_engine)
         try:
+            (count,) = restored._conn.execute(
+                "SELECT COUNT(*) FROM rules WHERE name = ?", ["never_declared_rule"]
+            ).fetchone()
+            assert count == 1, f"expected exactly one row for 'never_declared_rule', found {count}"
             assert restored.rules.get_id("never_declared_rule") == original_id
         finally:
             restored.close()
