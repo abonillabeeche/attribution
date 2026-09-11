@@ -330,6 +330,58 @@ class TestCheckpointRestoreAtomicity:
         finally:
             mgr.close()
 
+    def test_commit_failure_also_rolls_back(self, monkeypatch):
+        """`conn.commit()` itself can fail. `_atomic()` must roll back in
+        that case too, not just when a statement inside the block fails.
+        """
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            def flaky_commit(self):
+                raise RuntimeError("synthetic commit failure")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+    def test_commit_time_out_of_memory_is_translated(self, monkeypatch):
+        """A `duckdb.OutOfMemoryException` raised by `conn.commit()` itself
+        (not just by a statement inside the transaction) must still surface
+        as `EventStorageOutOfMemoryError`, matching every other DuckDB
+        write path in this class.
+        """
+        import duckdb as duckdb_module
+
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+
+            def flaky_commit(self):
+                raise duckdb_module.OutOfMemoryException("synthetic commit OOM")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(EventStorageOutOfMemoryError):
+                mgr.checkpoint("v1")
+        finally:
+            mgr.close()
+
 
 class TestEnumPopulation:
     """Test that observation source and format enums are automatically populated."""

@@ -85,18 +85,22 @@ def _translate_out_of_memory():
 @contextlib.contextmanager
 def _atomic(conn: duckdb.DuckDBPyConnection):
     """Run a block of statements as one transaction, rolling back on any
-    failure (including `EventStorageOutOfMemoryError` from
-    `_translate_out_of_memory`) so a mid-block error can't leave a paired
-    DROP/CREATE or DELETE/INSERT half-applied.
+    failure, including a failing `conn.commit()` itself, so a mid-block
+    error can't leave a paired DROP/CREATE or DELETE/INSERT half-applied.
+    Callers should nest this *inside* `_translate_out_of_memory()` (i.e.
+    `with _translate_out_of_memory(), _atomic(conn):`) so an
+    `OutOfMemoryException` raised by `commit()` still gets translated to
+    `EventStorageOutOfMemoryError`: that only happens if this context
+    manager's own `__exit__` (where `commit()` runs) exits *before*
+    `_translate_out_of_memory()`'s does.
     """
     conn.begin()
     try:
         yield
+        conn.commit()
     except BaseException:
         conn.rollback()
         raise
-    else:
-        conn.commit()
 
 
 def _get_or_create_id(conn: duckdb.DuckDBPyConnection, table: TableName, name: str) -> int:
@@ -710,14 +714,14 @@ class EventManager:
         for stream in self._streams.values():
             stream.flush()
         shadow = f"_ckpt_{name}"
-        with _atomic(self._conn), _translate_out_of_memory():
+        with _translate_out_of_memory(), _atomic(self._conn):
             self._conn.execute(f'DROP TABLE IF EXISTS "{shadow}"')
             self._conn.execute(f'CREATE TABLE "{shadow}" AS SELECT * FROM events')
 
     def restore(self, name: str) -> None:
         """Restore the events table from a previous checkpoint."""
         shadow = f"_ckpt_{name}"
-        with _atomic(self._conn), _translate_out_of_memory():
+        with _translate_out_of_memory(), _atomic(self._conn):
             self._conn.execute("DELETE FROM events")
             self._conn.execute(f'INSERT INTO events SELECT * FROM "{shadow}"')
 
