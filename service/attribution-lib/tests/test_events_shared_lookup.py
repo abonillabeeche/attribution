@@ -42,7 +42,14 @@ def test_multiple_managers_share_the_same_lookup_file():
 
 
 def test_rule_names_resolve_consistently_across_instances():
-    rules_engine = RuleLoader().build()
+    # `RuleLoader().build()` alone yields an empty rules_engine, which would
+    # make the loops below iterate zero times and pass vacuously regardless
+    # of whether ids actually resolve consistently. Use the populated engine
+    # instead.
+    rules_engine = attribution_lib.get_rules_engine()
+    assert rules_engine.all_rule_names, "rules_engine.all_rule_names must be non-empty for this test to be meaningful"
+    assert rules_engine.all_event_types, "rules_engine.all_event_types must be non-empty for this test to be meaningful"
+
     mgr1 = EventManager(rules_engine)
     mgr2 = EventManager(rules_engine)
     try:
