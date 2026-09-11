@@ -122,6 +122,18 @@ def sql_placeholders(count: int) -> str:
     return ",".join(["?"] * count)
 
 
+def _sql_string_literal(value: object) -> str:
+    """Quote `value` (typically a `Path`) as a single-quoted SQL string
+    literal, doubling any embedded single quotes. DuckDB has no parameter
+    binding for identifiers/file paths passed to `ATTACH`/`COPY`/
+    `read_parquet()`, so these have to be interpolated directly; a bare
+    f-string would break (or, for a maliciously crafted path, inject) on a
+    path containing a single quote, which is a valid filename character on
+    Linux.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _stable_id(name: str) -> int:
     """Content-addressed id for a lookup-table (event_types/rules/obs_sources/
     obs_formats) name: a function of the name's own bytes only, stable across
@@ -838,13 +850,13 @@ class EventManager:
                 extra_rule_names = {
                     row[0]
                     for row in scratch.execute(
-                        f"SELECT name FROM read_parquet('{snapshot_dir / 'rules.parquet'}')"
+                        f"SELECT name FROM read_parquet({_sql_string_literal(snapshot_dir / 'rules.parquet')})"
                     ).fetchall()
                 }
                 extra_event_types = {
                     row[0]
                     for row in scratch.execute(
-                        f"SELECT name FROM read_parquet('{snapshot_dir / 'event_types.parquet'}')"
+                        f"SELECT name FROM read_parquet({_sql_string_literal(snapshot_dir / 'event_types.parquet')})"
                     ).fetchall()
                 }
         except (PermissionError, OSError) as e:
@@ -887,12 +899,12 @@ class EventManager:
                     mgr._conn.execute(f"DELETE FROM {local_table}")
                     mgr._conn.execute(
                         f"""INSERT INTO {local_table}
-                            SELECT * FROM read_parquet('{src}')
+                            SELECT * FROM read_parquet({_sql_string_literal(src)})
                             WHERE name NOT IN (SELECT name FROM {table})"""
                     )
                 else:
                     mgr._conn.execute(f"DELETE FROM {table}")
-                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
+                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet({_sql_string_literal(src)})")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:

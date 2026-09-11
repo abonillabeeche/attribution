@@ -228,6 +228,29 @@ class TestSnapshotRoundTrip:
         assert restored._obs_formats.get_id(new_format) is not None
         restored.close()
 
+    def test_import_survives_single_quote_in_snapshot_path(self, tmp_path, dummy_ctx):
+        """`from_snapshot()` interpolates `snapshot_dir` directly into
+        `read_parquet('...')` SQL literals. A single quote in the path (a
+        valid filename character on Linux) must not break or corrupt the
+        query, matching the quote-doubling already applied to the ATTACH
+        path in `EventManager.__init__`.
+        """
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx, count=2)
+        plain_snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(plain_snapshot_dir)
+        mgr.close()
+
+        # Rename rather than export directly to a quoted path: export_snapshot()
+        # has its own, separately scoped, path-interpolating COPY statement.
+        quoted_snapshot_dir = tmp_path / "it's_a_snapshot"
+        plain_snapshot_dir.rename(quoted_snapshot_dir)
+
+        restored = EventManager.from_snapshot(quoted_snapshot_dir, attribution_lib.get_rules_engine())
+        rows = restored._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+        assert rows[0] == 2
+        restored.close()
+
 
 class TestSnapshotSequences:
     def test_no_id_collision_after_import(self, tmp_path, dummy_ctx):
