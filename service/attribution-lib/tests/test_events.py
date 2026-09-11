@@ -251,6 +251,40 @@ class TestOutOfMemoryHandling:
             mgr.close()
 
 
+class TestCloseRetryability:
+    """`close()` is documented as idempotent (`if self._closed: return`), but
+    a `stream.flush()` failure -- e.g. `EventStorageOutOfMemoryError`, which
+    this exact memory-limit-enforcement branch can trigger -- must not mark
+    the manager closed anyway. Otherwise the idempotency guard makes a retry
+    silently no-op instead of finishing the interrupted cleanup (remaining
+    streams unflushed, `self._conn` never closed)."""
+
+    def test_flush_failure_leaves_manager_retryable(self, monkeypatch):
+        mgr = EventManager(RuleLoader().build())
+        stream = mgr.create_stream("job_1")
+
+        calls = {"n": 0}
+        real_flush = stream.flush
+
+        def flaky_flush():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated flush failure")
+            real_flush()
+
+        monkeypatch.setattr(stream, "flush", flaky_flush)
+
+        with pytest.raises(RuntimeError, match="simulated flush failure"):
+            mgr.close()
+        assert not mgr._closed, "close() must not mark the manager closed when flush() fails"
+
+        # Retry: flush succeeds this time, and cleanup should actually finish.
+        mgr.close()
+        assert mgr._closed
+        with pytest.raises(Exception):
+            mgr._conn.execute("SELECT 1")
+
+
 class TestCheckpointRestoreAtomicity:
     """`checkpoint()`/`restore()` each run a paired DROP/CREATE or
     DELETE/INSERT. DuckDB auto-commits each statement independently unless

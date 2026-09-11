@@ -732,15 +732,18 @@ class EventManager:
     def close(self):
         """Close the event manager, flushing all streams and logging statistics.
 
-        This method is idempotent - it's safe to call multiple times.
+        This method is idempotent - it's safe to call multiple times. If a
+        flush or the connection close itself fails, the manager is left
+        unmarked so a caller can retry rather than have the idempotency
+        guard silently skip the rest of cleanup on the next call.
         """
         if self._closed:
             return
-
-        self._closed = True
 
         # Flush all streams before closing
         for stream in self._streams.values():
             stream.flush()
         self._streams.clear()
         self._conn.close()
+
+        self._closed = True
