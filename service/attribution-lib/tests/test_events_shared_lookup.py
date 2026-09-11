@@ -23,6 +23,7 @@ import pytest
 
 import attribution_lib
 from attribution_lib.events import EventManager
+from attribution_lib.exceptions import UndeclaredRuleError
 from attribution_lib.rules_engine import RuleLoader
 
 
@@ -84,7 +85,7 @@ def test_post_construction_preload_is_instance_local():
     try:
         mgr1.preload_rule_names({"only_on_mgr1"})
         assert mgr1.rules.get_id("only_on_mgr1") is not None
-        with pytest.raises(Exception):
+        with pytest.raises(UndeclaredRuleError):
             mgr2.rules.get_id("only_on_mgr1")
     finally:
         mgr1.close()
