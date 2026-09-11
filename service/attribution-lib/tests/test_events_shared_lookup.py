@@ -42,6 +42,25 @@ def test_multiple_managers_share_the_same_lookup_file():
         mgr2.close()
 
 
+def test_multiple_managers_share_the_same_python_cache_dicts():
+    """Two EventManagers for the same rules_engine must share the *same*
+    Python-level id/str dict objects for the shared tier, not just equal
+    values in separately-copied dicts -- that copying is exactly the
+    per-instance duplication this shared cache exists to avoid.
+    """
+    rules_engine = RuleLoader().build()
+    mgr1 = EventManager(rules_engine)
+    mgr2 = EventManager(rules_engine)
+    try:
+        assert mgr1._rules._shared_id_cache is mgr2._rules._shared_id_cache
+        assert mgr1._rules._shared_str_cache is mgr2._rules._shared_str_cache
+        assert mgr1._types._shared_id_cache is mgr2._types._shared_id_cache
+        assert mgr1._types._shared_str_cache is mgr2._types._shared_str_cache
+    finally:
+        mgr1.close()
+        mgr2.close()
+
+
 def test_rule_names_resolve_consistently_across_instances():
     # `RuleLoader().build()` alone yields an empty rules_engine, which would
     # make the loops below iterate zero times and pass vacuously regardless
@@ -87,6 +106,13 @@ def test_post_construction_preload_is_instance_local():
         assert mgr1.rules.get_id("only_on_mgr1") is not None
         with pytest.raises(UndeclaredRuleError):
             mgr2.rules.get_id("only_on_mgr1")
+
+        # Sharper than the above: mgr1/mgr2 share the same _shared_id_cache
+        # object (see test_multiple_managers_share_the_same_python_cache_dicts),
+        # so a preload() that accidentally wrote into that shared dict instead
+        # of its own local one would corrupt it for every instance, not just
+        # leak into mgr2 specifically. Assert directly against the shared dict.
+        assert "only_on_mgr1" not in mgr1._rules._shared_id_cache
     finally:
         mgr1.close()
         mgr2.close()

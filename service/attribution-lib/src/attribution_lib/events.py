@@ -278,8 +278,16 @@ _LOOKUP_LOCAL_TABLES = {
     "obs_formats": "local_obs_formats",
 }
 
+# table name -> (name -> id, id -> name), the Python-level mirror of a shared
+# lookup table's rows. Immutable once built; shared by reference across every
+# `_ReadOnlyLookup` for a given rules_engine (see `_build_shared_lookup_db`),
+# never mutated after `EventManager.__init__` returns.
+_LookupPythonCache: TypeAlias = dict[str, tuple[dict[str, int], dict[int, str]]]
+
 _shared_lookup_lock = threading.Lock()
-_shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, Path]" = weakref.WeakKeyDictionary()
+_shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, tuple[Path, _LookupPythonCache]]" = (
+    weakref.WeakKeyDictionary()
+)
 _shared_lookup_tmpdir: Optional[str] = None
 # PID of the process that created `_shared_lookup_tmpdir`. A `os.fork()`'d
 # child (e.g. a pre-fork server's worker process) inherits both this global
@@ -308,8 +316,10 @@ def _get_shared_lookup_tmpdir() -> str:
     return _shared_lookup_tmpdir
 
 
-def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[str]) -> None:
-    """Seed `table` with `names`, each keyed by its `_stable_id()`.
+def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[str]) -> dict[str, int]:
+    """Seed `table` with `names`, each keyed by its `_stable_id()`. Returns the
+    computed `name -> id` mapping so callers can reuse it (e.g. to warm a
+    Python-level cache) without recomputing `_stable_id()`.
 
     `_stable_id()` is a 31-bit hash, so two distinct names can in principle
     collide. Detected here up front, before the INSERT, so a collision
@@ -320,7 +330,7 @@ def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[s
     has its own collision check, see `_ReadOnlyLookup.preload`).
     """
     if not names:
-        return
+        return {}
     name_by_id: dict[int, str] = {}
     for name in names:
         id_val = _stable_id(name)
@@ -332,19 +342,23 @@ def _bulk_insert_names(conn: duckdb.DuckDBPyConnection, table: str, names: set[s
     values_clause = ",".join(["(?, ?)"] * len(name_list))
     params = [param for name in name_list for param in (_stable_id(name), name)]
     conn.execute(f"INSERT INTO {table} (id, name) VALUES {values_clause}", params)
+    return {name: id_val for id_val, name in name_by_id.items()}
 
 
-def _build_shared_lookup_db(rules_engine: "RuleEngine") -> Path:
+def _build_shared_lookup_db(rules_engine: "RuleEngine") -> tuple[Path, _LookupPythonCache]:
     """Build (once per rules_engine instance, cached) a small file-backed
     DuckDB database holding the event_types/rules/obs_sources/obs_formats
     lookup tables, fully preloaded from rules_engine and the observation
-    source/format enums. Every EventManager constructed with this
-    rules_engine ATTACHes this file read-only instead of rebuilding its own
-    private copy of this static data.
+    source/format enums, plus a Python-level mirror of those same rows.
+    Every EventManager constructed with this rules_engine ATTACHes the file
+    read-only and passes the Python-level cache straight into its
+    `_ReadOnlyLookup`s, instead of each instance separately rebuilding its
+    own private copy of this static data (SQL round trip and Python dict
+    alike).
 
-    Cached in a WeakKeyDictionary keyed by the rules_engine object itself
-    (not id()) so a GC'd-and-reused id can never spuriously match a live,
-    different rules_engine.
+    Both are cached together in a WeakKeyDictionary keyed by the
+    rules_engine object itself (not id()) so a GC'd-and-reused id can never
+    spuriously match a live, different rules_engine.
     """
     with _shared_lookup_lock:
         cached = _shared_lookup_cache.get(rules_engine)
@@ -357,16 +371,24 @@ def _build_shared_lookup_db(rules_engine: "RuleEngine") -> Path:
         conn = duckdb.connect(str(path))
         try:
             conn.execute(_SHARED_LOOKUP_SCHEMA)
-            _bulk_insert_names(conn, "obs_sources", {m.value for m in ObsSource if m.value})
-            _bulk_insert_names(conn, "obs_formats", {m.value for m in ObsFormat if m.value})
-            _bulk_insert_names(conn, "rules", set(rules_engine.all_rule_names))
-            _bulk_insert_names(conn, "event_types", set(rules_engine.all_event_types))
+            id_by_name_per_table = {
+                "obs_sources": _bulk_insert_names(conn, "obs_sources", {m.value for m in ObsSource if m.value}),
+                "obs_formats": _bulk_insert_names(conn, "obs_formats", {m.value for m in ObsFormat if m.value}),
+                "rules": _bulk_insert_names(conn, "rules", set(rules_engine.all_rule_names)),
+                "event_types": _bulk_insert_names(conn, "event_types", set(rules_engine.all_event_types)),
+            }
         finally:
             # Release the write lock so other connections can ATTACH ... READ_ONLY.
             conn.close()
 
-        _shared_lookup_cache[rules_engine] = path
-        return path
+        python_cache: _LookupPythonCache = {
+            table: (id_by_name, {id_val: name for name, id_val in id_by_name.items()})
+            for table, id_by_name in id_by_name_per_table.items()
+        }
+
+        result = (path, python_cache)
+        _shared_lookup_cache[rules_engine] = result
+        return result
 
 
 class EventStream:
@@ -568,9 +590,21 @@ class _ReadOnlyLookup:
 
     ``view_name`` is a UNION ALL view combining both tiers under the plain
     unqualified table name, so raw-SQL joins elsewhere in the codebase don't
-    need to know about the split. All names must be registered via
-    ``load_from_view()`` and/or ``preload()`` before use. ``get_id()``
-    raises *error_type* for unknown names.
+    need to know about the split. ``get_id()`` raises *error_type* for
+    unknown names.
+
+    The Python-level cache mirrors this same split: ``shared_id_cache``/
+    ``shared_str_cache`` are the *same dict objects* passed in by every
+    `_ReadOnlyLookup` for this rules_engine's shared tier (built once by
+    `_build_shared_lookup_db`), fully populated before `__init__` returns --
+    this class never writes to them, only reads. ``_local_id_cache``/
+    ``_local_str_cache`` start empty and are private to this instance,
+    populated only by `preload()` (or, for a restored snapshot's
+    `obs_sources`/`obs_formats` local overlay, `_reload_local_overlay()`).
+    An instance is always fully valid and queryable immediately after
+    construction: no separate "warm the cache" call is required, unlike the
+    old `load_from_view()`, whose result depended on when the caller
+    happened to invoke it relative to the local overlay's own state.
     """
 
     def __init__(
@@ -578,6 +612,8 @@ class _ReadOnlyLookup:
         conn: duckdb.DuckDBPyConnection,
         view_name: str,
         local_table: str,
+        shared_id_cache: dict[str, int],
+        shared_str_cache: dict[int, str],
         *,
         error_type: type[Exception] = KeyError,
     ):
@@ -585,34 +621,41 @@ class _ReadOnlyLookup:
         self._view_name = view_name
         self._local_table = local_table
         self._error_type = error_type
-        self._id_cache: dict[str, int] = {}
-        self._str_cache: dict[int, str] = {}
+        self._shared_id_cache = shared_id_cache
+        self._shared_str_cache = shared_str_cache
+        self._local_id_cache: dict[str, int] = {}
+        self._local_str_cache: dict[int, str] = {}
 
-    def load_from_view(self) -> None:
-        """Warm the cache by reading both tiers through the combined view. Read-only."""
+    def _reload_local_overlay(self) -> None:
+        """Resync the local-overlay cache from `local_table` after it was
+        written to directly via raw SQL (`from_snapshot()`'s restore of
+        `obs_sources`/`obs_formats`, which bypasses `preload()` for
+        efficiency). Reads only `local_table`, never the shared tier, so it
+        can't reintroduce the ambiguity `load_from_view()` used to have.
+        """
         with _translate_out_of_memory():
-            rows = self._conn.execute(f"SELECT name, id FROM {self._view_name}").fetchall()
+            rows = self._conn.execute(f"SELECT name, id FROM {self._local_table}").fetchall()
         for name, id_val in rows:
-            self._id_cache[name] = id_val
-            self._str_cache[id_val] = name
+            self._local_id_cache[name] = id_val
+            self._local_str_cache[id_val] = name
 
     def preload(self, names: set[str]) -> None:
-        """Register additional names not already known, warming both caches.
+        """Register additional names not already known, warming the local cache.
 
-        Writes only to this instance's local overlay table. The shared
-        table is never touched. ids are computed directly via `_stable_id()`
-        rather than assigned by the database, so unlike a sequence-based
-        scheme there's no need to read the id back after insert to learn
-        what id a name got. But `_stable_id()` is a 31-bit hash, so two
-        distinct names can collide: if that happens, `INSERT OR IGNORE`
-        silently keeps whichever name claimed the id first, leaving the
-        second name's row missing. We verify each computed id actually
+        Writes only to this instance's local overlay table and local cache.
+        The shared table/cache are never touched. ids are computed directly
+        via `_stable_id()` rather than assigned by the database, so unlike a
+        sequence-based scheme there's no need to read the id back after
+        insert to learn what id a name got. But `_stable_id()` is a 31-bit
+        hash, so two distinct names can collide: if that happens, `INSERT OR
+        IGNORE` silently keeps whichever name claimed the id first, leaving
+        the second name's row missing. We verify each computed id actually
         persisted under the requested name, checked against the combined
         view since the id may have already been claimed by a name in
         either tier, before caching anything, so a collision raises
         instead of silently aliasing two names to one id.
         """
-        missing = [n for n in names if n not in self._id_cache]
+        missing = [n for n in names if n not in self._local_id_cache and n not in self._shared_id_cache]
         if not missing:
             return
 
@@ -642,13 +685,17 @@ class _ReadOnlyLookup:
 
         for name in missing:
             id_val = id_by_name[name]
-            self._id_cache[name] = id_val
-            self._str_cache[id_val] = name
+            self._local_id_cache[name] = id_val
+            self._local_str_cache[id_val] = name
 
     def get_id(self, name: str) -> int:
         """Get ID for a preloaded name. Raises *error_type* if unknown."""
         try:
-            return self._id_cache[name]
+            return self._local_id_cache[name]
+        except KeyError:
+            pass
+        try:
+            return self._shared_id_cache[name]
         except KeyError:
             raise self._error_type(f"Unknown {self._view_name} name: {name!r}")
 
@@ -658,7 +705,9 @@ class _ReadOnlyLookup:
 
     def get_str(self, id: int) -> Optional[str]:
         """Get string for an ID, or None if not found."""
-        return self._str_cache.get(id)
+        if id in self._local_str_cache:
+            return self._local_str_cache[id]
+        return self._shared_str_cache.get(id)
 
 
 class _SnapshotRuleNames:
@@ -729,20 +778,37 @@ class EventManager:
         self._streams: dict[str, EventStream] = {}
         self._closed = False  # Track if already closed to prevent double-logging
 
-        lookup_path = _build_shared_lookup_db(rules_engine)
+        lookup_path, shared_lookup_python_cache = _build_shared_lookup_db(rules_engine)
         # Path is generated internally (tempfile), but escape defensively
         # in case a caller's platform ever produces a path with a quote.
-        self._conn.execute(f"ATTACH '{str(lookup_path).replace(chr(39), chr(39) * 2)}' AS lookup (READ_ONLY)")
+        self._conn.execute(f"ATTACH {_sql_string_literal(lookup_path)} AS lookup (READ_ONLY)")
         self._conn.execute(_LOCAL_OVERLAY_SCHEMA)
 
-        # Provide convenient lookup helpers, warmed from the shared tier.
-        self._types = _ReadOnlyLookup(self._conn, "event_types", "local_event_types", error_type=UndeclaredEventTypeError)
-        self._rules = _ReadOnlyLookup(self._conn, "rules", "local_rules", error_type=UndeclaredRuleError)
-        self._obs_sources = _ReadOnlyLookup(self._conn, "obs_sources", "local_obs_sources")
-        self._obs_formats = _ReadOnlyLookup(self._conn, "obs_formats", "local_obs_formats")
-
-        for lookup in (self._types, self._rules, self._obs_sources, self._obs_formats):
-            lookup.load_from_view()
+        # Provide convenient lookup helpers. Each shares the same Python-level
+        # id/str dicts for its table's shared tier (built once by
+        # _build_shared_lookup_db, immutable from here on) instead of copying
+        # them into a private per-instance cache.
+        event_types_shared_id, event_types_shared_str = shared_lookup_python_cache["event_types"]
+        self._types = _ReadOnlyLookup(
+            self._conn,
+            "event_types",
+            "local_event_types",
+            event_types_shared_id,
+            event_types_shared_str,
+            error_type=UndeclaredEventTypeError,
+        )
+        rules_shared_id, rules_shared_str = shared_lookup_python_cache["rules"]
+        self._rules = _ReadOnlyLookup(
+            self._conn, "rules", "local_rules", rules_shared_id, rules_shared_str, error_type=UndeclaredRuleError
+        )
+        obs_sources_shared_id, obs_sources_shared_str = shared_lookup_python_cache["obs_sources"]
+        self._obs_sources = _ReadOnlyLookup(
+            self._conn, "obs_sources", "local_obs_sources", obs_sources_shared_id, obs_sources_shared_str
+        )
+        obs_formats_shared_id, obs_formats_shared_str = shared_lookup_python_cache["obs_formats"]
+        self._obs_formats = _ReadOnlyLookup(
+            self._conn, "obs_formats", "local_obs_formats", obs_formats_shared_id, obs_formats_shared_str
+        )
 
     def preload_rule_names(self, names: set[str]) -> None:
         """Pre-populate the rules lookup table and warm caches.
@@ -966,8 +1032,13 @@ class EventManager:
                     assert next_row is not None, f"nextval('{seq_name}') returned no row"
                     cur = next_row[0]
 
-        for lookup in (mgr._types, mgr._rules, mgr._obs_sources, mgr._obs_formats):
-            lookup.load_from_view()
+        # mgr._types/mgr._rules need no resync here: their shared cache was
+        # already built from _SnapshotRuleNames's rules_engine-union-snapshot
+        # names at construction. Only obs_sources/obs_formats have a local
+        # overlay actually written above (via raw SQL, not preload()), so
+        # only their local caches need catching up.
+        mgr._obs_sources._reload_local_overlay()
+        mgr._obs_formats._reload_local_overlay()
 
         # Keep historical names referenced by restored events, then merge names
         # introduced by the current runtime so new rules can process old snapshots.
