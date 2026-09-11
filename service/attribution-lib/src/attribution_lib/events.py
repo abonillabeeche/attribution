@@ -218,10 +218,10 @@ CREATE TABLE local_rules (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
 CREATE TABLE local_obs_sources (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
 CREATE TABLE local_obs_formats (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
 
-CREATE VIEW event_types AS SELECT * FROM lookup.event_types UNION ALL SELECT * FROM local_event_types;
-CREATE VIEW rules AS SELECT * FROM lookup.rules UNION ALL SELECT * FROM local_rules;
-CREATE VIEW obs_sources AS SELECT * FROM lookup.obs_sources UNION ALL SELECT * FROM local_obs_sources;
-CREATE VIEW obs_formats AS SELECT * FROM lookup.obs_formats UNION ALL SELECT * FROM local_obs_formats;
+CREATE VIEW event_types AS SELECT id, name FROM lookup.event_types UNION ALL SELECT id, name FROM local_event_types;
+CREATE VIEW rules AS SELECT id, name FROM lookup.rules UNION ALL SELECT id, name FROM local_rules;
+CREATE VIEW obs_sources AS SELECT id, name FROM lookup.obs_sources UNION ALL SELECT id, name FROM local_obs_sources;
+CREATE VIEW obs_formats AS SELECT id, name FROM lookup.obs_formats UNION ALL SELECT id, name FROM local_obs_formats;
 """
 
 # name -> local overlay table, for the 2 lookup tables from_snapshot() still
