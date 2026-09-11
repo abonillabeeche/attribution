@@ -84,3 +84,21 @@ def test_attribute_translates_overflow_to_507(client, monkeypatch):
 
     assert response.status_code == EventStorageOverflowError.code
     assert response.json()["att_id"] == att_id
+
+
+@pytest.mark.parametrize(
+    "path,method",
+    [
+        ("/v1/attributor/{att_id}/observation", "post"),
+        ("/v1/attributor/{att_id}/attribution", "get"),
+        ("/v2/attributor/{att_id}/observation", "post"),
+        ("/v2/attributor/{att_id}/attribution", "get"),
+    ],
+)
+def test_507_is_documented_on_routes_that_can_raise_it(app, path, method):
+    """`ingest()`/`attribute()` (see `app/attributor.py`) can both raise
+    `EventStorageOverflowError`, so every route that calls them should
+    document 507 in its OpenAPI `responses`, not just the routes' happy path
+    and client-fixable errors."""
+    operation = app.openapi()["paths"][path][method]
+    assert "507" in operation["responses"], f"{method.upper()} {path} is missing a documented 507 response"
