@@ -117,3 +117,41 @@ def test_joins_against_rules_view_see_both_tiers():
         assert rows == {shared_name, "late_addition_rule"}
     finally:
         mgr.close()
+
+
+class TestSharedLookupTmpdirForkSafety:
+    """`_get_shared_lookup_tmpdir()`'s `atexit` cleanup is registered once per
+    process and, along with the module globals it reads, inherited by any
+    `os.fork()`'d child (e.g. a pre-fork server's worker process). A child
+    must not delete the directory on its own exit: it didn't create it, and
+    the parent or sibling workers may still have `EventManager`s ATTACHed to
+    files inside it.
+    """
+
+    def test_forked_child_does_not_delete_shared_tmpdir(self, monkeypatch, tmp_path):
+        import os
+
+        import attribution_lib.events as events_module
+
+        fake_tmpdir = str(tmp_path / "shared_lookup")
+        os.makedirs(fake_tmpdir)
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir", fake_tmpdir)
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_owner_pid", os.getpid())
+
+        pid = os.fork()
+        if pid == 0:
+            # Child: simulate its inherited atexit handler firing on its own exit.
+            try:
+                events_module._cleanup_shared_lookup_tmpdir()
+            finally:
+                os._exit(0)
+
+        _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, f"child exited abnormally: {status}"
+
+        # The child must not have deleted the directory the parent still owns.
+        assert os.path.isdir(fake_tmpdir)
+
+        # The actual owning process's cleanup must still work.
+        events_module._cleanup_shared_lookup_tmpdir()
+        assert not os.path.exists(fake_tmpdir)

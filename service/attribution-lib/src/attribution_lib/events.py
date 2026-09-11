@@ -10,6 +10,7 @@
 import atexit
 import contextlib
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -236,17 +237,30 @@ _LOOKUP_LOCAL_TABLES = {
 _shared_lookup_lock = threading.Lock()
 _shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, Path]" = weakref.WeakKeyDictionary()
 _shared_lookup_tmpdir: Optional[str] = None
+# PID of the process that created `_shared_lookup_tmpdir`. A `os.fork()`'d
+# child (e.g. a pre-fork server's worker process) inherits both this global
+# and the `atexit` registration below, but must not delete the directory on
+# its own exit: it didn't create it, and the parent or sibling workers may
+# still have EventManagers ATTACHed to files inside it. Only the owning PID
+# performs cleanup; a forked child's exit is a no-op here.
+_shared_lookup_tmpdir_owner_pid: Optional[int] = None
 # Monotonically increasing; NOT len(_shared_lookup_cache), which can shrink
 # as entries are garbage-collected and would then produce a reused filename
 # for an unrelated rules_engine, colliding with that file's existing schema.
 _shared_lookup_counter = 0
 
 
+def _cleanup_shared_lookup_tmpdir() -> None:
+    if _shared_lookup_tmpdir is not None and os.getpid() == _shared_lookup_tmpdir_owner_pid:
+        shutil.rmtree(_shared_lookup_tmpdir, ignore_errors=True)
+
+
 def _get_shared_lookup_tmpdir() -> str:
-    global _shared_lookup_tmpdir
+    global _shared_lookup_tmpdir, _shared_lookup_tmpdir_owner_pid
     if _shared_lookup_tmpdir is None:
         _shared_lookup_tmpdir = tempfile.mkdtemp(prefix="attribution_lib_shared_lookup_")
-        atexit.register(shutil.rmtree, _shared_lookup_tmpdir, ignore_errors=True)
+        _shared_lookup_tmpdir_owner_pid = os.getpid()
+        atexit.register(_cleanup_shared_lookup_tmpdir)
     return _shared_lookup_tmpdir
 
 
