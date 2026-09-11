@@ -508,7 +508,7 @@ class _ReadOnlyLookup:
     ``view_name`` is a UNION ALL view combining both tiers under the plain
     unqualified table name, so raw-SQL joins elsewhere in the codebase don't
     need to know about the split. All names must be registered via
-    ``load_from_shared()`` and/or ``preload()`` before use. ``get_id()``
+    ``load_from_view()`` and/or ``preload()`` before use. ``get_id()``
     raises *error_type* for unknown names.
     """
 
@@ -527,8 +527,8 @@ class _ReadOnlyLookup:
         self._id_cache: dict[str, int] = {}
         self._str_cache: dict[int, str] = {}
 
-    def load_from_shared(self) -> None:
-        """Warm the cache from the shared, already-preloaded table. Read-only."""
+    def load_from_view(self) -> None:
+        """Warm the cache by reading both tiers through the combined view. Read-only."""
         with _translate_out_of_memory():
             rows = self._conn.execute(f"SELECT name, id FROM {self._view_name}").fetchall()
         for name, id_val in rows:
@@ -681,7 +681,7 @@ class EventManager:
         self._obs_formats = _ReadOnlyLookup(self._conn, "obs_formats", "local_obs_formats")
 
         for lookup in (self._types, self._rules, self._obs_sources, self._obs_formats):
-            lookup.load_from_shared()
+            lookup.load_from_view()
 
     def preload_rule_names(self, names: set[str]) -> None:
         """Pre-populate the rules lookup table and warm caches.
@@ -904,7 +904,7 @@ class EventManager:
                     cur = next_row[0]
 
         for lookup in (mgr._types, mgr._rules, mgr._obs_sources, mgr._obs_formats):
-            lookup.load_from_shared()
+            lookup.load_from_view()
 
         # Keep historical names referenced by restored events, then merge names
         # introduced by the current runtime so new rules can process old snapshots.
