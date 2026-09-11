@@ -23,6 +23,8 @@ directly (see `attribution-lib`'s `events.py`), so this is wired in as a
 plain constructor argument. No monkeypatching required.
 """
 
+import pytest
+
 from tests.conftest import make_up_attributor_info, post_attributor
 
 
@@ -66,3 +68,18 @@ def test_disk_spill_can_be_enabled_via_env_var(app, client, monkeypatch):
     conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
     (temp_dir,) = conn.execute("SELECT current_setting('temp_directory')").fetchone()
     assert temp_dir != "", "expected disk spill enabled when ATTRIBUTOR_ALLOW_DISK_SPILL=true"
+
+
+def test_memory_limit_can_be_configured_via_env_var(app, client, monkeypatch):
+    """The 128MB per-attributor default is a guess at a reasonable ceiling,
+    not a value every deployment should be stuck with; ATTRIBUTOR_DUCKDB_MEMORY_LIMIT
+    lets it be tuned without a code change."""
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "256MB")
+    info = make_up_attributor_info(id="duckdb-limits-4")
+    att_id = post_attributor(client, info)
+
+    conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
+    (memory_limit,) = conn.execute("SELECT current_setting('memory_limit')").fetchone()
+    value, unit = memory_limit.split()
+    assert unit == "MiB", f"expected a MiB-scale memory_limit, got {memory_limit!r}"
+    assert float(value) == pytest.approx(256_000_000 / 1024**2, rel=0.01)

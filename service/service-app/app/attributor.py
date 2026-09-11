@@ -57,6 +57,16 @@ def _allow_disk_spill() -> bool:
     return os.environ.get("ATTRIBUTOR_ALLOW_DISK_SPILL", "false").strip().lower() == "true"
 
 
+def _duckdb_memory_limit() -> str:
+    """Per-attributor DuckDB `memory_limit`, as a DuckDB size string (e.g.
+    `"128MB"`). Each attributor's dataset is one job's worth of events and
+    always tiny, so 128MB is a generous default ceiling, not a tuned value
+    every deployment should be stuck with -- override it with
+    ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.
+    """
+    return os.environ.get("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "128MB").strip()
+
+
 AttributorId: TypeAlias = str
 
 
@@ -203,7 +213,10 @@ class AttributorWrapper:
         # benefits from intra-query parallelism, so cap DuckDB's per-connection
         # host-sized defaults (threads=cpu_count, memory_limit=~80% of RAM).
         event_manager = EventManager(
-            rules_engine=rules_engine, threads=1, memory_limit="128MB", allow_disk_spill=_allow_disk_spill()
+            rules_engine=rules_engine,
+            threads=1,
+            memory_limit=_duckdb_memory_limit(),
+            allow_disk_spill=_allow_disk_spill(),
         )
         event_stream = event_manager.create_stream(str(job_info.id))
 
