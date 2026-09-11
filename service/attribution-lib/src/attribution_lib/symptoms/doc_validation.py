@@ -72,7 +72,7 @@ def find_unresolved_symptom_docs(
 ) -> list[SymptomDeclaration]:
     """Return real symptoms whose documentation slug does not resolve.
 
-    A slug resolves when it is non-empty and present in ``valid_doc_ids``. Slugs
+    A slug resolves when it is non-empty and present in ``valid_doc_ids``.
     Exact normalized ``(symptom name, doc slug)`` pairs listed in ``baseline`` are
     treated as known, grandfathered gaps and are not reported. Pairing the name
     and slug prevents a new declaration from reusing an old missing slug.
