@@ -15,6 +15,7 @@ import pytest
 
 import attribution_lib
 from attribution_lib.events import EventManager
+from attribution_lib.exceptions import InvalidSnapshotError
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
     Source as ObsSource,
@@ -228,23 +229,19 @@ class TestSnapshotRoundTrip:
         assert restored._obs_formats.get_id(new_format) is not None
         restored.close()
 
-    def test_import_survives_single_quote_in_snapshot_path(self, tmp_path, dummy_ctx):
-        """`from_snapshot()` interpolates `snapshot_dir` directly into
-        `read_parquet('...')` SQL literals. A single quote in the path (a
-        valid filename character on Linux) must not break or corrupt the
-        query, matching the quote-doubling already applied to the ATTACH
-        path in `EventManager.__init__`.
+    def test_export_import_survives_single_quote_in_snapshot_path(self, tmp_path, dummy_ctx):
+        """Both `export_snapshot()` (`COPY ... TO '...'`) and `from_snapshot()`
+        (`read_parquet('...')`) interpolate the snapshot path directly into SQL
+        string literals. A single quote in the path (a valid filename character
+        on Linux) must not break or corrupt either query, matching the
+        quote-doubling already applied to the ATTACH path in
+        `EventManager.__init__`.
         """
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         _add_events(mgr, "job_1", dummy_ctx, count=2)
-        plain_snapshot_dir = tmp_path / "snap"
-        mgr.export_snapshot(plain_snapshot_dir)
-        mgr.close()
-
-        # Rename rather than export directly to a quoted path: export_snapshot()
-        # has its own, separately scoped, path-interpolating COPY statement.
         quoted_snapshot_dir = tmp_path / "it's_a_snapshot"
-        plain_snapshot_dir.rename(quoted_snapshot_dir)
+        mgr.export_snapshot(quoted_snapshot_dir)
+        mgr.close()
 
         restored = EventManager.from_snapshot(quoted_snapshot_dir, attribution_lib.get_rules_engine())
         rows = restored._conn.execute("SELECT COUNT(*) FROM events").fetchone()
@@ -303,3 +300,36 @@ class TestSnapshotErrors:
 
         with pytest.raises(FileNotFoundError, match="events.parquet"):
             EventManager.from_snapshot(tmp_path / "partial", attribution_lib.get_rules_engine())
+
+    @pytest.mark.parametrize(
+        "parquet_file,column",
+        [
+            ("events", "event_type"),
+            ("events", "source_rule"),
+            ("observation_contexts", "source"),
+            ("observation_contexts", "format"),
+        ],
+    )
+    def test_dangling_lookup_reference_raises(self, tmp_path, dummy_ctx, parquet_file, column):
+        """`from_snapshot()` restores `events`/`observation_contexts` via a raw
+        `INSERT ... SELECT * FROM read_parquet(...)`, bypassing `get_id()`'s
+        usual guarantee that a stored id always resolves to a real lookup
+        name. A corrupted or hand-edited snapshot with a dangling id must be
+        rejected rather than silently imported.
+        """
+        import duckdb
+
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx)
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        mgr.close()
+
+        target = snapshot_dir / f"{parquet_file}.parquet"
+        with duckdb.connect(":memory:") as scratch:
+            scratch.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet('{target}')")
+            scratch.execute(f"UPDATE t SET {column} = 999999999")
+            scratch.execute(f"COPY t TO '{target}' (FORMAT PARQUET)")
+
+        with pytest.raises(InvalidSnapshotError, match=column):
+            EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())

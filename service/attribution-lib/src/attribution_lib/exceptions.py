@@ -332,6 +332,22 @@ class StableIdCollisionError(DatabaseError):
         super().__init__(message)
 
 
+class InvalidSnapshotError(DatabaseError):
+    """Raised when a snapshot's `events`/`observation_contexts` rows reference
+    a lookup id (`event_type`/`source_rule`/`source`/`format`) that doesn't
+    resolve to any name in the restored `event_types`/`rules`/`obs_sources`/
+    `obs_formats` tables, e.g. a corrupted or hand-edited snapshot."""
+
+    def __init__(self, table: str, column: str, invalid_ids: list[int]) -> None:
+        self.table = table
+        self.column = column
+        self.invalid_ids = invalid_ids
+        super().__init__(
+            f"Snapshot table {table!r} has {len(invalid_ids)} row(s) with an unresolvable "
+            f"{column!r} id: {sorted(invalid_ids)}"
+        )
+
+
 class RuleEngineError(AttributeError):
     """Blanket exception for rules engine items."""
 

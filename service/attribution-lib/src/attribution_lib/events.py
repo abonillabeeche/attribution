@@ -25,6 +25,7 @@ import duckdb
 
 from attribution_lib.exceptions import (
     EventStorageOutOfMemoryError,
+    InvalidSnapshotError,
     SnapshotSchemaVersionError,
     StableIdCollisionError,
     UndeclaredEventTypeError,
@@ -120,6 +121,37 @@ def _get_or_create_id(conn: duckdb.DuckDBPyConnection, table: TableName, name: s
 def sql_placeholders(count: int) -> str:
     """Generate SQL placeholder string for parameterized IN clauses."""
     return ",".join(["?"] * count)
+
+
+_SNAPSHOT_LOOKUP_REFERENCES = (
+    ("observation_contexts", "source", "obs_sources"),
+    ("observation_contexts", "format", "obs_formats"),
+    ("events", "event_type", "event_types"),
+    ("events", "source_rule", "rules"),
+)
+
+
+def _validate_snapshot_lookup_references(conn: duckdb.DuckDBPyConnection) -> None:
+    """Reject a restored snapshot whose `events`/`observation_contexts` rows
+    reference a lookup id that doesn't resolve to any name in the restored
+    `event_types`/`rules`/`obs_sources`/`obs_formats` tables.
+
+    Normal writes always go through `_ReadOnlyLookup.get_id()`, which only
+    ever returns an id for a name actually present in the lookup tables, so
+    this can't happen for data written through the normal API. But
+    `from_snapshot()` restores `events`/`observation_contexts` via a raw
+    `INSERT ... SELECT * FROM read_parquet(...)`, bypassing that path
+    entirely, so a corrupted or hand-edited snapshot could otherwise import
+    silently-dangling ids.
+    """
+    with _translate_out_of_memory():
+        for table, column, lookup_table in _SNAPSHOT_LOOKUP_REFERENCES:
+            rows = conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} "
+                f"WHERE {column} IS NOT NULL AND {column} NOT IN (SELECT id FROM {lookup_table})"
+            ).fetchall()
+            if rows:
+                raise InvalidSnapshotError(table, column, [row[0] for row in rows])
 
 
 def _sql_string_literal(value: object) -> str:
@@ -804,7 +836,7 @@ class EventManager:
         for table in self._SNAPSHOT_TABLES:
             dest = snapshot_dir / f"{table}.parquet"
             try:
-                self._conn.execute(f"COPY {table} TO '{dest}' (FORMAT PARQUET)")
+                self._conn.execute(f"COPY {table} TO {_sql_string_literal(dest)} (FORMAT PARQUET)")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot write snapshot file {dest}: {e}") from e
             except duckdb.IOException as e:
@@ -911,6 +943,8 @@ class EventManager:
                 raise RuntimeError(f"DuckDB I/O error importing '{table}' from {src}: {e}") from e
             except duckdb.Error as e:
                 raise RuntimeError(f"DuckDB error importing '{table}' from {src}: {e}") from e
+
+        _validate_snapshot_lookup_references(mgr._conn)
 
         # Advance sequences past imported IDs so new inserts don't collide.
         # DuckDB lacks setval(), so we consume nextval() until we're past max(id).
