@@ -701,6 +701,12 @@ class EventManager:
         for lookup in (mgr._types, mgr._rules, mgr._obs_sources, mgr._obs_formats):
             lookup.rebuild_cache()
 
+        # Keep historical names referenced by restored events, then merge names
+        # introduced by the current runtime so new rules can process old snapshots.
+        mgr.preload_rule_names(rules_engine.all_rule_names)
+        mgr.preload_event_types(rules_engine.all_event_types)
+        mgr._populate_enum_tables()
+
         return mgr
 
     def checkpoint(self, name: str) -> None:
