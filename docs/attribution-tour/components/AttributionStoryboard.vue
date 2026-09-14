@@ -1,3 +1,14 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+property and proprietary rights in and to this material, related
+documentation and any modifications thereto. Any use, reproduction,
+disclosure or distribution of this material and related documentation
+without an express license agreement from NVIDIA CORPORATION or
+its affiliates is strictly prohibited.
+-->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
@@ -29,7 +40,7 @@ interface ObservationLine {
 
 const DOCS_BASE =
   import.meta.env.VITE_ATTRIBUTION_DOCS_BASE ||
-  'https://github.com/NVIDIA/attribution/blob/main/docs/attribution.md'
+  'https://github.com/dsx-ai-factory/attribution/blob/main/docs/attribution.md'
 
 const motionPresets: Record<MotionSpeed, { label: string; title: string; fast: string; medium: string; slow: string }> = {
   normal: { label: '1×', title: 'Normal motion', fast: '180ms', medium: '480ms', slow: '820ms' },
@@ -376,7 +387,7 @@ function setMotionSpeed(speed: MotionSpeed) {
 
 function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null
-  if (target?.matches('input, textarea, select')) return
+  if (target?.closest('button, a, input, textarea, select')) return
   if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
     event.preventDefault()
     event.stopImmediatePropagation()
@@ -403,7 +414,9 @@ onMounted(() => {
   const index = scenes.findIndex((scene) => scene.id === requested)
   if (index >= 0) currentIndex.value = index
   const requestedMotion = url.searchParams.get('motion')
-  if (requestedMotion && requestedMotion in motionPresets) motionSpeed.value = requestedMotion as MotionSpeed
+  if (requestedMotion && motionOptions.includes(requestedMotion as MotionSpeed)) {
+    motionSpeed.value = requestedMotion as MotionSpeed
+  }
   window.addEventListener('keydown', onKeydown, true)
 })
 
