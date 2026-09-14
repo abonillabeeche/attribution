@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -247,6 +248,64 @@ class TestSnapshotRoundTrip:
         rows = restored._conn.execute("SELECT COUNT(*) FROM events").fetchone()
         assert rows[0] == 2
         restored.close()
+
+    def test_close_removes_the_one_off_snapshot_lookup_file(self, tmp_path, dummy_ctx):
+        """`from_snapshot()` builds its own one-off shared lookup db (see
+        `_SnapshotRuleNames`), keyed in `_shared_lookup_cache` by an object
+        nothing else keeps alive after `from_snapshot()` returns. Without
+        `close()` unlinking it, that `.duckdb` file leaks on disk for the
+        life of the process on every restore.
+        """
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx, count=2)
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        mgr.close()
+
+        restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+        (lookup_path,) = restored._conn.execute(
+            "SELECT path FROM duckdb_databases() WHERE database_name='lookup'"
+        ).fetchone()
+        assert Path(lookup_path).exists()
+
+        restored.close()
+        assert not Path(lookup_path).exists(), "the one-off snapshot lookup file must be removed on close()"
+
+        # Idempotent: a second close() must not raise (nothing left to clean up).
+        restored.close()
+
+    def test_close_retry_after_unlink_failure_does_not_redetach(self, tmp_path, dummy_ctx, monkeypatch):
+        """If unlink() fails after DETACH+conn.close() already succeeded,
+        close() must not have marked itself done (see the general retry
+        contract), but a retry must not re-issue `DETACH lookup` against
+        the now-already-closed connection either.
+        """
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx, count=1)
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        mgr.close()
+
+        restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+
+        real_unlink = Path.unlink
+        calls = {"n": 0}
+
+        def flaky_unlink(self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("simulated unlink failure")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+        with pytest.raises(OSError, match="simulated unlink failure"):
+            restored.close()
+        assert not restored._closed
+
+        # Retry must not try to DETACH again on the already-closed connection.
+        restored.close()
+        assert restored._closed
 
 
 class TestSnapshotSequences:

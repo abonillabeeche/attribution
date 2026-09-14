@@ -784,6 +784,17 @@ class EventManager:
         self._conn.execute(f"ATTACH {_sql_string_literal(lookup_path)} AS lookup (READ_ONLY)")
         self._conn.execute(_LOCAL_OVERLAY_SCHEMA)
 
+        # `_SnapshotRuleNames` builds its own one-off shared lookup db per
+        # `from_snapshot()` call (see its docstring), keyed in
+        # `_shared_lookup_cache` by an object nothing else keeps alive once
+        # `from_snapshot()` returns. Nothing else ever unlinks that file, so
+        # this instance -- the only thing that will ever ATTACH it -- owns
+        # cleaning it up in close(). A real rules_engine's lookup db is
+        # shared by every EventManager constructed with it, so it must never
+        # be deleted here.
+        self._owned_lookup_path: Optional[Path] = lookup_path if isinstance(rules_engine, _SnapshotRuleNames) else None
+        self._lookup_detached = False
+
         # Provide convenient lookup helpers. Each shares the same Python-level
         # id/str dicts for its table's shared tier (built once by
         # _build_shared_lookup_db, immutable from here on) instead of copying
@@ -1089,6 +1100,14 @@ class EventManager:
         for stream in self._streams.values():
             stream.flush()
         self._streams.clear()
+
+        if self._owned_lookup_path is not None and not self._lookup_detached:
+            self._conn.execute("DETACH lookup")
+            self._lookup_detached = True
         self._conn.close()
+
+        if self._owned_lookup_path is not None:
+            self._owned_lookup_path.unlink(missing_ok=True)
+            self._owned_lookup_path = None
 
         self._closed = True

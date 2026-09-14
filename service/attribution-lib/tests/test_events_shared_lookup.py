@@ -42,6 +42,29 @@ def test_multiple_managers_share_the_same_lookup_file():
         mgr2.close()
 
 
+def test_closing_one_manager_does_not_delete_a_shared_lookup_file():
+    """Only `from_snapshot()`'s one-off lookup db is owned by a single
+    EventManager and safe to delete on close(). A real rules_engine's
+    lookup db is shared by every EventManager constructed with it, so
+    closing one must not unlink the file a sibling instance still has
+    ATTACHed -- checked on disk directly, since a POSIX unlink of an
+    already-open file wouldn't break mgr2's existing file descriptor
+    and so wouldn't be caught by mgr2 continuing to work."""
+    import os
+
+    rules_engine = RuleLoader().build()
+    mgr1 = EventManager(rules_engine)
+    mgr2 = EventManager(rules_engine)
+    try:
+        (lookup_path,) = mgr2._conn.execute(
+            "SELECT path FROM duckdb_databases() WHERE database_name='lookup'"
+        ).fetchone()
+        mgr1.close()
+        assert os.path.exists(lookup_path), "mgr1.close() must not delete a lookup file mgr2 still shares"
+    finally:
+        mgr2.close()
+
+
 def test_multiple_managers_share_the_same_python_cache_dicts():
     """Two EventManagers for the same rules_engine must share the *same*
     Python-level id/str dict objects for the shared tier, not just equal
