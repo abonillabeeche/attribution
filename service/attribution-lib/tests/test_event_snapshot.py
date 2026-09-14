@@ -9,11 +9,16 @@
 # its affiliates is strictly prohibited.
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 import attribution_lib
 from attribution_lib.events import EventManager
+from attribution_lib.observation.inbound import (
+    Format as ObsFormat,
+    Source as ObsSource,
+)
 from attribution_lib.resources import AllJobResources
 from attribution_lib.sources import Source
 
@@ -105,6 +110,35 @@ class TestSnapshotRoundTrip:
 
         rule_id = restored.rules.get_id("rule_0")
         assert rule_id is not None
+        restored.close()
+
+    def test_import_merges_current_lookup_catalogs(self, tmp_path):
+        """A restored historical snapshot includes newly declared runtime names."""
+        historical_engine = SimpleNamespace(
+            all_rule_names={"historical_rule"},
+            all_event_types={"Historical.event"},
+        )
+        mgr = EventManager(rules_engine=historical_engine)
+
+        new_source = ObsSource.CSP_EVENT.value
+        new_format = ObsFormat.CSP_EVENT_LIST.value
+        mgr._conn.execute("DELETE FROM obs_sources WHERE name=?", [new_source])
+        mgr._conn.execute("DELETE FROM obs_formats WHERE name=?", [new_format])
+        mgr.export_snapshot(tmp_path / "snap")
+        mgr.close()
+
+        current_engine = SimpleNamespace(
+            all_rule_names={"historical_rule", "current_rule"},
+            all_event_types={"Historical.event", "Current.event"},
+        )
+        restored = EventManager.from_snapshot(tmp_path / "snap", current_engine)
+
+        assert restored.rules.get_id("historical_rule") is not None
+        assert restored.rules.get_id("current_rule") is not None
+        assert restored.types.get_id("Historical.event") is not None
+        assert restored.types.get_id("Current.event") is not None
+        assert restored._obs_sources.get_id(new_source) is not None
+        assert restored._obs_formats.get_id(new_format) is not None
         restored.close()
 
 
