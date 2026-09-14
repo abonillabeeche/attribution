@@ -15,9 +15,7 @@ its affiliates is strictly prohibited.
 This standalone [Slidev](https://sli.dev/) deck is an interactive companion to
 the repository-level [How Attribution Works](../attribution.md) documentation.
 It follows one compact example across the shared NVIDIA Attribution process,
-verified against the bundled rules. The separate
-[prose walkthrough](../attribution-walkthrough.md) remains a useful
-non-interactive example.
+verified against the bundled rules.
 
 The deck is a self-contained static application so a broader documentation
 site can mount it without coupling its runtime or navigation. Set
