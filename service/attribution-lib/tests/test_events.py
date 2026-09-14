@@ -173,6 +173,250 @@ class TestStableIdCollisionDetection:
         assert "rule_e" in str(error)
 
 
+class TestConnectionTuning:
+    """`EventManager` creates its own private DuckDB connection per instance. DuckDB
+    defaults threads to the host's full CPU count and memory_limit to ~80% of system
+    RAM. Callers that create many short-lived `EventManagers` (one per unit of work)
+    need a way to cap that per-connection overhead."""
+
+    def test_defaults_are_unchanged_when_not_specified(self):
+        """No threads/memory_limit args -> today's DuckDB host-sized defaults, unchanged."""
+        import os
+
+        mgr = EventManager(RuleLoader().build())
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == os.cpu_count()
+        mgr.close()
+
+    def test_threads_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), threads=1)
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == 1
+        mgr.close()
+
+    def test_memory_limit_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), memory_limit="128MB")
+        (memory_limit,) = mgr._conn.execute("SELECT current_setting('memory_limit')").fetchone()
+        # DuckDB reports this as a normalized "<value> <unit>" string (e.g.
+        # "122.0 MiB" for a 128MB request). "GiB" not in memory_limit alone
+        # would pass for any non-GiB-scale value, including a wrong one, so
+        # parse it and check it's actually ~128MB.
+        value, unit = memory_limit.split()
+        assert unit == "MiB", f"expected a MiB-scale memory_limit, got {memory_limit!r}"
+        assert float(value) == pytest.approx(128_000_000 / 1024**2, rel=0.01)
+        mgr.close()
+
+    def test_disk_spill_enabled_by_default(self):
+        """Unchanged from today's DuckDB default: deployments with disk to
+        spare (e.g. bare metal) get graceful degradation instead of a hard
+        failure when memory_limit is exceeded."""
+        mgr = EventManager(RuleLoader().build())
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir != ""
+        mgr.close()
+
+    def test_disk_spill_can_be_disabled(self):
+        """Deployments with no writable disk (e.g. read-only containers) need
+        to opt out of DuckDB's default spill-to-disk-on-overflow behavior."""
+        mgr = EventManager(RuleLoader().build(), allow_disk_spill=False)
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir == ""
+        mgr.close()
+
+
+class TestOutOfMemoryHandling:
+    """With disk spill disabled, exceeding memory_limit must surface as a
+    catchable, stable library exception. It should not force every caller
+    to know about (and catch) duckdb's own exception hierarchy."""
+
+    def test_overflow_raises_library_exception_not_raw_duckdb_exception(self):
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB", allow_disk_spill=False)
+        stream = mgr.create_stream("job_1")
+        try:
+            with pytest.raises(EventStorageOutOfMemoryError):
+                stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+    def test_overflow_with_disk_spill_enabled_does_not_raise(self):
+        """Same oversized write, but with disk spill allowed (the default).
+        It should succeed by spilling to disk instead of erroring."""
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB")
+        stream = mgr.create_stream("job_1")
+        try:
+            stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+
+class TestCloseRetryability:
+    """`close()` is documented as idempotent (`if self._closed: return`), but
+    a `stream.flush()` failure -- e.g. `EventStorageOutOfMemoryError`, which
+    this exact memory-limit-enforcement branch can trigger -- must not mark
+    the manager closed anyway. Otherwise the idempotency guard makes a retry
+    silently no-op instead of finishing the interrupted cleanup (remaining
+    streams unflushed, `self._conn` never closed)."""
+
+    def test_flush_failure_leaves_manager_retryable(self, monkeypatch):
+        mgr = EventManager(RuleLoader().build())
+        stream = mgr.create_stream("job_1")
+
+        calls = {"n": 0}
+        real_flush = stream.flush
+
+        def flaky_flush():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated flush failure")
+            real_flush()
+
+        monkeypatch.setattr(stream, "flush", flaky_flush)
+
+        with pytest.raises(RuntimeError, match="simulated flush failure"):
+            mgr.close()
+        assert not mgr._closed, "close() must not mark the manager closed when flush() fails"
+
+        # Retry: flush succeeds this time, and cleanup should actually finish.
+        mgr.close()
+        assert mgr._closed
+        with pytest.raises(Exception):
+            mgr._conn.execute("SELECT 1")
+
+
+class TestCheckpointRestoreAtomicity:
+    """`checkpoint()`/`restore()` each run a paired DROP/CREATE or
+    DELETE/INSERT. DuckDB auto-commits each statement independently unless
+    wrapped in an explicit transaction, so if the second statement fails,
+    the first one's effect (dropping the prior checkpoint, or deleting all
+    events) would otherwise already be permanently committed.
+    """
+
+    @staticmethod
+    def _insert_event(stream, line_num):
+        stream.mgr.preload_event_types({"Test.checkpoint_event"})
+        type_id = stream.mgr.types.get_id("Test.checkpoint_event")
+        stream.execute(
+            "INSERT INTO events (context_id, event_type, status, line_num, payload) VALUES (?, ?, 1, ?, '{}')",
+            [stream.ctx_id, type_id, line_num],
+        )
+
+    def test_checkpoint_failure_rolls_back_without_destroying_prior_checkpoint(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            (count_before,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_before == 1
+
+            self._insert_event(stream, 2)
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if 'CREATE TABLE "_ckpt_v1"' in sql:
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.checkpoint("v1")
+
+            # The prior checkpoint must survive: the DROP TABLE that ran
+            # before the failing CREATE TABLE must have been rolled back too.
+            (count_after,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_after == 1
+        finally:
+            mgr.close()
+
+    def test_restore_failure_rolls_back_without_emptying_events_table(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if sql.strip().startswith("INSERT INTO events SELECT"):
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            # The DELETE FROM events that ran before the failing INSERT must
+            # have been rolled back too, not left with an emptied table.
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+    def test_commit_failure_also_rolls_back(self, monkeypatch):
+        """`conn.commit()` itself can fail. `_atomic()` must roll back in
+        that case too, not just when a statement inside the block fails.
+        """
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            def flaky_commit(self):
+                raise RuntimeError("synthetic commit failure")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+    def test_commit_time_out_of_memory_is_translated(self, monkeypatch):
+        """A `duckdb.OutOfMemoryException` raised by `conn.commit()` itself
+        (not just by a statement inside the transaction) must still surface
+        as `EventStorageOutOfMemoryError`, matching every other DuckDB
+        write path in this class.
+        """
+        import duckdb as duckdb_module
+
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+
+            def flaky_commit(self):
+                raise duckdb_module.OutOfMemoryException("synthetic commit OOM")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(EventStorageOutOfMemoryError):
+                mgr.checkpoint("v1")
+        finally:
+            mgr.close()
+
+
 class TestEnumPopulation:
     """Test that observation source and format enums are automatically populated."""
 

@@ -303,6 +303,14 @@ class UnexpectedEmptyQueryResultError(DatabaseError):
         self.params = params
 
 
+class EventStorageOutOfMemoryError(DatabaseError):
+    """Raised when a DuckDB operation exceeds memory_limit with disk spill disabled."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 class StableIdCollisionError(DatabaseError):
     """Raised when two distinct names hash to the same content-addressed id."""
 
