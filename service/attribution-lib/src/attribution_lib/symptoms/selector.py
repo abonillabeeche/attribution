@@ -45,10 +45,14 @@ class SymptomSelector:
 
         Raises:
             ValueError: If required criteria are absent or empty.
-            TypeError: If a property criterion is not hashable.
+            TypeError: If a criterion has an invalid type or is not hashable.
         """
+        if self.symptom_id is not None and not isinstance(self.symptom_id, str):
+            raise TypeError("SymptomSelector symptom_id must be a string when supplied")
         if self.symptom_id is not None and self.symptom_id.strip() == "":
             raise ValueError("SymptomSelector symptom_id must be non-empty when supplied")
+        if self.family_name is not None and not isinstance(self.family_name, str):
+            raise TypeError("SymptomSelector family_name must be a string when supplied")
         if self.family_name is not None and self.family_name.strip() == "":
             raise ValueError("SymptomSelector family_name must be non-empty when supplied")
         if self.symptom_id is None and self.family_name is None:
@@ -58,6 +62,10 @@ class SymptomSelector:
 
         copied_properties = dict(self.family_properties)
         for name, expected in copied_properties.items():
+            if not isinstance(name, str):
+                raise TypeError("SymptomSelector family property names must be strings")
+            if name.strip() == "":
+                raise ValueError("SymptomSelector family property names must be non-empty")
             try:
                 hash(expected)
             except TypeError as exc:

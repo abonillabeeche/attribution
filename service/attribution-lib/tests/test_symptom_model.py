@@ -11,9 +11,11 @@
 """Tests for structured symptom families and semantic selectors."""
 
 from types import MappingProxyType
+from typing import Any
 
 import pytest
 
+from attribution_lib.serialization import serialize
 from attribution_lib.symptoms import BaseSymptom, SymptomFamily, SymptomSelector
 
 
@@ -52,14 +54,26 @@ def test_symptom_family_defensively_freezes_property_schema():
     assert isinstance(family.property_types, MappingProxyType)
 
 
+def test_symptom_family_member_serializes_immutable_properties_as_mapping():
+    """Event serialization preserves structured member properties as data."""
+    family = SymptomFamily(name="xid", properties={"code": 149})
+
+    assert serialize(family)["properties"] == {"code": 149}
+
+
 def test_symptom_family_rejects_invalid_identity():
     """Malformed family identities fail at their construction boundary."""
+    with pytest.raises(TypeError, match="name must be a string"):
+        SymptomFamily(name=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="name must be non-empty"):
         SymptomFamily(name=" ")
     with pytest.raises(ValueError, match="cannot define both"):
         SymptomFamily(name="xid", property_types={"code": int}, properties={"code": 149})
     with pytest.raises(TypeError, match="must be hashable"):
         SymptomFamily(name="xid", properties={"code": []})
+    for invalid_type in (list[int] | None, Any):
+        with pytest.raises(TypeError, match="runtime-checkable type"):
+            SymptomFamily(name="xid", property_types={"code": invalid_type})
 
 
 @pytest.fixture
@@ -127,6 +141,8 @@ def test_selector_defensively_freezes_properties_and_is_hashable():
 
 def test_selector_rejects_invalid_criteria():
     """Selectors reject criteria that cannot identify or match a symptom."""
+    with pytest.raises(TypeError, match="symptom_id must be a string"):
+        SymptomSelector(symptom_id=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="requires symptom_id or family_name"):
         SymptomSelector()
     with pytest.raises(ValueError, match="symptom_id must be non-empty"):

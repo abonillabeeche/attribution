@@ -18,6 +18,7 @@ and read back as dicts. Consuming code should work with dicts, not expect
 reconstructed objects.
 """
 
+from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import datetime
 from enum import Enum
@@ -54,8 +55,8 @@ def serialize(obj: Any) -> Any:
     if isinstance(obj, (set, frozenset)):
         return [serialize(v) for v in obj]
 
-    # Dict
-    if isinstance(obj, dict):
+    # Mappings, including immutable MappingProxyType-backed model fields
+    if isinstance(obj, Mapping):
         return {str(k): serialize(v) for k, v in obj.items()}
 
     # NamedTuple (check BEFORE tuple - namedtuples are tuples)

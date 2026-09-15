@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType, UnionType
-from typing import TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar, get_args
 
 FamilyPropertyType: TypeAlias = type | UnionType
 _Value = TypeVar("_Value")
@@ -36,6 +36,10 @@ def _immutable_mapping(values: Mapping[str, _Value], *, field_name: str) -> Mapp
     """
     copied = dict(values)
     for name, value in copied.items():
+        if not isinstance(name, str):
+            raise TypeError(f"SymptomFamily {field_name} names must be strings")
+        if name.strip() == "":
+            raise ValueError(f"SymptomFamily {field_name} names must be non-empty")
         try:
             hash(value)
         except TypeError as exc:
@@ -67,12 +71,22 @@ class SymptomFamily:
 
         Raises:
             ValueError: If the name is empty or both family forms are supplied.
-            TypeError: If a property value is not hashable.
+            TypeError: If a name, type, or property value is invalid.
         """
+        if not isinstance(self.name, str):
+            raise TypeError("SymptomFamily name must be a string")
         if self.name.strip() == "":
             raise ValueError("SymptomFamily name must be non-empty")
         if len(self.property_types) > 0 and len(self.properties) > 0:
             raise ValueError("SymptomFamily cannot define both property_types and properties")
+        for name, property_type in self.property_types.items():
+            union_members = get_args(property_type) if isinstance(property_type, UnionType) else ()
+            members = union_members if len(union_members) > 0 else (property_type,)
+            try:
+                for member in members:
+                    _ = isinstance(None, member)
+            except TypeError as exc:
+                raise TypeError(f"SymptomFamily property_types[{name!r}] must be a runtime-checkable type") from exc
         object.__setattr__(
             self,
             "property_types",
