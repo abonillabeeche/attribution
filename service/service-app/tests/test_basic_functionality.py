@@ -61,6 +61,20 @@ def fake_syslog_observation(body: str) -> Observation:
     return Observation(context=context, body=body)
 
 
+def test_openapi_declares_kueue_workload_type(app):
+    schema = app.openapi()
+
+    assert "kueue" in schema["components"]["schemas"]["WorkloadTypeEnum"]["enum"]
+
+
+def test_v2_accepts_kueue_workload_type(client):
+    info = make_up_attributor_info("v2", type="kueue")
+
+    response = client.post("/v2/attributor", content=info.model_dump_json())
+
+    assert response.status_code == http.HTTPStatus.CREATED
+
+
 def test_observation_ingestion_errors_are_declared_in_openapi(app):
     schema = app.openapi()
     expected_ref = {"$ref": "#/components/schemas/ObservationIngestionErrorResponse"}

@@ -2702,6 +2702,7 @@
         "enum": [
           "",
           "slurm",
+          "kueue",
           "runai"
         ],
         "title": "WorkloadTypeEnum",

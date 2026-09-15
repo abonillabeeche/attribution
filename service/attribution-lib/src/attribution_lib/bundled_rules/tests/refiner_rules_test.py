@@ -185,6 +185,11 @@ def _job_info_with(**overrides) -> JobInfo:
     return default_job_info(job_end_time=_DEFAULT_END, **overrides)
 
 
+def _slurm_job_info(**overrides) -> JobInfo:
+    """Build a JobInfo explicitly identified as Slurm."""
+    return default_job_info(**overrides)._replace(type="slurm")
+
+
 def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     """Run only SCRUB-phase refiners on my_bad_nodes."""
     run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
@@ -207,7 +212,7 @@ class TestScrubBadNodes:
         assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
 
     def test_slurm_failure_with_epilog_non_response_emits_corroborated_node_failure(self, stream, obs_ctx):
-        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        job_info = _slurm_job_info(state="NODE_FAIL")._replace(failed_node="node01")
         epilog_source = _make_source(
             obs_ctx,
             datum="Health check failed: Not responding",
@@ -1103,6 +1108,63 @@ class TestSlurmStateSymptoms:
         else:
             assert "Cancelled by cluster operators" not in symptoms
 
+    def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx):
+        ji = _job_info_with(state="REQUEUED", nodes=[])._replace(type="kueue")
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert "Job requeued" in symptoms
+        assert "Job didn't start" not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
+
+    def test_kueue_eviction_without_evidence_remains_incomplete(self, stream, obs_ctx):
+        # The Kueue connector normalizes every eviction reason with no
+        # dedicated service state (queue stopped, admission check failed,
+        # pods-ready timeout, deactivated, ...) to the single EVICTED value;
+        # rules never see the raw per-reason string.
+        ji = _job_info_with(state="EVICTED", nodes=[])._replace(type="kueue")
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert not symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
+
+    def test_kueue_eviction_preserves_real_failure_evidence(self, stream, obs_ctx):
+        ji = _job_info_with(state="EVICTED", nodes=[])._replace(type="kueue")
+        symptoms = _make_symptoms(obs_ctx, "Python Exception")
+
+        _run(stream, ji, symptoms)
+
+        assert "Python Exception" in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail User"
+
+    def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx):
+        ji = _job_info_with(state="NODE_FAIL", nodes=["node01", "node02"])._replace(
+            type="kueue", failed_node=None
+        )
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert "Node failure reported by slurm" in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
+
+    def test_non_kueue_node_fail_without_specific_node_retains_legacy_fallback(
+        self, stream, obs_ctx
+    ):
+        ji = _job_info_with(state="NODE_FAIL", nodes=["node01", "node02"])._replace(
+            type="runai",
+            failed_node=None,
+        )
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert "Node failure reported by slurm" not in symptoms
+        assert "job failed" in symptoms
+
     def test_failed_state_no_cancelled_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="FAILED")
         symptoms = _make_symptoms(obs_ctx)
@@ -1729,7 +1791,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_terminal_rxpipe_discarded_for_applog_timeout(self, stream, obs_ctx):
         """CANCELLED jobs can get timeout evidence from the applog rather than Slurm state."""
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
             obs_ctx,
@@ -1752,10 +1814,57 @@ class TestSlurmTimeoutXid145Cascade:
         assert bad_nodes["node01"].attributions._data[self._RXPIPE].has_interesting()
         assert bad_nodes["node01"].attributions._data[self._DYNAMIC].has_interesting()
 
+    def test_kueue_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx):
+        job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
+        ji = default_job_info(state="TIMEOUT", job_end_time=job_end, time_limit=60)._replace(type="kueue")
+        source_time = job_end - timedelta(seconds=1)
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "Cancelled by Timeout",
+            self._RXPIPE,
+            self._DYNAMIC,
+            source_time=source_time,
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._RXPIPE, self._DYNAMIC]},
+            source_time=source_time,
+        )
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE in symptoms
+        assert self._DYNAMIC in symptoms
+        assert self._RXPIPE in bad_nodes["node01"].attributions
+        assert self._DYNAMIC in bad_nodes["node01"].attributions
+
+    def test_non_kueue_timeout_retains_existing_teardown_cascade(self, stream, obs_ctx):
+        job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
+        ji = default_job_info(state="TIMEOUT", job_end_time=job_end, time_limit=60)._replace(type="runai")
+        source_time = job_end - timedelta(seconds=1)
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "Cancelled by Timeout",
+            self._RXPIPE,
+            self._DYNAMIC,
+            source_time=source_time,
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._RXPIPE, self._DYNAMIC]},
+            source_time=source_time,
+        )
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert set(symptoms.symptoms()) == {"Cancelled by Timeout"}
+        assert self._RXPIPE not in bad_nodes["node01"].attributions
+        assert self._DYNAMIC not in bad_nodes["node01"].attributions
+
     def test_terminal_rxpipe_cleans_its_xid145_cascades_before_demotion(self, stream, obs_ctx):
         """Demoting RXPIPE must not strand symptoms that depended on it for cleanup."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end - timedelta(seconds=1)
         cascades = [
             "cudaErrorLaunchFailure",
@@ -1790,7 +1899,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_timeout_state_synthesizes_cancellation_before_discard(self, stream, obs_ctx):
         """TIMEOUT state alone should establish the normalized timeout symptom."""
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
-        ji = default_job_info(state="TIMEOUT", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="TIMEOUT", job_end_time=job_end, time_limit=60)
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(obs_ctx, self._RXPIPE, self._DYNAMIC, source_time=source_time)
         bad_nodes = _make_bad_nodes(
@@ -1806,7 +1915,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_real_job_timeout_and_rxpipe_offsets_are_correlated(self, stream, obs_ctx):
         """Cover the terminal timing observed for cloud test job."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         timeout_source = _make_source(
             obs_ctx,
             job_end - timedelta(seconds=97),
@@ -1850,7 +1959,7 @@ class TestSlurmTimeoutXid145Cascade:
     ):
         """The rule requires normalized timeout evidence and a bounded terminal XID."""
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end + event_offset
         names = (["Cancelled by Timeout"] if include_timeout else []) + [self._RXPIPE, self._DYNAMIC]
         symptoms = _make_symptoms(obs_ctx, *names, source_time=source_time)
@@ -1870,7 +1979,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_explicit_timeout_does_not_require_time_limit_metadata(self, stream, obs_ctx):
         """The applog's DUE TO TIME LIMIT marker is authoritative timeout evidence."""
         job_end = _DEFAULT_START + timedelta(minutes=30)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=None)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=None)
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
             obs_ctx,
@@ -1892,7 +2001,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_untimed_timeout_source_uses_job_end_correlation(self, stream, obs_ctx):
         """Raw Slurm lines can identify a timeout without yielding a source timestamp."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=None)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=None)
         timeout_source = Source(
             source_context=obs_ctx,
             line_num=1,
@@ -1918,7 +2027,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_terminal_rxpipe_must_correlate_with_timed_timeout_source(self, stream, obs_ctx):
         """A timestamped timeout elsewhere in the job must not suppress the XID."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         timeout_source = _make_source(
             obs_ctx,
             job_end - timedelta(minutes=5),
@@ -1965,7 +2074,7 @@ class TestSlurmTimeoutXid145Cascade:
     ):
         """Timed markers allow 1 s clock skew before and 90 s teardown after."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         timeout_time = job_end + timeout_from_job_end
         xid_time = timeout_time + xid_from_timeout
         timeout_source = _make_source(obs_ctx, timeout_time, datum="DUE TO TIME LIMIT", line_num=1)
@@ -1998,7 +2107,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_terminal_source_is_demoted_without_hiding_earlier_failure(self, stream, obs_ctx):
         """A teardown occurrence must not erase a genuine earlier RXPIPE failure."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         early_source = _make_source(
             obs_ctx,
             job_end - timedelta(minutes=10),
@@ -2039,7 +2148,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_other_multicategory_source_is_preserved(self, stream, obs_ctx):
         """Only the dynamic classification paired to RXPIPE is a timeout cascade."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         rxpipe_source = _make_source(
             obs_ctx,
             job_end - timedelta(seconds=1),
@@ -2070,7 +2179,7 @@ class TestSlurmTimeoutXid145Cascade:
     def test_other_xid145_variant_kept_for_terminal_timeout(self, stream, obs_ctx):
         """The exception is exact and must not broaden to other XID-145 variants."""
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
-        ji = default_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
             obs_ctx,
@@ -3007,10 +3116,11 @@ class TestNodeFailureNfsCleanup:
 
 class TestLastResortSymptoms:
     def test_empty_symptoms_completed_job(self, stream, obs_ctx):
-        ji = _job_info_with(state="COMPLETED")
+        ji = _job_info_with(state="COMPLETED")._replace(type="kueue")
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "the process completes" in symptoms
+        assert symptoms["the process completes"].one_source().rule == "last resort; slurm status"
 
     def test_empty_symptoms_cancelled_job(self, stream, obs_ctx):
         ji = _job_info_with(state="CANCELLED", exit_code_signal=None)
@@ -3028,10 +3138,11 @@ class TestLastResortSymptoms:
         assert "job failed" not in symptoms
 
     def test_empty_symptoms_unknown_state(self, stream, obs_ctx):
-        ji = _job_info_with(state="OUT_OF_MEMORY")
+        ji = _job_info_with(state="OUT_OF_MEMORY")._replace(type="kueue")
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
+        assert symptoms["job failed"].one_source().rule == "last resort; slurm status"
 
     def test_non_empty_symptoms_no_last_resort(self, stream, obs_ctx):
         ji = _job_info_with(state="COMPLETED")
@@ -3921,7 +4032,7 @@ class TestFilterFatalXidNoise:
 
 class TestOutcomeReclassification:
     def test_preempted_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED")
+        ji = _job_info_with(state="PREEMPTED")._replace(type="kueue")
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         result.outcome_attr = _make_outcome("Fail User")
@@ -3931,8 +4042,36 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
 
+    def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx):
+        ji = _job_info_with(state="PREEMPTED")._replace(type="kueue")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
+        result.symptoms.update(symptoms)
+        result.outcome_attr = _make_outcome("Fail InfraHW")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().outcome == "Fail InfraHW"
+
+    def test_non_kueue_preempted_retains_existing_reclassification(self, stream, obs_ctx):
+        ji = _job_info_with(state="PREEMPTED")._replace(type="runai")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
+        result.symptoms.update(symptoms)
+        result.outcome_attr = _make_outcome("Fail InfraHW")
+
+        _run_post_outcome(
+            stream,
+            ji,
+            symptoms,
+            outcome=result.outcome_attr,
+            attribution_result=result,
+        )
+
+        assert result.outcome_attr.value().outcome == "Pass"
+
     def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="TIMEOUT", cancelled_by="Timeout", time_limit=3600)
+        ji = _job_info_with(state="TIMEOUT", cancelled_by="Timeout", time_limit=3600)._replace(type="kueue")
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         symptoms = _make_symptoms(obs_ctx, "Cancelled by Timeout")
