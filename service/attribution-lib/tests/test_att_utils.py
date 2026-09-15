@@ -250,7 +250,15 @@ class TestApplogExtractNodeRank:
             "[2026-01-02 03:04:05] node-01:3298233:3301236 [0] ib_plugin.c:2033 "
             "NCCL WARN NET/IB: Got completion from peer 192.0.2.11<31197>"
         )
-        assert applog_extract_node_rank(line) == ("node-01", 0)
+        assert applog_extract_node_rank(line) == ("node-01", None)
+
+    def test_nccl_bracket_is_not_used_as_rank_when_srun_prefix_is_absent(self):
+        """NCCL ``[2]`` is cudaDev. A timestamp prefix must not become rank 0 or 2."""
+        line = (
+            "[2026-01-02 03:04:05] node-12:1234567:1234568 [2] "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        )
+        assert applog_extract_node_rank(line) == ("node-12", None)
 
     def test_nccl_peer_ip_is_not_treated_as_hostname(self):
         line = "302: NET/IB: Got completion from peer 192.0.2.10<63270> with status=12"

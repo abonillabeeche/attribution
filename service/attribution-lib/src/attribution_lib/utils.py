@@ -132,16 +132,42 @@ def get_hostname(ip_or_hostname: str) -> str:
 
 
 RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")
-# NCCL local prefix after an optional srun rank/timestamp: hostname:pid:tid [
-# Peer addresses like "192.0.2.10<63270>" do not match (no :pid:tid [).
-NCCL_HOST_PID_TID_REGEX = re.compile(r"(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[")
+# NCCL debug prefix: hostname:pid:tid [cudaDev]. cudaDev is the local GPU
+# index, not an srun/MPI rank. Peer addresses like "192.0.2.10<63270>" do
+# not match (no :pid:tid [digits]).
+NCCL_HOST_PID_TID_REGEX = re.compile(
+    r"(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[(?P<cuda_dev>\d+)\]"
+)
+
+
+def _leading_explicit_applog_rank(line: str) -> Optional[int]:
+    """Return a leading srun ``-l`` or ``[rankN]`` rank, or None.
+
+    Timestamp-prefixed lines have a space in the first ``:`` field and the
+    generic parser treats that as rank 0. That is not a real rank.
+
+    Args:
+        line: One application-log line.
+
+    Returns:
+        The leading numeric rank if the line starts with one, otherwise None.
+    """
+    if line.startswith("[rank"):
+        if (match := RANK_REGEX.match(line)) is not None:
+            return int(match.group("rank"))
+        return None
+    first_token = line.split(":", 1)[0].strip()
+    if first_token.isdigit():
+        return int(first_token)
+    return None
 
 
 def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     """Extract node name and rank from an application-log line.
 
-    Prefers an NCCL ``hostname:pid:tid [`` prefix when present, and still
-    returns a leading numeric rank (srun ``-l``) when that is also present.
+    Prefers an NCCL ``hostname:pid:tid [cudaDev]`` prefix when present.
+    Rank is only a leading srun ``-l`` or ``[rankN]`` prefix, never NCCL's
+    CUDA device index.
 
     Args:
         line: One application-log line.
@@ -184,6 +210,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
 
     if (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
         node = nccl.group("node")
+        # Wipe timestamp-driven rank 0; keep a real srun / [rankN] prefix.
+        rank = _leading_explicit_applog_rank(line)
     return node, rank
 
 
