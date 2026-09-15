@@ -482,20 +482,16 @@ def test_build_attributor_info_missing_workload_type_is_undefined():
     assert info["workload"]["type"] == ""
 
 
-def test_wire_workload_type_unaffected_by_scheduler_field():
-    """The BP-internal `scheduler` field labels SQLite rows and must NOT
-    leak onto the wire - the orchestrator only reads `workload_type` for
-    the service payload. Kueue contexts set `workload_type=""` (UNDEFINED)
-    and `scheduler="kueue"`; the outbound `workload.type` is still ""."""
+def test_wire_kueue_workload_type_is_forwarded_without_scheduler_field():
+    """Kueue is explicit on the wire; the internal scheduler field stays private."""
     ctx = _make_ctx("ctx-7")
-    ctx["workload_type"] = ""
+    ctx["workload_type"] = "kueue"
     ctx["scheduler"] = "kueue"
     pipeline = _make_pipeline(MagicMock(), [])
 
     info = _wire(pipeline._build_attributor_info(ctx))
 
-    assert info["workload"]["type"] == ""
-    # And the scheduler field doesn't appear under any other key in the payload.
+    assert info["workload"]["type"] == "kueue"
     assert "scheduler" not in info["workload"]
 
 

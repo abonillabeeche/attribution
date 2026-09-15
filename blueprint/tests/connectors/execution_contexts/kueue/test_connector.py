@@ -26,15 +26,31 @@ PODS = json.loads((FIXTURES / "kueue_pods.json").read_text())
 JOBS = json.loads((FIXTURES / "kueue_jobs.json").read_text())
 
 
-def _kubectl_router(workloads_payload=WORKLOADS, pods_payload=PODS, jobs_payload=JOBS):
+def _kubectl_router(
+    workloads_payload=WORKLOADS,
+    pods_payload=PODS,
+    jobs_payload=JOBS,
+    events_payload=None,
+):
     """Return a `subprocess.run` side_effect that dispatches by kubectl args.
 
-    The adapter issues four shapes of kubectl call:
+    The adapter issues these shapes of kubectl call:
       - `kubectl get workloads [-A | -n NS]`            -> list
       - `kubectl get workload <name> -n <ns>`           -> single workload
-      - `kubectl get pods -l batch.kubernetes.io/controller-uid=UID -A|-n NS` -> list
+      - `kubectl get pods -l <owner-selector> -A|-n NS` -> list
       - `kubectl get job <name> -n <ns>`                -> single Job
+      - `kubectl get jobs -l jobset.sigs.k8s.io/jobset-name=NAME -n <ns>` -> JobSet children
+      - `kubectl get events --field-selector involvedObject.uid=UID,involvedObject.kind=Job,reason=SuccessfulCreate -n <ns>` -> list
+      - `kubectl get events --field-selector involvedObject.name=POD,involvedObject.kind=Pod,reason=Scheduled -n <ns>` -> list
+
+    `events_payload` simulates the API server: `_matches_field_selector`
+    below filters it by the `--field-selector` clauses on each call, the
+    same way a real apiserver would, so tests exercise the actual selector
+    strings the adapter sends rather than relying on the adapter's own
+    Python-side filtering to compensate for an untargeted mock.
     """
+    if events_payload is None:
+        events_payload = {"apiVersion": "v1", "kind": "List", "items": []}
 
     def _by_uid(uid: str) -> dict:
         items = [
@@ -54,6 +70,41 @@ def _kubectl_router(workloads_payload=WORKLOADS, pods_payload=PODS, jobs_payload
             return item
         return None
 
+    def _by_label(items: list[dict], selector: str | None, namespace: str | None) -> dict:
+        if not selector or "=" not in selector:
+            return {"apiVersion": "v1", "kind": "List", "items": []}
+        key, value = selector.split("=", 1)
+        matches = []
+        for item in items:
+            metadata = item.get("metadata") or {}
+            if namespace and metadata.get("namespace") != namespace:
+                continue
+            labels = metadata.get("labels") or {}
+            annotations = metadata.get("annotations") or {}
+            if labels.get(key) == value or annotations.get(key) == value:
+                matches.append(item)
+        return {"apiVersion": "v1", "kind": "List", "items": matches}
+
+    def _matches_field_selector(event: dict, selector: str | None) -> bool:
+        """Emulate apiserver-side `--field-selector` filtering for Events."""
+        if not selector:
+            return True
+        involved = event.get("involvedObject") or {}
+        field_values = {
+            "reason": event.get("reason"),
+            "involvedObject.uid": involved.get("uid"),
+            "involvedObject.kind": involved.get("kind"),
+            "involvedObject.name": involved.get("name"),
+            "involvedObject.namespace": involved.get("namespace"),
+        }
+        for clause in selector.split(","):
+            if "=" not in clause:
+                continue
+            key, value = clause.split("=", 1)
+            if field_values.get(key) != value:
+                return False
+        return True
+
     def _side_effect(cmd, **kwargs):
         # cmd is the full subprocess argv. Strip kubectl + flags, isolate the
         # kubectl sub-command vs. positional args.
@@ -62,6 +113,7 @@ def _kubectl_router(workloads_payload=WORKLOADS, pods_payload=PODS, jobs_payload
         positional: list[str] = []
         ns: str | None = None
         label_selector: str | None = None
+        field_selector: str | None = None
         all_namespaces = False
         i = 0
         while i < len(args):
@@ -84,6 +136,10 @@ def _kubectl_router(workloads_payload=WORKLOADS, pods_payload=PODS, jobs_payload
                 label_selector = args[i + 1]
                 i += 2
                 continue
+            if tok == "--field-selector":
+                field_selector = args[i + 1]
+                i += 2
+                continue
             positional.append(tok)
             i += 1
 
@@ -103,18 +159,25 @@ def _kubectl_router(workloads_payload=WORKLOADS, pods_payload=PODS, jobs_payload
                 raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
             stdout = json.dumps(obj)
         elif kind == "pods":
-            uid = None
             if label_selector and label_selector.startswith("batch.kubernetes.io/controller-uid="):
-                uid = label_selector.split("=", 1)[1]
-            if uid is None:
-                stdout = json.dumps({"items": []})
+                stdout = json.dumps(_by_uid(label_selector.split("=", 1)[1]))
             else:
-                stdout = json.dumps(_by_uid(uid))
+                stdout = json.dumps(_by_label(pods_payload["items"], label_selector, ns))
         elif kind == "job":
             obj = _by_name(jobs_payload["items"], name, ns)
             if obj is None:
                 raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
             stdout = json.dumps(obj)
+        elif kind == "jobs":
+            stdout = json.dumps(_by_label(jobs_payload["items"], label_selector, ns))
+        elif kind == "events":
+            matches = [
+                event
+                for event in events_payload.get("items", [])
+                if (not ns or (event.get("involvedObject") or {}).get("namespace", ns) == ns)
+                and _matches_field_selector(event, field_selector)
+            ]
+            stdout = json.dumps({"apiVersion": "v1", "kind": "List", "items": matches})
         else:
             stdout = json.dumps({"items": []})
 
@@ -143,28 +206,41 @@ def test_discover_by_ids_normalizes_finished_workload(mocker):
     assert ctx["id"] == "uid-aaaa-1001"
     assert ctx["workload_uid"] == "uid-aaaa-1001"
     assert ctx["attempt_id"] == "uid-aaaa-1001"
-    # Wire-format value goes straight to the service's workload.type enum,
-    # which currently doesn't know "kueue". UNDEFINED ("") is the documented
-    # fallback; switch back to "kueue" once the service enum learns it.
-    assert ctx["workload_type"] == ""
-    # BP-internal identity is independent of the wire field. SQLite reads
-    # `scheduler` for the `scheduler_type` column, so kueue rows stay
-    # distinguishable from other UNDEFINED sources.
+    assert ctx["workload_type"] == "kueue"
+    # BP-internal identity remains independent of the service wire field.
     assert ctx["scheduler"] == "kueue"
     assert ctx["job_id"] == "team-alpha/job-train-mnist-abc12"
     assert ctx["namespace"] == "team-alpha"
     assert ctx["name"] == "job-train-mnist-abc12"
-    assert ctx["state"] == "FINISHED_SUCCEEDED"
+    assert ctx["state"] == "COMPLETED"
+    assert ctx["kueue_state"] == "FINISHED_SUCCEEDED"
     assert ctx["nodes"] == ["node005"]
     assert ctx["start_time"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert ctx["end_time"] == datetime(2026, 5, 1, 12, 30, 0, tzinfo=timezone.utc)
     assert ctx["user_name"] == "alice"
     assert ctx["queue_name"] == "research-queue"
     assert ctx["priority_class"] == 100
-    assert ctx["time_limit"] == 3600
+    assert ctx["time_limit"] == 60
     assert "failed_node" not in ctx
     # kueue_phase was removed - it had no information beyond `state`.
     assert "kueue_phase" not in ctx
+
+
+def test_finished_success_takes_precedence_over_retried_node_loss(mocker):
+    pods = deepcopy(PODS)
+    pod = next(
+        item
+        for item in pods["items"]
+        if item["metadata"]["labels"].get("batch.kubernetes.io/controller-uid") == "owner-1001"
+    )
+    pod["status"] = {"phase": "Failed", "reason": "NodeLost"}
+    _wire_kubectl(mocker, pods_payload=pods)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert ctx["state"] == "COMPLETED"
+    assert ctx["kueue_state"] == "FINISHED_SUCCEEDED"
+    assert ctx["failed_node"] == "node005"
 
 
 def test_discover_by_ids_carries_kueue_gpu_count(mocker):
@@ -192,17 +268,292 @@ def test_discover_by_ids_carries_zero_gpu_count_for_cpu_only_kueue_workload(mock
     assert contexts[0]["gpu_count"] == 0
 
 
+def test_active_deadline_seconds_rounds_up_to_service_minutes(mocker):
+    jobs = deepcopy(JOBS)
+    jobs["items"][0]["spec"]["activeDeadlineSeconds"] = 61
+    _wire_kubectl(mocker, jobs_payload=jobs)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert ctx["time_limit"] == 2
+
+
 def test_failed_workload_surfaces_first_nonzero_exit_node(mocker):
     _wire_kubectl(mocker)
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-llama-7b-pretrain-xyz77"])
     ctx = contexts[0]
-    assert ctx["state"] == "FINISHED_FAILED"
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
     assert ctx["nodes"] == ["node001", "node002", "node003"]
     # Only node002's container reported exitCode=137, even though all three
     # pods are in Failed phase. failed_node names the node that actually
     # produced the bad exit, not the whole nodelist.
     assert ctx["failed_node"] == "node002"
-    assert ctx["time_limit"] == 7200
+    assert ctx["time_limit"] == 120
+
+
+def test_failed_workload_deadline_exceeded_normalizes_to_timeout(mocker):
+    jobs = deepcopy(JOBS)
+    jobs["items"][1]["status"] = {
+        "conditions": [
+            {
+                "type": "Failed",
+                "status": "True",
+                "reason": "DeadlineExceeded",
+                "lastTransitionTime": "2026-05-01T13:30:00Z",
+            }
+        ]
+    }
+    _wire_kubectl(mocker, jobs_payload=jobs)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-llama-7b-pretrain-xyz77"])[0]
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+
+
+def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
+    workload = {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "Workload",
+        "metadata": {
+            "name": "jobset-timeout-abc12",
+            "namespace": "team-alpha",
+            "uid": "workload-jobset-timeout",
+            "creationTimestamp": "2026-05-01T12:00:00Z",
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+        },
+        "spec": {"podSets": []},
+        "status": {
+            "conditions": [
+                {
+                    "type": "Admitted",
+                    "status": "True",
+                    "lastTransitionTime": "2026-05-01T12:01:00Z",
+                },
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "reason": "Failed",
+                    "lastTransitionTime": "2026-05-01T12:02:00Z",
+                },
+            ]
+        },
+    }
+    child_job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "training-workers-0",
+            "namespace": "team-alpha",
+            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+        },
+        "spec": {"activeDeadlineSeconds": 60},
+        "status": {
+            "conditions": [
+                {
+                    "type": "Failed",
+                    "status": "True",
+                    "reason": "DeadlineExceeded",
+                    "lastTransitionTime": "2026-05-01T12:02:00Z",
+                }
+            ]
+        },
+    }
+    _wire_kubectl(
+        mocker,
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": [child_job]},
+    )
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])[0]
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+    assert ctx["time_limit"] == 1
+
+
+def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> tuple[dict, list[dict]]:
+    """Build a JobSet Workload with two children failing at different times.
+
+    `first_reason` is on the child whose `Failed` condition transitions
+    earliest; `second_reason` is on the child that fails afterward.
+    """
+    workload = {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "Workload",
+        "metadata": {
+            "name": "jobset-mixed-abc12",
+            "namespace": "team-alpha",
+            "uid": "workload-jobset-mixed",
+            "creationTimestamp": "2026-05-01T12:00:00Z",
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+        },
+        "spec": {"podSets": []},
+        "status": {
+            "conditions": [
+                {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:01:00Z"},
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "reason": "Failed",
+                    "lastTransitionTime": "2026-05-01T12:05:00Z",
+                },
+            ]
+        },
+    }
+
+    def _child(name: str, reason: str, transition_time: str) -> dict:
+        return {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": name,
+                "namespace": "team-alpha",
+                "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            },
+            "spec": {},
+            "status": {
+                "conditions": [
+                    {"type": "Failed", "status": "True", "reason": reason, "lastTransitionTime": transition_time}
+                ]
+            },
+        }
+
+    children = [
+        _child("training-workers-0", first_reason, "2026-05-01T12:02:00Z"),
+        _child("training-workers-1", second_reason, "2026-05-01T12:04:00Z"),
+    ]
+    return workload, children
+
+
+def test_jobset_mixed_child_failures_use_earliest_reason_not_deadline_exceeded(mocker):
+    """A later DeadlineExceeded child must not override an earlier, different failure.
+
+    Mirrors JobSet's own controller convention (findFirstFailedJob /
+    findJobFailureTime): the earliest failing child is authoritative, with
+    no special-casing of any particular reason.
+    """
+    workload, children = _jobset_workload_and_children(
+        first_reason="BackoffLimitExceeded", second_reason="DeadlineExceeded"
+    )
+    _wire_kubectl(
+        mocker,
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": children},
+    )
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-mixed-abc12"])[0]
+
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+
+
+def test_jobset_earliest_deadline_exceeded_wins_over_later_other_reason(mocker):
+    """When the earliest-failing child is the DeadlineExceeded one, it wins --
+    because it failed first, not because of any reason-specific preference."""
+    workload, children = _jobset_workload_and_children(
+        first_reason="DeadlineExceeded", second_reason="BackoffLimitExceeded"
+    )
+    _wire_kubectl(
+        mocker,
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": children},
+    )
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-mixed-abc12"])[0]
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+
+
+def test_failed_workload_node_lost_normalizes_to_node_fail(mocker):
+    pods = deepcopy(PODS)
+    failed_pod = pods["items"][1]
+    failed_pod["status"] = {"phase": "Failed", "reason": "NodeLost"}
+    _wire_kubectl(mocker, pods_payload=pods)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-llama-7b-pretrain-xyz77"])[0]
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+    assert ctx["failed_node"] == "node001"
+
+
+def test_disruption_target_pod_normalizes_admitted_workload_to_node_fail(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-still-running-qq01")
+    workload["status"]["conditions"] = [
+        condition for condition in workload["status"]["conditions"] if condition["type"] != "PodsReady"
+    ]
+    pods = deepcopy(PODS)
+    pod = next(
+        item
+        for item in pods["items"]
+        if item["metadata"]["labels"].get("batch.kubernetes.io/controller-uid") == "owner-1004"
+    )
+    pod["status"] = {
+        "phase": "Failed",
+        "conditions": [
+            {
+                "type": "DisruptionTarget",
+                "status": "True",
+                "reason": "DeletionByPodGC",
+                "message": "PodGC: node no longer exists",
+                "lastTransitionTime": "2026-05-02T08:05:00Z",
+            }
+        ],
+    }
+    _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-still-running-qq01"])[0]
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["kueue_state"] == "ADMITTED"
+    assert ctx["failed_node"] == "node020"
+
+
+def test_taint_manager_disruption_target_normalizes_admitted_workload_to_node_fail(mocker):
+    """A node that goes unreachable without its Node API object ever being
+    deleted (crash, network partition) never gets a DeletionByPodGC
+    DisruptionTarget — only DeletionByTaintManager, once the NoExecute
+    toleration window expires. Verified empirically on a kind cluster
+    (2026-09-09): DeletionByPodGC requires an explicit Node deletion and is
+    never reached on this path even after 7.5 minutes.
+    """
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-still-running-qq01")
+    workload["status"]["conditions"] = [
+        condition for condition in workload["status"]["conditions"] if condition["type"] != "PodsReady"
+    ]
+    pods = deepcopy(PODS)
+    pod = next(
+        item
+        for item in pods["items"]
+        if item["metadata"]["labels"].get("batch.kubernetes.io/controller-uid") == "owner-1004"
+    )
+    pod["status"] = {
+        "phase": "Running",
+        "conditions": [
+            {
+                "type": "DisruptionTarget",
+                "status": "True",
+                "reason": "DeletionByTaintManager",
+                "message": "Taint manager: deleting due to NoExecute taint",
+                "lastTransitionTime": "2026-05-02T08:05:00Z",
+            }
+        ],
+    }
+    _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-still-running-qq01"])[0]
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["kueue_state"] == "ADMITTED"
+    assert ctx["failed_node"] == "node020"
 
 
 def test_evicted_workload_state_and_end_time(mocker):
@@ -211,11 +562,114 @@ def test_evicted_workload_state_and_end_time(mocker):
     ctx = contexts[0]
     # Evicted=True at 14:05 with reason=Preempted. No Finished condition,
     # so end_time falls back to the Evicted transition time.
-    assert ctx["state"] == "EVICTED_PREEMPTED"
+    assert ctx["state"] == "PREEMPTED"
+    assert ctx["kueue_state"] == "EVICTED_PREEMPTED"
     assert ctx["end_time"] == datetime(2026, 5, 1, 14, 5, 0, tzinfo=timezone.utc)
     assert ctx["nodes"] == ["node010"]
     # Hpl-bench has no batch/v1 Job owner in our fixture, so time_limit absent.
     assert "time_limit" not in ctx
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "ClusterQueueStopped",
+        "LocalQueueStopped",
+        "PodsReadyTimeout",
+        "AdmissionCheck",
+        "Deactivated",
+    ],
+)
+def test_noncanonical_eviction_reasons_normalize_to_evicted_for_service_fallback(mocker, reason):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    evicted = next(condition for condition in workload["status"]["conditions"] if condition["type"] == "Evicted")
+    evicted["reason"] = reason
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "EVICTED"
+    assert ctx["kueue_state"] == f"EVICTED_{reason.upper()}"
+
+
+def test_topology_node_failure_eviction_normalizes_to_node_fail(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    evicted = next(condition for condition in workload["status"]["conditions"] if condition["type"] == "Evicted")
+    evicted["reason"] = "NodeFailures"
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["kueue_state"] == "EVICTED_NODEFAILURES"
+
+
+def test_native_requeued_condition_takes_precedence_over_retryable_eviction(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    evicted = next(condition for condition in workload["status"]["conditions"] if condition["type"] == "Evicted")
+    evicted["reason"] = "PodsReadyTimeout"
+    workload["status"]["conditions"].append(
+        {
+            "type": "Requeued",
+            "status": "True",
+            "reason": "BackoffFinished",
+            "lastTransitionTime": "2026-05-01T14:06:00Z",
+        }
+    )
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "REQUEUED"
+    assert ctx["kueue_state"] == "EVICTED_PODSREADYTIMEOUT"
+
+
+def test_rejected_admission_check_preserves_native_eviction_state(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    evicted = next(condition for condition in workload["status"]["conditions"] if condition["type"] == "Evicted")
+    evicted["reason"] = "Deactivated"
+    workload["status"]["admissionChecks"] = [{"name": "provisioning", "state": "Rejected"}]
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "EVICTED"
+    assert ctx["kueue_state"] == "EVICTED_DEACTIVATED"
+
+
+def test_preemption_takes_precedence_over_node_loss_evidence(mocker):
+    pods = deepcopy(PODS)
+    pod = next(
+        item
+        for item in pods["items"]
+        if item["metadata"]["labels"].get("batch.kubernetes.io/controller-uid") == "owner-1003"
+    )
+    pod["status"] = {"phase": "Failed", "reason": "NodeLost"}
+    _wire_kubectl(mocker, pods_payload=pods)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "PREEMPTED"
+    assert ctx["kueue_state"] == "EVICTED_PREEMPTED"
+    assert ctx["failed_node"] == "node010"
+
+
+def test_preempted_condition_normalizes_to_preempted(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    workload["status"]["conditions"] = [
+        condition for condition in workload["status"]["conditions"] if condition["type"] != "Evicted"
+    ]
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "PREEMPTED"
+    assert ctx["kueue_state"] == "PREEMPTED"
 
 
 def test_running_workload_substitutes_now_for_end_time(mocker):
@@ -230,20 +684,31 @@ def test_running_workload_substitutes_now_for_end_time(mocker):
     assert ctx["start_time"] == datetime(2026, 5, 2, 8, 0, 0, tzinfo=timezone.utc)
 
 
-def test_pending_workload_falls_back_to_creation_timestamp(mocker):
-    """A workload with no Admitted condition uses metadata.creationTimestamp.
+@pytest.mark.parametrize(
+    ("conditions", "expected_state"),
+    [
+        ([], "PENDING"),
+        (
+            [{"type": "QuotaReserved", "status": "True", "lastTransitionTime": "2026-05-02T09:00:00Z"}],
+            "QUOTA_RESERVED",
+        ),
+        (
+            [{"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-02T09:01:00Z"}],
+            "ADMITTED",
+        ),
+    ],
+    ids=["pending", "quota-reserved", "admitted"],
+)
+def test_pre_execution_states_pass_through_for_service_fallback(mocker, conditions, expected_state):
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-pending-quota-rr11")
+    workload["status"] = {"conditions": conditions}
+    _wire_kubectl(mocker, workloads_payload=workloads)
 
-    Without any timestamps the connector would have to skip the row - this
-    branch ensures pending workloads still produce a usable context window
-    so callers can attribute "stuck pending" symptoms too.
-    """
-    _wire_kubectl(mocker)
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-pending-quota-rr11"])
-    ctx = contexts[0]
-    assert ctx["state"] == "PENDING"
-    assert ctx["start_time"] == datetime(2026, 5, 2, 8, 59, 30, tzinfo=timezone.utc)
-    # No pods owned by this workload yet.
-    assert ctx["nodes"] == []
+
+    assert len(contexts) == 1
+    assert contexts[0]["state"] == expected_state
 
 
 def test_discover_by_ids_skips_missing_workload(mocker):
@@ -399,7 +864,8 @@ def test_finished_state_wins_over_earlier_evicted(mocker):
         datetime(2026, 5, 4, tzinfo=timezone.utc),
     )
     assert len(contexts) == 1
-    assert contexts[0]["state"] == "FINISHED_SUCCEEDED"
+    assert contexts[0]["state"] == "COMPLETED"
+    assert contexts[0]["kueue_state"] == "FINISHED_SUCCEEDED"
 
 
 def test_missing_uid_workload_skipped(mocker):
@@ -528,6 +994,89 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
     ctxs = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/regression"])
     assert len(ctxs) == 1
     assert ctxs[0]["nodes"] == ["node-correct"]
+
+
+def test_missing_live_pods_are_recovered_from_uid_matched_events(mocker):
+    """A completed Job may retain its Workload after its pod is deleted.
+
+    Recover the pod from an aggregated, exact owner-UID SuccessfulCreate Event
+    and its node from the corresponding scheduler Event. An Event for an older
+    Job with the same name must not leak into the recreated Job's attempt.
+    """
+    events = {
+        "items": [
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:05Z"},
+                "involvedObject": {
+                    "kind": "Job",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist",
+                    "uid": "owner-OLD",
+                },
+                "reason": "SuccessfulCreate",
+                "message": "Created pod: train-mnist-old",
+                "lastTimestamp": "2026-05-01T12:00:05Z",
+            },
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:06Z"},
+                "involvedObject": {
+                    "kind": "Pod",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist-old",
+                    "uid": "pod-OLD",
+                },
+                "reason": "Scheduled",
+                "message": "Successfully assigned team-alpha/train-mnist-old to node-old",
+                "lastTimestamp": "2026-05-01T12:00:06Z",
+            },
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:10Z"},
+                "involvedObject": {
+                    "kind": "Job",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist",
+                    "uid": "owner-1001",
+                },
+                "reason": "SuccessfulCreate",
+                "message": "(combined from similar events): Created pod: train-mnist-new",
+                "lastTimestamp": "2026-05-01T12:00:10Z",
+            },
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:11Z"},
+                "involvedObject": {
+                    "kind": "Pod",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist-new",
+                    "uid": "pod-NEW",
+                },
+                "reason": "Scheduled",
+                "message": "Successfully assigned team-alpha/train-mnist-new to node-new",
+                "lastTimestamp": "2026-05-01T12:00:11Z",
+            },
+        ]
+    }
+    _wire_kubectl(mocker, pods_payload={"items": []}, events_payload=events)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert ctx["pod_names"] == ["train-mnist-new"]
+    assert ctx["nodes"] == ["node-new"]
+
+
+def test_missing_pod_and_node_lists_are_reported_when_events_cannot_recover_them(mocker):
+    warning = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.logger.warning"
+    )
+    _wire_kubectl(mocker, pods_payload={"items": []}, events_payload={"items": []})
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert "pod_names" not in ctx
+    assert ctx["nodes"] == []
+    warning.assert_any_call(
+        "workload team-alpha/job-train-mnist-abc12: "
+        "pod list and node list unavailable from live pods and Kubernetes Events"
+    )
 
 
 def test_kubectl_pod_selector_uses_batch_controller_uid_label(mocker):
