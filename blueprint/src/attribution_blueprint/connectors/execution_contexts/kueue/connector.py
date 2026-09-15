@@ -89,10 +89,14 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     pod_selector_for as _pod_selector_for,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+    PlacementQuery,
     PlacementRecord,
     PodPlacement,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import PlacementReader
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
+    PlacementReader,
+    PlacementResolver,
+)
 from attribution_blueprint.types import assert_aware
 
 
@@ -544,6 +548,22 @@ def _non_negative_int(value: object) -> int | None:
     return None
 
 
+def _expected_pod_count(workload: dict) -> int | None:
+    """Return the Workload's declared Pod count, or None when unavailable."""
+    pod_sets = (workload.get("spec") or {}).get("podSets")
+    if not isinstance(pod_sets, list) or not pod_sets:
+        return None
+    total = 0
+    for pod_set in pod_sets:
+        if not isinstance(pod_set, dict):
+            return None
+        count = _non_negative_int(pod_set.get("count", 1))
+        if count is None:
+            return None
+        total += count
+    return total
+
+
 def _resource_gpu_count(resources: object) -> int:
     """Return GPU count from one Kubernetes resources map.
 
@@ -803,6 +823,7 @@ class KueueExecutionContextAdapter:
         placement_records_enabled: bool = False,
         placement_reader: PlacementReader | None = None,
         event_max_age_seconds: int = 3600,
+        prometheus_placement_resolver: PlacementResolver | None = None,
     ):
         self.kubectl_path = kubectl_path
         self.kubeconfig = kubeconfig
@@ -814,6 +835,7 @@ class KueueExecutionContextAdapter:
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
         self.event_max_age_seconds = event_max_age_seconds
+        self.prometheus_placement_resolver = prometheus_placement_resolver
 
     # --- public protocol ---------------------------------------------------
 
@@ -1156,6 +1178,51 @@ class KueueExecutionContextAdapter:
         context["nodes"] = sorted(set(context["nodes"]) | {item["node_name"] for item in placements})
         context["pod_names"] = sorted(set(context.get("pod_names") or []) | {item["pod_name"] for item in placements})
 
+    def _merge_prometheus_placements_batched(
+        self,
+        parsed: list[tuple[dict, KueueExecutionContext]],
+        owner_jobs: dict[str, dict],
+    ) -> None:
+        if self.prometheus_placement_resolver is None:
+            return
+
+        queries: list[PlacementQuery] = []
+        contexts_by_workload_uid: dict[str, KueueExecutionContext] = {}
+        for workload, context in parsed:
+            expected_pods = _expected_pod_count(workload)
+            observed_placements = len(context.get("pod_placements") or [])
+            placement_complete = bool(context["nodes"] and context.get("pod_names")) and (
+                expected_pods is None or observed_placements >= expected_pods
+            )
+            if placement_complete:
+                continue
+            owner_job_uids = _owner_job_uids(workload, owner_jobs)
+            workload_uid = context["workload_uid"]
+            if not owner_job_uids or not workload_uid:
+                continue
+            queries.append(
+                PlacementQuery(
+                    workload_uid=workload_uid,
+                    namespace=context["namespace"],
+                    owner_job_uids=frozenset(owner_job_uids),
+                    start_time=context["start_time"],
+                    end_time=context["end_time"],
+                )
+            )
+            contexts_by_workload_uid[workload_uid] = context
+
+        if not queries:
+            return
+        try:
+            placements_by_workload = self.prometheus_placement_resolver.placements_for_many(queries)
+        except Exception as error:
+            logger.warning(f"batched Prometheus placement query failed: {error}")
+            return
+        for workload_uid, placements in placements_by_workload.items():
+            context = contexts_by_workload_uid.get(workload_uid)
+            if context is not None:
+                self._merge_placements(context, placements)
+
     def _finalize(self, workloads: list[dict]) -> list[KueueExecutionContext]:
         if not workloads:
             return []
@@ -1169,6 +1236,7 @@ class KueueExecutionContextAdapter:
                 live_node_loss_nodes = _live_node_loss_nodes(pods, _pod_selector_for(wl))
                 self._merge_placement_records(ctx, live_node_loss_nodes)
                 parsed.append((wl, ctx))
+        self._merge_prometheus_placements_batched(parsed, owner_jobs)
 
         missing = [
             (workload, ctx)

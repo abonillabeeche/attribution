@@ -284,6 +284,103 @@ fields as the Prometheus source. The recorder itself does not terminate
 authentication, so keep its Service private or place an authenticated proxy
 in front of it.
 
+To recover Job and JobSet placement from retained kube-state-metrics, configure a
+Prometheus-compatible endpoint under the Kueue adapter:
+
+```toml
+[eca.kueue.prometheus_metrics]
+endpoint = "https://mimir.example/prometheus"
+cluster = "prod-batch"
+cluster_label = "cluster"
+timeout_seconds = 60
+lookback_padding_seconds = 300
+step_seconds = 60
+batch_size = 20
+
+[eca.kueue.prometheus_metrics.auth]
+type = "token"
+token_env = "MIMIR_TOKEN"
+org_id = "tenant-a"
+```
+
+Fields:
+
+
+| Field                      | Required | Meaning                                                                                                                                    |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `endpoint`                 | Yes      | Prometheus-compatible HTTP API base URL.                                                                                                   |
+| `cluster`                  | No       | Cluster label value to scope every query. Must be set together with `cluster_label`.                                                       |
+| `cluster_label`            | No       | Label name carrying `cluster` on kube-state-metrics series. Must be set together with `cluster`.                                           |
+| `auth.type`                | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki and PromQL metrics. Omit the `auth` block for unauthenticated endpoints. |
+| `timeout_seconds`          | No       | HTTP timeout. Defaults to `60.0`.                                                                                                          |
+| `lookback_padding_seconds` | No       | Seconds padded onto both ends of the Workload interval before querying. Defaults to `300`.                                                 |
+| `step_seconds`             | No       | Resolution step used inside the `last_over_time(...)` subquery. Defaults to `60`.                                                          |
+| `batch_size`               | No       | Maximum owner Job UIDs included in one shared query. Defaults to `20`.                                                                     |
+| `pod_info_metric`          | No       | kube-state-metrics Pod-to-node metric name. Defaults to `kube_pod_info`.                                                                   |
+| `pod_labels_metric`        | No       | kube-state-metrics Pod-label metric name. Defaults to `kube_pod_labels`.                                                                   |
+| `pod_controller_uid_label` | No       | Prometheus label containing the Pod controller Job UID. Defaults to `label_batch_kubernetes_io_controller_uid`.                            |
+
+
+`cluster` and `cluster_label` are optional for a single-cluster endpoint, but
+must be set together for a shared backend. The source evaluates an instant
+`last_over_time` query over the relevant Workload intervals. Following FACT's
+node-metadata collection pattern, the adapter combines owner Job UIDs from all
+incomplete Workloads in the run, groups them by namespace, and queries them in
+bounded batches. It then partitions the returned mappings back to each
+Workload by exact Job UID. The query joins `kube_pod_labels` to
+`kube_pod_info` on namespace, Pod name, and Pod UID. For JobSets, the adapter
+first resolves the current child Job UIDs from Kubernetes. Configure
+kube-state-metrics with:
+
+```text
+--metric-labels-allowlist=pods=[batch.kubernetes.io/controller-uid]
+```
+
+This exposes `batch.kubernetes.io/controller-uid` as
+`label_batch_kubernetes_io_controller_uid`. If a deployment uses a different
+converted label name, set `pod_controller_uid_label`.
+
+For the `prometheus-community/kube-state-metrics` chart, the equivalent values
+are:
+
+```yaml
+metricLabelsAllowlist:
+  - pods=[batch.kubernetes.io/controller-uid]
+```
+
+When kube-state-metrics is installed as a dependency of the
+`prometheus-community/prometheus` chart, nest this under
+`kube-state-metrics`. Confirm the running container has the allowlist argument,
+then run a Job long enough to cross at least one scrape and verify that this
+query is non-empty:
+
+```promql
+kube_pod_labels{
+  namespace="team-a",
+  label_batch_kubernetes_io_controller_uid="<exact Job UID>"
+}
+```
+
+To prove the fallback rather than live-Pod or recorder recovery, leave
+`placement_records_enabled = false`, delete the Pod after the series has been
+scraped, and run attribution while the Workload remains available. The
+result must contain the original Pod UID and node with
+`pod_placements[].source = "prometheus"`. Repeat with a JobSet and retain its
+child Job objects so the adapter can resolve their exact UIDs.
+
+Kueue time-range filtering is client-side because the Workload API does not
+provide server-side time filtering. The adapter reads pod and node names from
+live owned pods and recorder records. It queries configured Prometheus
+placement data when either list is unavailable or the number of structured
+placements is below the Pod count declared by the Workload's `podSets`.
+
+Prometheus recovery is bounded by kube-state-metrics scrape cadence and backend
+retention. A Pod that exists entirely between scrapes is not recoverable.
+JobSet recovery also requires its child Job objects to remain available at
+attribution time so their UIDs can be resolved without a name-based metrics
+join. If both a JobSet's Pods and child Jobs have been deleted, this UID-safe
+Prometheus route returns no placement even when the old metrics remain.
+
 For durable pod-to-node placement, install one pod-placement-recorder release per namespace:
 
 ```bash

@@ -2,7 +2,8 @@
 
 The recorder preserves Kueue Pod-to-node placement after Kubernetes deletes
 the Pods. It is optional: without it, the Kueue adapter uses live Pods,
-and Kubernetes Events as a best-effort fallback.
+retained Prometheus metrics when configured, and Kubernetes Events as a
+best-effort fallback.
 
 ## Architecture
 

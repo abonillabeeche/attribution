@@ -1861,6 +1861,182 @@ class TestMergePlacementRecordsFailedNode:
         assert ctx["state"] == "NODE_FAIL"
 
 
+class TestMergePrometheusPlacements:
+    def _workload(self, *, kind="Job", name="job-a", uid="job-uid-1"):
+        return {
+            "metadata": {
+                "namespace": "team-a",
+                "name": "workload-a",
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1" if kind == "Job" else "jobset.x-k8s.io/v1alpha2",
+                        "kind": kind,
+                        "name": name,
+                        "uid": uid,
+                        "controller": True,
+                    }
+                ],
+            }
+        }
+
+    def _context(self, **overrides):
+        ctx = {
+            "namespace": "team-a",
+            "workload_uid": "workload-uid-1",
+            "nodes": [],
+            "pod_names": [],
+            "start_time": datetime(2026, 5, 1, tzinfo=timezone.utc),
+            "end_time": datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_complete_live_placement_skips_prometheus(self, mocker):
+        resolver = mocker.Mock()
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+
+        eca._merge_prometheus_placements_batched(
+            [(self._workload(), self._context(nodes=["node-a"], pod_names=["pod-a"]))],
+            owner_jobs={},
+        )
+
+        resolver.placements_for_many.assert_not_called()
+
+    def test_partial_multi_pod_placement_queries_prometheus(self, mocker):
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {"workload-uid-1": []}
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        workload = self._workload()
+        workload["spec"] = {"podSets": [{"name": "workers", "count": 2}]}
+        context = self._context(
+            nodes=["node-a"],
+            pod_names=["pod-a"],
+            pod_placements=[
+                {
+                    "pod_uid": "pod-uid-1",
+                    "pod_name": "pod-a",
+                    "node_name": "node-a",
+                    "source": "live",
+                }
+            ],
+        )
+
+        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+
+        resolver.placements_for_many.assert_called_once()
+
+    def test_declared_multi_pod_placement_skips_prometheus_when_complete(self, mocker):
+        resolver = mocker.Mock()
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        workload = self._workload()
+        workload["spec"] = {"podSets": [{"name": "workers", "count": 2}]}
+        context = self._context(
+            nodes=["node-a", "node-b"],
+            pod_names=["pod-a", "pod-b"],
+            pod_placements=[
+                {
+                    "pod_uid": f"pod-uid-{index}",
+                    "pod_name": f"pod-{name}",
+                    "node_name": f"node-{name}",
+                    "source": "live",
+                }
+                for index, name in enumerate(("a", "b"), start=1)
+            ],
+        )
+
+        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+
+        resolver.placements_for_many.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("nodes", "pod_names"),
+        [
+            ([], ["pod-a"]),
+            (["node-a"], []),
+            ([], []),
+        ],
+    )
+    def test_incomplete_placement_queries_by_direct_job_uid(self, mocker, nodes, pod_names):
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {"workload-uid-1": []}
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        workload = self._workload()
+        context = self._context(nodes=nodes, pod_names=pod_names)
+
+        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+
+        query = resolver.placements_for_many.call_args.args[0][0]
+        assert query.owner_job_uids == {"job-uid-1"}
+
+    def test_jobset_queries_by_child_job_uids(self, mocker):
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {"workload-uid-1": []}
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        workload = self._workload(kind="JobSet", name="set-a", uid="jobset-uid-1")
+        owner_jobs = {
+            "team-a/set-a-workers-0": {
+                "metadata": {
+                    "namespace": "team-a",
+                    "uid": "child-job-uid-1",
+                    "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
+                }
+            },
+            "team-a/set-a-workers-1": {
+                "metadata": {
+                    "namespace": "team-a",
+                    "uid": "child-job-uid-2",
+                    "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
+                }
+            },
+        }
+
+        eca._merge_prometheus_placements_batched([(workload, self._context())], owner_jobs)
+
+        query = resolver.placements_for_many.call_args.args[0][0]
+        assert query.owner_job_uids == {
+            "child-job-uid-1",
+            "child-job-uid-2",
+        }
+
+    def test_multiple_workloads_share_one_resolver_call_and_partition_results(self, mocker):
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {
+            "workload-uid-1": [
+                {
+                    "pod_uid": "pod-uid-1",
+                    "pod_name": "pod-a",
+                    "node_name": "node-a",
+                    "source": "prometheus",
+                }
+            ],
+            "workload-uid-2": [
+                {
+                    "pod_uid": "pod-uid-2",
+                    "pod_name": "pod-b",
+                    "node_name": "node-b",
+                    "source": "prometheus",
+                }
+            ],
+        }
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        first = self._context()
+        second = self._context(workload_uid="workload-uid-2")
+
+        eca._merge_prometheus_placements_batched(
+            [
+                (self._workload(uid="job-uid-1"), first),
+                (self._workload(uid="job-uid-2"), second),
+            ],
+            owner_jobs={},
+        )
+
+        resolver.placements_for_many.assert_called_once()
+        queries = resolver.placements_for_many.call_args.args[0]
+        assert [query.owner_job_uids for query in queries] == [{"job-uid-1"}, {"job-uid-2"}]
+        assert first["nodes"] == ["node-a"]
+        assert second["nodes"] == ["node-b"]
+
+
 class TestPlacementReader:
     def test_disabled_records_do_not_query_reader(self, mocker):
         reader = mocker.Mock()

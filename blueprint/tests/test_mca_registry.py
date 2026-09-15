@@ -183,12 +183,27 @@ def test_built_schema_has_expected_shape():
         "placement_records_enabled",
         "placement_recorder",
         "event_max_age_seconds",
+        "prometheus_metrics",
     }
     assert set(schema["eca"]["_selector"]["kueue"]["placement_recorder"]) == {
         "endpoint",
         "timeout_seconds",
         "auth",
     }
+    assert set(schema["eca"]["_selector"]["kueue"]["prometheus_metrics"]) == {
+        "endpoint",
+        "cluster",
+        "cluster_label",
+        "timeout_seconds",
+        "lookback_padding_seconds",
+        "step_seconds",
+        "batch_size",
+        "pod_info_metric",
+        "pod_labels_metric",
+        "pod_controller_uid_label",
+        "auth",
+    }
+
     assert "log" in schema
     assert schema["log"]["_aliases"] == ("logs",)
     for src in ("applog", "syslog"):
