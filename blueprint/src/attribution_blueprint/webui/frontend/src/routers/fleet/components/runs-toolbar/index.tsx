@@ -64,12 +64,12 @@ export function RunsToolbar({
 }) {
   const outcomeFilter: OutcomeChoice = filter.outcome ?? 'all'
   const query = filter.q ?? ''
-  const failedOnly = filter.status === 'failed'
+  const hidePassingRuns = filter.status === 'failed'
 
   const setOutcome = (v: OutcomeChoice) =>
     setFilter({ ...filter, outcome: v === 'all' ? undefined : v })
   const setQuery = (q: string) => setFilter({ ...filter, q: q || undefined })
-  const setFailedOnly = (on: boolean) =>
+  const setHidePassingRuns = (on: boolean) =>
     setFilter({ ...filter, status: on ? 'failed' : 'all' })
 
   const chips: Array<{ key: string; label: string; value: string; clear: () => void }> = []
@@ -146,11 +146,11 @@ export function RunsToolbar({
         <label className="flex items-center gap-1.5 font-mono text-xs text-foreground-muted cursor-pointer select-none">
           <input
             type="checkbox"
-            checked={failedOnly}
-            onChange={(e) => setFailedOnly(e.target.checked)}
+            checked={hidePassingRuns}
+            onChange={(e) => setHidePassingRuns(e.target.checked)}
             className="accent-primary"
           />
-          Failed only
+          Hide passing runs
         </label>
 
         <div className="flex-1" />
@@ -163,7 +163,7 @@ export function RunsToolbar({
           size="sm"
           className="font-mono"
         >
-          <ToggleGroupItem value="all">All</ToggleGroupItem>
+          <ToggleGroupItem value="all">All outcomes</ToggleGroupItem>
           {OUTCOME_ORDER.map((g) => (
             <ToggleGroupItem key={g.key} value={g.key} className="gap-2">
               <span className={`inline-block size-2 rounded-sm ${g.dot}`} />

@@ -173,7 +173,7 @@ describe('RunsSection', () => {
     rerender(<RunsSection {...common} />)
     expect(screen.getByText('No runs in this view')).toBeTruthy()
     expect(screen.getByText(
-      'Try to uncheck "Failed only" to include passing runs.',
+      'Try to uncheck "Hide passing runs".',
     )).toBeTruthy()
     expect(screen.queryByText(/filter chips above/)).toBeNull()
     expect(screen.queryByText(/widen the date range/)).toBeNull()
@@ -185,8 +185,8 @@ describe('RunsSection', () => {
       />,
     )
     expect(screen.getByText(
-      'Try to clear the active filter chips above, or uncheck "Failed only" to include '
-      + 'passing runs, or widen the date range.',
+      'Try to clear the active filter chips above, or uncheck "Hide passing runs", or '
+      + 'widen the date range.',
     )).toBeTruthy()
   })
 
