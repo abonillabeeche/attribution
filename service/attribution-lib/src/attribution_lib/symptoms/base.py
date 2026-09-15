@@ -83,10 +83,10 @@ class BaseSymptom:
         self._attributes.update(updates)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the symptom, preserving its legacy shape without family metadata.
+        """Serialize the symptom, including structured identity when present.
 
         Returns:
-            Symptom data with structured family identity included when present.
+            Symptom data in its compatible dictionary representation.
         """
         result: dict[str, Any] = {
             "symptom_id": self._symptom_id,

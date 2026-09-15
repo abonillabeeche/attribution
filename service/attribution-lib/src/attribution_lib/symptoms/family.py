@@ -32,7 +32,8 @@ def _immutable_mapping(values: Mapping[str, _Value], *, field_name: str) -> Mapp
         An immutable copy of ``values``.
 
     Raises:
-        TypeError: If a property value is not hashable.
+        ValueError: If a property name is empty.
+        TypeError: If a property name is not a string or a value is not hashable.
     """
     copied = dict(values)
     for name, value in copied.items():
@@ -51,10 +52,9 @@ def _immutable_mapping(values: Mapping[str, _Value], *, field_name: str) -> Mapp
 class SymptomFamily:
     """Describe either a symptom-family schema or one family member.
 
-    A family declaration may supply ``property_types``. A concrete member may
-    supply ``properties``; both can be empty for name-only membership. Keeping
-    the mutually exclusive forms in one value type lets declarations, emitted
-    events, and runtime symptoms share the same representation.
+    A declaration may supply ``property_types`` and a concrete member may supply
+    ``properties``; both can be empty for name-only membership. The mutually
+    exclusive forms let declarations, emitted events, and runtime symptoms share one representation.
 
     Attributes:
         name: Rule-defined family name.
