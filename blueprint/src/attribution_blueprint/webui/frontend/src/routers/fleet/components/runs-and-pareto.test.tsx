@@ -123,6 +123,34 @@ describe('RunsToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear Status filter' }))
     expect(setFilter).toHaveBeenCalledWith(expect.objectContaining({ status: 'all' }))
   })
+
+  it('releases the conflicting control when Pass and hide-passing would contradict', () => {
+    const setFilter = vi.fn()
+    const { rerender } = render(
+      <RunsToolbar runs={12} filteredRuns={[run()]} filter={filter} setFilter={setFilter} />,
+    )
+
+    // Picking Pass while passing runs are hidden: the outcome wins, hiding is released.
+    fireEvent.click(screen.getByText('Pass'))
+    expect(setFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'pass', status: 'all' }),
+    )
+
+    // Hiding passing runs while Pass is selected: the checkbox wins, the outcome is cleared.
+    setFilter.mockClear()
+    rerender(
+      <RunsToolbar
+        runs={12}
+        filteredRuns={[run()]}
+        filter={{ ...filter, status: 'all', outcome: 'pass' }}
+        setFilter={setFilter}
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(setFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed', outcome: undefined }),
+    )
+  })
 })
 
 describe('RunsSection', () => {
