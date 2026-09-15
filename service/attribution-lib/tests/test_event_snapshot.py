@@ -244,6 +244,74 @@ class TestSnapshotRoundTrip:
         assert restored._obs_formats.get_id(new_format) is not None
         restored.close()
 
+    def test_snapshot_resolves_rule_declared_after_it_was_taken(self, tmp_path, dummy_ctx):
+        """A rule declared only by the current rules_engine, never seen by a
+        snapshot taken before it existed, must still resolve after restore,
+        matching the failure mode of `filter_rules.py`'s
+        `event_stream.mgr.rules.get_ids(...)` call, which raises
+        `UndeclaredRuleError` for any name that doesn't resolve.
+
+        `_SnapshotRuleNames` already unions the live rules_engine's declared
+        names with the snapshot's own historical names when building the
+        restored manager's shared lookup db (see `from_snapshot()`). No cache
+        invalidation or explicit merge step is needed; this is a property of
+        how the shared lookup db is built, not an action taken after the fact.
+        """
+
+        class _Engine:
+            def __init__(self, all_rule_names, all_event_types):
+                self.all_rule_names = all_rule_names
+                self.all_event_types = all_event_types
+
+        old_engine = _Engine(all_rule_names={"OldRule"}, all_event_types={"Old.event"})
+        mgr = EventManager(rules_engine=old_engine)
+        mgr.preload_event_types({"Old.event"})
+        stream = mgr.create_stream("job_1")
+        stream.register_observation_context(dummy_ctx)
+        stream.add_event(
+            "Old.event",
+            {"k": "v"},
+            Source(
+                source_context=dummy_ctx,
+                line_num=1,
+                datum="historical datum",
+                time=datetime.now(),
+                resources=AllJobResources,
+                rule="OldRule",
+            ),
+        )
+        stream.flush()
+        mgr.export_snapshot(tmp_path / "snap")
+        original_event_rows = mgr._conn.execute(
+            "SELECT id, context_id, event_type, source_rule FROM events ORDER BY id"
+        ).fetchall()
+        original_rule_id = mgr.rules.get_id("OldRule")
+        mgr.close()
+
+        # The rules engine has since gained a new filter rule the snapshot
+        # predates entirely.
+        new_engine = _Engine(
+            all_rule_names={"OldRule", "NewRule"},
+            all_event_types={"Old.event"},
+        )
+        restored = EventManager.from_snapshot(tmp_path / "snap", new_engine)
+        try:
+            # The exact call shape that raised UndeclaredRuleError in the
+            # original incident: get_ids() over names not necessarily known
+            # to the snapshot.
+            (new_rule_id,) = restored.rules.get_ids(["NewRule"])
+            assert new_rule_id is not None
+
+            # Historical data and ids must be untouched by restoring under a
+            # newer rules_engine.
+            assert restored.rules.get_id("OldRule") == original_rule_id
+            restored_event_rows = restored._conn.execute(
+                "SELECT id, context_id, event_type, source_rule FROM events ORDER BY id"
+            ).fetchall()
+            assert restored_event_rows == original_event_rows
+        finally:
+            restored.close()
+
     def test_export_import_survives_single_quote_in_snapshot_path(self, tmp_path, dummy_ctx):
         """Both `export_snapshot()` (`COPY ... TO '...'`) and `from_snapshot()`
         (`read_parquet('...')`) interpolate the snapshot path directly into SQL
