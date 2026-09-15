@@ -52,6 +52,11 @@ def _re2_escape(s: str) -> str:
 MAX_PAGES = 20
 
 
+def _as_str(value: object) -> str:
+    """Envelope fields come from arbitrary JSON, so only a str is usable downstream."""
+    return value if isinstance(value, str) else ""
+
+
 def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | None]:
     """Pull the log line, and a hostname when the stream had none, out of a JSON-encoded Loki value.
 
@@ -67,14 +72,14 @@ def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | N
 
     attributes = parsed.get("attributes")
     if node is None and isinstance(attributes, dict):
-        node = attributes.get("hostname")
-    body = parsed.get("body") or parsed.get("message") or ""
+        node = _as_str(attributes.get("hostname")) or None
+    body = _as_str(parsed.get("body")) or _as_str(parsed.get("message"))
     if body == "":
         data = parsed.get("data")
         if isinstance(data, dict):
-            body = data.get("message") or ""
+            body = _as_str(data.get("message"))
             if node is None:
-                node = data.get("hostname")
+                node = _as_str(data.get("hostname")) or None
     if body == "":
         body = payload
     return body, node
