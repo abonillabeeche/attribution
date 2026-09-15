@@ -1051,12 +1051,6 @@ class EventManager:
         mgr._obs_sources._reload_local_overlay()
         mgr._obs_formats._reload_local_overlay()
 
-        # Keep historical names referenced by restored events, then merge names
-        # introduced by the current runtime so new rules can process old snapshots.
-        mgr.preload_rule_names(rules_engine.all_rule_names)
-        mgr.preload_event_types(rules_engine.all_event_types)
-        mgr._populate_enum_tables()
-
         return mgr
 
     def checkpoint(self, name: str) -> None:

@@ -10,7 +10,6 @@
 
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -202,8 +201,25 @@ class TestSnapshotRoundTrip:
         restored.close()
 
     def test_import_merges_current_lookup_catalogs(self, tmp_path):
-        """A restored historical snapshot includes newly declared runtime names."""
-        historical_engine = SimpleNamespace(
+        """A restored historical snapshot includes newly declared runtime names.
+
+        `obs_sources`/`obs_formats` aren't rules_engine-derived and aren't part
+        of the exported snapshot data at all here (see `_build_shared_lookup_db`):
+        every `EventManager`, restored or not, is unconditionally seeded from the
+        full current `ObsSource`/`ObsFormat` enum, so `new_source`/`new_format`
+        resolving after restore is guaranteed by construction, not by any merge
+        step. This just pins that guarantee against regression.
+        """
+
+        # Not SimpleNamespace: _build_shared_lookup_db() caches per rules_engine
+        # in a WeakKeyDictionary, and SimpleNamespace instances can't be weakly
+        # referenced. A real RuleEngine is a plain class, so it works fine.
+        class _Engine:
+            def __init__(self, all_rule_names, all_event_types):
+                self.all_rule_names = all_rule_names
+                self.all_event_types = all_event_types
+
+        historical_engine = _Engine(
             all_rule_names={"historical_rule"},
             all_event_types={"Historical.event"},
         )
@@ -211,12 +227,10 @@ class TestSnapshotRoundTrip:
 
         new_source = ObsSource.CSP_EVENT.value
         new_format = ObsFormat.CSP_EVENT_LIST.value
-        mgr._conn.execute("DELETE FROM obs_sources WHERE name=?", [new_source])
-        mgr._conn.execute("DELETE FROM obs_formats WHERE name=?", [new_format])
         mgr.export_snapshot(tmp_path / "snap")
         mgr.close()
 
-        current_engine = SimpleNamespace(
+        current_engine = _Engine(
             all_rule_names={"historical_rule", "current_rule"},
             all_event_types={"Historical.event", "Current.event"},
         )
