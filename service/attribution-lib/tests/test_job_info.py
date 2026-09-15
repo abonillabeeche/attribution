@@ -90,6 +90,7 @@ class TestJobInfo:
             job_info.applog_extract_node(line)
 
     def test_applog_extract_node_raises_for_foreign_hostname_and_invalid_rank(self, simple_job_factory):
+        """Reject a foreign NCCL hostname when its explicit rank is also invalid."""
         job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)
         line = (
             "814: [2026-01-02 03:04:05] other-node-99:1234567:1234568 [2] "

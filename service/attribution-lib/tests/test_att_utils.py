@@ -246,6 +246,7 @@ class TestApplogExtractNodeRank:
         assert applog_extract_node_rank(line) == ("node-12", 814)
 
     def test_nccl_hostname_pid_tid_without_srun_rank(self):
+        """A timestamped NCCL hostname has no explicit rank prefix."""
         line = (
             "[2026-01-02 03:04:05] node-01:3298233:3301236 [0] ib_plugin.c:2033 "
             "NCCL WARN NET/IB: Got completion from peer 192.0.2.11<31197>"
@@ -260,7 +261,13 @@ class TestApplogExtractNodeRank:
         )
         assert applog_extract_node_rank(line) == ("node-12", None)
 
+    def test_nccl_hostname_pid_tid_with_rank_prefix(self):
+        """Keep the explicit bracketed rank rather than NCCL's CUDA device index."""
+        line = "[rank2]: node-12:1234567:1234568 [0] NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        assert applog_extract_node_rank(line) == ("node-12", 2)
+
     def test_nccl_peer_ip_is_not_treated_as_hostname(self):
+        """A peer IP alone must not supply the local hostname."""
         line = "302: NET/IB: Got completion from peer 192.0.2.10<63270> with status=12"
         assert applog_extract_node_rank(line) == (None, 302)
 
