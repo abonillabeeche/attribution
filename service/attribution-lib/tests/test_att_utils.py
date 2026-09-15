@@ -271,6 +271,22 @@ class TestApplogExtractNodeRank:
         line = "302: NET/IB: Got completion from peer 192.0.2.10<63270> with status=12"
         assert applog_extract_node_rank(line) == (None, 302)
 
+    @pytest.mark.parametrize("hostname", ["_node-12", ".node-12", "-node-12"])
+    def test_nccl_does_not_extract_a_suffix_of_a_hostname(self, hostname):
+        """Do not turn a hostname into a different node by dropping its first character."""
+        line = f"{hostname}:123:456 [2] NCCL WARN NET/IB error"
+        assert applog_extract_node_rank(line) == (hostname, None)
+
+    @pytest.mark.parametrize("prefix", ["0: INFO: ", "0: [2026-01-02 03:04:05] INFO: "])
+    def test_long_non_nccl_text_preserves_explicit_rank(self, prefix):
+        """Long nonmatching text remains attributable with or without timestamp brackets."""
+        assert applog_extract_node_rank(prefix + "a" * 8192) == (None, 0)
+
+    def test_nccl_hostname_after_long_nonmatching_text(self):
+        """Skipping a long nonmatching chunk must still find a later NCCL hostname."""
+        line = "[rank2]: " + "a" * 8192 + " node-12:123:456 [0] NCCL WARN NET/IB error"
+        assert applog_extract_node_rank(line) == ("node-12", 2)
+
 
 class TestNormalizeNode:
     """Test cases for _normalize_node in attr_types."""

@@ -135,8 +135,10 @@ RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")
 # NCCL debug prefix: hostname:pid:tid [cudaDev]. cudaDev is the local GPU
 # index, not an srun/MPI rank. Peer addresses like "192.0.2.10<63270>" do
 # not match (no :pid:tid [digits]).
+# Require a hostname boundary so a failed match does not rescan every suffix
+# of a long hostname-shaped chunk of text.
 NCCL_HOST_PID_TID_REGEX = re.compile(
-    r"(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[(?P<cuda_dev>\d+)\]"
+    r"(?<![A-Za-z0-9._-])(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[(?P<cuda_dev>\d+)\]"
 )
 
 
@@ -208,7 +210,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
             # node name
             node = rank_or_node
 
-    if (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
+    # Every NCCL prefix includes [cudaDev]; skip impossible matches cheaply.
+    if "[" in line and (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
         node = nccl.group("node")
         # Wipe timestamp-driven rank 0; keep a real srun / [rankN] prefix.
         rank = _leading_explicit_applog_rank(line)
