@@ -154,6 +154,28 @@ def _validate_snapshot_lookup_references(conn: duckdb.DuckDBPyConnection) -> Non
                 raise InvalidSnapshotError(table, column, [row[0] for row in rows])
 
 
+def _assert_no_id_collision(conn: duckdb.DuckDBPyConnection, view_name: str) -> None:
+    """Raise `StableIdCollisionError` if any id in `view_name` resolves to
+    more than one distinct name.
+
+    `from_snapshot()`'s restore of `obs_sources`/`obs_formats` local-overlay
+    rows is a raw SQL `INSERT` that only filters out rows whose name already
+    resolves, bypassing `_ReadOnlyLookup.preload()`'s per-name collision
+    check entirely. A snapshot row whose id collides with an existing
+    shared-tier name under a different name would otherwise import silently,
+    aliasing two names to the same id.
+    """
+    with _translate_out_of_memory():
+        rows = conn.execute(f"SELECT id, name FROM {view_name}").fetchall()
+    names_by_id: dict[int, set[str]] = {}
+    for id_val, name in rows:
+        names = names_by_id.setdefault(id_val, set())
+        names.add(name)
+        if len(names) > 1:
+            other = next(iter(names - {name}))
+            raise StableIdCollisionError(view_name, id_val, name, other)
+
+
 def _sql_string_literal(value: object) -> str:
     """Quote `value` (typically a `Path`) as a single-quoted SQL string
     literal, doubling any embedded single quotes. DuckDB has no parameter
@@ -675,13 +697,23 @@ class _ReadOnlyLookup:
                 f"SELECT id, name FROM {self._view_name} WHERE id IN ({id_placeholders})",
                 ids,
             ).fetchall()
-        persisted_name_by_id = {id_val: persisted_name for id_val, persisted_name in rows}
+        # Retain every persisted name per id, not just one: the shared tier
+        # and this instance's local overlay are separate physical tables, so
+        # the same id can be claimed by a different name in each without
+        # either table's own PRIMARY KEY constraint ever seeing the conflict.
+        # A dict keyed by id alone would silently drop one side of that,
+        # with the outcome depending on SQL row return order.
+        persisted_names_by_id: dict[int, set[str]] = {}
+        for id_val, persisted_name in rows:
+            persisted_names_by_id.setdefault(id_val, set()).add(persisted_name)
 
         for name in missing:
             id_val = id_by_name[name]
-            persisted_name = persisted_name_by_id.get(id_val)
-            if persisted_name != name:
-                raise StableIdCollisionError(self._view_name, id_val, name, persisted_name)
+            persisted_names = persisted_names_by_id.get(id_val, set())
+            other_names = persisted_names - {name}
+            if other_names or name not in persisted_names:
+                other_name = next(iter(other_names), None)
+                raise StableIdCollisionError(self._view_name, id_val, name, other_name)
 
         for name in missing:
             id_val = id_by_name[name]
@@ -1011,6 +1043,7 @@ class EventManager:
                             SELECT * FROM read_parquet({_sql_string_literal(src)})
                             WHERE name NOT IN (SELECT name FROM {table})"""
                     )
+                    _assert_no_id_collision(mgr._conn, table)
                 else:
                     mgr._conn.execute(f"DELETE FROM {table}")
                     mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet({_sql_string_literal(src)})")

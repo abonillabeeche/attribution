@@ -474,3 +474,31 @@ class TestSnapshotErrors:
 
         with pytest.raises(InvalidSnapshotError, match=column):
             EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+
+    def test_obs_sources_local_overlay_import_detects_id_collision(self, tmp_path, dummy_ctx):
+        """`from_snapshot()` restores `obs_sources`/`obs_formats` local-overlay
+        rows via a raw SQL `INSERT` that only filters out rows whose *name*
+        already resolves, with no id-based check at all. A snapshot row whose
+        id happens to collide with an existing shared-tier name (under a
+        different name) must be rejected, not silently create two names
+        aliased to the same id.
+        """
+        import duckdb
+
+        from attribution_lib.exceptions import StableIdCollisionError
+
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx)
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        existing_source_id = mgr._obs_sources.get_id(ObsSource.SYSLOG.value)
+        mgr.close()
+
+        target = snapshot_dir / "obs_sources.parquet"
+        with duckdb.connect(":memory:") as scratch:
+            scratch.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet('{target}')")
+            scratch.execute("INSERT INTO t VALUES (?, ?)", [existing_source_id, "not_a_real_source_name"])
+            scratch.execute(f"COPY t TO '{target}' (FORMAT PARQUET)")
+
+        with pytest.raises(StableIdCollisionError):
+            EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
