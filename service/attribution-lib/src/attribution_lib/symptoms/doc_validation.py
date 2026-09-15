@@ -22,7 +22,6 @@ declarations and generated documentation manifest and enforces the result.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 
 from attribution_lib.symptoms.declarations import SymptomDeclaration
@@ -30,16 +29,11 @@ from attribution_lib.symptoms.declarations import SymptomDeclaration
 SymptomDocKey = tuple[str, str]
 
 
-def normalize_symptom_name(value: str) -> str:
-    """Normalize punctuation, whitespace, and case for exact name matching."""
-    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-
-
 def symptom_doc_key(declaration: SymptomDeclaration) -> SymptomDocKey | None:
-    """Return the exact normalized declaration identity used by the baseline."""
+    """Return the unchanged symptom-name/doc-slug pair used by the baseline."""
     if declaration.doc is None or declaration.doc == "":
         return None
-    return normalize_symptom_name(declaration.prefix), declaration.doc
+    return declaration.prefix, declaration.doc
 
 
 def symptom_requires_doc(declaration: SymptomDeclaration) -> bool:
@@ -73,9 +67,10 @@ def find_unresolved_symptom_docs(
     """Return real symptoms whose documentation slug does not resolve.
 
     A slug resolves when it is non-empty and present in ``valid_doc_ids``.
-    Exact normalized ``(symptom name, doc slug)`` pairs listed in ``baseline`` are
+    Exact ``(symptom name, doc slug)`` pairs listed in ``baseline`` are
     treated as known, grandfathered gaps and are not reported. Pairing the name
-    and slug prevents a new declaration from reusing an old missing slug.
+    and slug without normalization prevents a distinct declaration from reusing
+    an old missing slug, even if its name differs only in case or punctuation.
 
     Args:
         declarations: Symptom declarations to check.
@@ -132,12 +127,14 @@ def stale_baseline_entries(
 def build_doc_name_index(
     manifest_entries: Iterable[Mapping[str, object]],
 ) -> dict[str, frozenset[str]]:
-    """Map every resolving documentation id to its declared names.
+    """Map every resolving documentation id to its exact declared names.
 
     Each docs-owned manifest entry provides a canonical id, title, aliases, and
     redirect ids. Aliases mean additional emitted names covered by that page; they do
     not imply equivalent outcomes or runtime deduplication. Redirect ids inherit the
-    canonical page's declared names while also declaring their own normalized id.
+    canonical page's declared names while also declaring their own exact id.
+    Names retain their case, punctuation, whitespace, and Unicode characters.
+    Alternate spellings must be explicit aliases, not inferred from a URL slug.
     """
     names_by_id: dict[str, set[str]] = {}
     redirect_ids_by_id: dict[str, list[str]] = {}
@@ -148,16 +145,16 @@ def build_doc_name_index(
             continue
         if doc_id in names_by_id:
             raise ValueError(f"duplicate documentation id: {doc_id!r}")
-        declared_names = {normalize_symptom_name(doc_id)}
+        declared_names = {doc_id}
         if isinstance(title, str) and title != "":
-            declared_names.add(normalize_symptom_name(title))
+            declared_names.add(title)
         aliases = entry.get("aliases", [])
         if not isinstance(aliases, list):
             raise ValueError(f"documentation entry {doc_id!r} has non-list aliases")
         for alias in aliases:
             if not isinstance(alias, str) or alias == "":
                 raise ValueError(f"documentation entry {doc_id!r} has an invalid alias: {alias!r}")
-            declared_names.add(normalize_symptom_name(alias))
+            declared_names.add(alias)
         redirect_ids = entry.get("redirect_ids", [])
         if not isinstance(redirect_ids, list):
             raise ValueError(f"documentation entry {doc_id!r} has non-list redirect_ids")
@@ -180,7 +177,7 @@ def build_doc_name_index(
             redirect_owner_by_id[redirect_id] = doc_id
 
     for redirect_id, doc_id in redirect_owner_by_id.items():
-        names_by_id[redirect_id] = names_by_id[doc_id] | {normalize_symptom_name(redirect_id)}
+        names_by_id[redirect_id] = names_by_id[doc_id] | {redirect_id}
 
     return {doc_id: frozenset(names) for doc_id, names in names_by_id.items()}
 
@@ -191,7 +188,7 @@ def find_undeclared_symptom_names(
 ) -> list[SymptomDeclaration]:
     """Return resolving targets that do not declare their emitted symptom name.
 
-    This is deliberately an exact normalized-name check, not a review of the
+    This is deliberately an exact string-equality check, not a review of the
     document's technical correctness. Missing targets are reported separately
     by :func:`find_unresolved_symptom_docs`.
     """
@@ -202,7 +199,7 @@ def find_undeclared_symptom_names(
         target_names = doc_names_by_id.get(declaration.doc)
         if target_names is None:
             continue
-        if normalize_symptom_name(declaration.prefix) in target_names:
+        if declaration.prefix in target_names:
             continue
         gaps.append(declaration)
     return gaps

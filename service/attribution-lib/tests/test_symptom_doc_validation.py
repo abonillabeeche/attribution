@@ -17,8 +17,8 @@ from attribution_lib.symptoms.doc_validation import (
     build_doc_name_index,
     find_undeclared_symptom_names,
     find_unresolved_symptom_docs,
-    normalize_symptom_name,
     stale_baseline_entries,
+    symptom_doc_key,
     symptom_requires_doc,
 )
 
@@ -97,6 +97,15 @@ class TestFindUnresolvedSymptomDocs:
         result = find_unresolved_symptom_docs(declarations, VALID_DOC_IDS, baseline=baseline)
         assert [d.prefix for d in result] == ["Brand new symptom"]
 
+    @pytest.mark.parametrize("prefix", ["GPU A/B", "gpu a+b", "GPU A B", "GPU A+B "])
+    def test_similar_name_cannot_reuse_baseline(self, prefix):
+        original = _symptom("GPU A+B", doc="gpu-error")
+        added = _symptom(prefix, doc="gpu-error")
+        baseline = frozenset({("GPU A+B", "gpu-error")})
+
+        assert symptom_doc_key(original) == ("GPU A+B", "gpu-error")
+        assert find_unresolved_symptom_docs([original, added], set(), baseline) == [added]
+
 
 class TestStaleBaselineEntries:
     def test_baseline_pair_that_now_resolves_is_reported(self):
@@ -114,6 +123,13 @@ class TestStaleBaselineEntries:
     def test_baseline_pair_is_stale_when_declaration_disappears(self):
         baseline = frozenset({("retired-symptom", "retired-symptom")})
         assert stale_baseline_entries([], VALID_DOC_IDS, baseline) == [("retired-symptom", "retired-symptom")]
+
+    @pytest.mark.parametrize("prefix", ["GPU A/B", "gpu a+b", "GPU A B", "GPU A+B "])
+    def test_similar_replacement_does_not_keep_baseline_active(self, prefix):
+        declarations = [_symptom(prefix, doc="gpu-error")]
+        baseline = frozenset({("GPU A+B", "gpu-error")})
+
+        assert stale_baseline_entries(declarations, set(), baseline) == [("GPU A+B", "gpu-error")]
 
 
 def _name_index(*, aliases: list[str] | None = None) -> dict[str, frozenset[str]]:
@@ -158,7 +174,7 @@ class TestDocNameIndexValidation:
     def test_omitted_manifest_collections_default_to_empty(self):
         index = build_doc_name_index([{"id": "not-responding", "title": "Not responding"}])
 
-        assert index["not-responding"] == frozenset({"not-responding"})
+        assert index["not-responding"] == frozenset({"not-responding", "Not responding"})
 
     def test_rejects_duplicate_canonical_document_ids(self):
         entries = [
@@ -189,8 +205,32 @@ class TestDocNameIndexValidation:
 
 
 class TestSymptomNameDeclarations:
-    def test_normalization_ignores_case_whitespace_and_punctuation(self):
-        assert normalize_symptom_name(" XID 48 / DBE ") == "xid-48-dbe"
+    @pytest.mark.parametrize("name", ["gpu-error", "GPU A+B", "GPU A/B", "legacy-gpu-error"])
+    def test_exact_manifest_names_pass(self, name):
+        index = build_doc_name_index(
+            [{"id": "gpu-error", "title": "GPU A+B", "aliases": ["GPU A/B"], "redirect_ids": ["legacy-gpu-error"]}]
+        )
+
+        assert find_undeclared_symptom_names([_symptom(name, doc="legacy-gpu-error")], index) == []
+
+    @pytest.mark.parametrize("field", ["id", "title", "aliases", "redirect_ids"])
+    @pytest.mark.parametrize("name", ["GPU A/B", "gpu a+b", "GPU A B", "GPU A+B ", "GPU A+Bé"])
+    def test_similar_names_require_explicit_declaration(self, field, name):
+        entry: dict[str, object] = {"id": "gpu-error"}
+        entry[field] = ["GPU A+B"] if field in ("aliases", "redirect_ids") else "GPU A+B"
+        index = build_doc_name_index([entry])
+        slug = "GPU A+B" if field in ("id", "redirect_ids") else "gpu-error"
+        declarations = [_symptom(name, doc=slug)]
+
+        assert find_undeclared_symptom_names(declarations, index) == declarations
+
+    def test_slug_shaped_name_does_not_replace_an_explicit_alias(self):
+        entry = {"id": "xid-48", "title": "XID 48"}
+        declarations = [_symptom("XID-48-", doc="xid-48")]
+
+        assert find_undeclared_symptom_names(declarations, build_doc_name_index([entry])) == declarations
+        index = build_doc_name_index([{**entry, "aliases": ["XID-48-"]}])
+        assert find_undeclared_symptom_names(declarations, index) == []
 
     def test_canonical_document_name_passes(self):
         assert find_undeclared_symptom_names([_symptom("Not responding", doc="not-responding")], _name_index()) == []
@@ -219,7 +259,7 @@ class TestSymptomNameDeclarations:
                 {
                     "id": "xid-48",
                     "title": "XID 48",
-                    "aliases": [],
+                    "aliases": ["XID-48"],
                     "redirect_ids": ["xid-48-gpu-ecc-dbe"],
                 }
             ]

@@ -242,7 +242,7 @@ class TestScrubBadNodes:
         assert created[0].evidence is not None
         assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
 
-    def test_single_node_inference_can_corroborate_epilog_non_response(self, stream, obs_ctx):
+    def test_sole_allocated_node_can_corroborate_epilog_non_response(self, stream, obs_ctx):
         job_info = _job_info_with(nodes=["node01"], state="NODE_FAIL")._replace(failed_node=None)
         epilog_source = _make_source(
             obs_ctx,
