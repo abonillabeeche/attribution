@@ -80,6 +80,8 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
+    # Correlate the GSP evidence per node before aggregation and XID cascades.
+    "PoisonedGspComposite",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
     "CorroboratedNodeFailure",
@@ -716,6 +718,40 @@ def corroborated_node_failure_refiner(context: RefinerContext):
             combined_sources.add(source)
         for source in epilog_sources:
             combined_sources.add(source)
+        node_group.add(combined_sources)
+
+
+@refiner_def(
+    name="PoisonedGspComposite",
+    author="NVIDIA Attribution team",
+    priority=_priority("PoisonedGspComposite"),
+)
+def poisoned_gsp_composite(context: RefinerContext):
+    """Recognize ECC from fatal GSP, contained-error, and reset evidence on one node."""
+    if context.my_bad_nodes is None:
+        return
+
+    fatal_error = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+    reset_required = "NV_ERR_RESET_REQUIRED"
+    for _node, node_group in context.my_bad_nodes.items():
+        node_symptoms = node_group.attributions
+        if fatal_error not in node_symptoms:
+            continue
+
+        xid94 = [symptom for symptom in node_symptoms.symptoms() if symptom.startswith("XID-94-")]
+        # SyslogNvErr appends a space and, when available, the originating file.
+        resets = [
+            symptom
+            for symptom in node_symptoms.symptoms()
+            if symptom == reset_required or symptom.startswith(reset_required + " ")
+        ]
+        if not xid94 or not resets:
+            continue
+
+        combined_sources = SourceSet("poisoned gsp")
+        for symptom in [fatal_error, *xid94, *resets]:
+            for source in node_symptoms[symptom]:
+                combined_sources.add(source)
         node_group.add(combined_sources)
 
 
