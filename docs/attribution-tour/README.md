@@ -58,26 +58,15 @@ To verify the production bundle:
 corepack pnpm build
 ```
 
+## Maintain the walkthrough
+
+New to Node, Slidev, or Vue? Start with the
+[beginner's editing tutorial](TUTORIAL.md). The
+[maintenance reference](MAINTAINING.md) summarizes the architecture,
+conventions, and review gate. Coding agents working in this directory should
+also follow the scoped [agent instructions](AGENTS.md).
+
 ## Publish and review on GitHub Pages
 
-The `Attribution Process Walkthrough Pages` workflow builds the deck when files
-in this directory change on `main`. It publishes the production deck to
-`walkthroughs/attribution-process/` on the `gh-pages` branch and keeps the
-branch's active PR previews intact. The Pages root remains a small, replaceable
-landing page for a future comprehensive documentation site.
-
-The `Attribution Process Walkthrough PR Preview` workflow publishes
-same-repository pull requests beneath `pr-preview/pr-<number>/`, adds a
-persistent preview link to the PR, updates the preview after each push, and
-removes it when the PR closes. Fork pull requests do not receive previews
-because GitHub gives them a read-only token. Each workflow builds with its
-deployment-specific base path, and the deck uses hash routing so slide
-navigation and reloads stay inside that path.
-
-### First-time Pages setup
-
-The first production or preview deployment creates the `gh-pages` branch. Once
-that branch exists, a repository administrator must open **Settings → Pages**,
-select **Deploy from a branch**, choose `gh-pages` and `/(root)`, and keep the
-site's visibility private unless wider access has been approved. Rerun the
-initial workflow afterward so its PR comment uses the private Pages address.
+See [Reviewing and publishing interactive documentation](../github-pages.md)
+for the PR-preview workflow, production URL, and initial GitHub Pages setup.
