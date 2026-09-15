@@ -117,6 +117,11 @@ describe('RunsToolbar', () => {
       'application/json',
     )
     expect(screen.getByText('Export visible (1)')).toBeTruthy()
+
+    // Hiding passing runs is a filter like any other, so it gets a clearable chip too.
+    expect(screen.getByText('Passing runs hidden')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Status filter' }))
+    expect(setFilter).toHaveBeenCalledWith(expect.objectContaining({ status: 'all' }))
   })
 })
 

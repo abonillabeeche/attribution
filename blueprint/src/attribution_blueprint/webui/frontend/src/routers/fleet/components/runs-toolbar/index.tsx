@@ -121,6 +121,14 @@ export function RunsToolbar({
       clear: () => setFilter({ ...filter, q: undefined }),
     })
   }
+  if (hidePassingRuns) {
+    chips.push({
+      key: 'status',
+      label: 'Status',
+      value: 'Passing runs hidden',
+      clear: () => setHidePassingRuns(false),
+    })
+  }
 
   return (
     <div className="flex flex-col gap-2 mb-3.5">
