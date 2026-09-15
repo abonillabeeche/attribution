@@ -173,10 +173,19 @@ class TestStableIdCollisionDetection:
             all_rule_names: set[str] = {"rule_e", "rule_f"}
             all_event_types: set[str] = set()
 
-        monkeypatch.setattr(events_module, "_stable_id", lambda name: 999)
+        # Only rule_e/rule_f collide. A blanket stub would also collide the
+        # obs_sources/obs_formats enum values bulk-seeded before "rules" (see
+        # _build_shared_lookup_db), so the raised error would report table
+        # "obs_sources" instead of exercising the rules collision this test
+        # is actually about.
+        real_stable_id = events_module._stable_id
+        monkeypatch.setattr(
+            events_module, "_stable_id", lambda name: 999 if name in ("rule_e", "rule_f") else real_stable_id(name)
+        )
 
-        with pytest.raises(events_module.StableIdCollisionError):
+        with pytest.raises(events_module.StableIdCollisionError) as exc_info:
             EventManager(Engine())
+        assert exc_info.value.table == "rules"
 
     def test_message_when_persisted_name_is_missing(self):
         """persisted_name is None when the id wasn't found under any name at
