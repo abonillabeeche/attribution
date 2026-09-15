@@ -44,6 +44,33 @@ class TestJobInfo:
         with pytest.raises(UnknownNodeError):
             job_info.verify_node("node-Name02")
 
+    def test_applog_extract_node_prefers_nccl_hostname_over_out_of_range_rank(self, simple_job_factory):
+        """NCCL hostname in this job wins even when the srun rank is out of range."""
+        job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)
+        line = (
+            "814: [2026-01-02 03:04:05] node-12:1234567:1234568 [2] "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        )
+
+        assert job_info.applog_extract_node(line) == "node-12"
+
+    def test_applog_extract_node_falls_back_to_rank_for_foreign_nccl_hostname(self, simple_job_factory):
+        """Hostnames that are not in this job still map via rank when the rank is valid."""
+        job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)
+        line = "0: other-node-99:1234567:1234568 [2] NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+
+        assert job_info.applog_extract_node(line) == "node-01"
+
+    def test_applog_extract_node_raises_for_foreign_hostname_and_invalid_rank(self, simple_job_factory):
+        job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)
+        line = (
+            "814: [2026-01-02 03:04:05] other-node-99:1234567:1234568 [2] "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        )
+
+        with pytest.raises(InvalidRankError):
+            job_info.applog_extract_node(line)
+
     def test_time_limit_uses_parent_job_interval_not_interest_interval(self, timezone):
         start = datetime.fromtimestamp(1700000000, tz=timezone)
         builder = _builder(timezone, node_to_ranks={"node-a": [0]})

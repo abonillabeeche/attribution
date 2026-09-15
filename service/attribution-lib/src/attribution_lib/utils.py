@@ -132,10 +132,23 @@ def get_hostname(ip_or_hostname: str) -> str:
 
 
 RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")
+# NCCL local prefix after an optional srun rank/timestamp: hostname:pid:tid [
+# Peer addresses like "192.0.2.10<63270>" do not match (no :pid:tid [).
+NCCL_HOST_PID_TID_REGEX = re.compile(r"(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[")
 
 
 def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
-    """Extract & return node name and rank from line. Return both, filling in None for those we could not identify"""
+    """Extract node name and rank from an application-log line.
+
+    Prefers an NCCL ``hostname:pid:tid [`` prefix when present, and still
+    returns a leading numeric rank (srun ``-l``) when that is also present.
+
+    Args:
+        line: One application-log line.
+
+    Returns:
+        ``(node, rank)`` with ``None`` for any field that could not be identified.
+    """
     rank = None
     node = None
     if (
@@ -168,6 +181,9 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
         except ValueError:
             # node name
             node = rank_or_node
+
+    if (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
+        node = nccl.group("node")
     return node, rank
 
 

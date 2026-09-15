@@ -230,6 +230,32 @@ class TestApplogExtractNodeRank:
         """Test empty string handling."""
         assert applog_extract_node_rank("") == ("", None)
 
+    def test_nccl_hostname_pid_tid_with_srun_rank(self):
+        """srun -l rank plus NCCL hostname:pid:tid must yield both fields.
+
+        Rank-only parsing of these lines maps out-of-range ranks onto the
+        wrong node (or drops the line) when a shared cycle log is attributed
+        against a subset of the allocation.
+        """
+        line = (
+            "814: [2026-01-02 03:04:05] node-12:1234567:1234568 [2] "
+            "transport/net_ib/p2p.cc:785 (ncclIbLogCompletionWithError) "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270> "
+            "with status=IBV_WC_RETRY_EXC_ERR(12)"
+        )
+        assert applog_extract_node_rank(line) == ("node-12", 814)
+
+    def test_nccl_hostname_pid_tid_without_srun_rank(self):
+        line = (
+            "[2026-01-02 03:04:05] node-01:3298233:3301236 [0] ib_plugin.c:2033 "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.11<31197>"
+        )
+        assert applog_extract_node_rank(line) == ("node-01", 0)
+
+    def test_nccl_peer_ip_is_not_treated_as_hostname(self):
+        line = "302: NET/IB: Got completion from peer 192.0.2.10<63270> with status=12"
+        assert applog_extract_node_rank(line) == (None, 302)
+
 
 class TestNormalizeNode:
     """Test cases for _normalize_node in attr_types."""
