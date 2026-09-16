@@ -160,6 +160,69 @@ class TestStableIdCollisionDetection:
         finally:
             mgr.close()
 
+    def test_collision_among_rules_engine_names_raises_at_construction(self, monkeypatch):
+        """The same collision hazard exists when `EventManager.__init__` bulk-seeds
+        the shared lookup db from `rules_engine.all_rule_names`, not just when
+        `preload_rule_names()` later adds to the local overlay. Without a check
+        here, two colliding names would instead surface as an opaque DuckDB
+        primary-key constraint violation.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = {"rule_e", "rule_f"}
+            all_event_types: set[str] = set()
+
+        # Only rule_e/rule_f collide. A blanket stub would also collide the
+        # obs_sources/obs_formats enum values bulk-seeded before "rules" (see
+        # _build_shared_lookup_db), so the raised error would report table
+        # "obs_sources" instead of exercising the rules collision this test
+        # is actually about.
+        real_stable_id = events_module._stable_id
+        monkeypatch.setattr(
+            events_module, "_stable_id", lambda name: 999 if name in ("rule_e", "rule_f") else real_stable_id(name)
+        )
+
+        with pytest.raises(events_module.StableIdCollisionError) as exc_info:
+            EventManager(Engine())
+        assert exc_info.value.table == "rules"
+
+    def test_preload_detects_collision_against_existing_shared_tier_name(self, monkeypatch):
+        """`preload()`'s collision check previously only compared the
+        requested name's own persisted row, via a dict comprehension that
+        silently dropped one side whenever two different names (one already
+        in the shared tier, one newly preloaded) shared the same id. Which
+        row won the dict overwrite depended on SQL row return order, so the
+        same collision could raise or silently alias depending on it.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = {"shared_rule"}
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            shared_id = mgr.rules.get_id("shared_rule")
+
+            real_stable_id = events_module._stable_id
+            monkeypatch.setattr(
+                events_module,
+                "_stable_id",
+                lambda name: shared_id if name == "new_local_rule" else real_stable_id(name),
+            )
+
+            with pytest.raises(events_module.StableIdCollisionError) as exc_info:
+                mgr.preload_rule_names({"new_local_rule"})
+            assert exc_info.value.table == "rules"
+
+            # Must not have aliased new_local_rule to shared_rule's id.
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("new_local_rule")
+            assert mgr.rules.get_id("shared_rule") == shared_id
+        finally:
+            mgr.close()
+
     def test_message_when_persisted_name_is_missing(self):
         """persisted_name is None when the id wasn't found under any name at
         all after insertion -- an unexpected state distinct from a genuine
