@@ -725,12 +725,15 @@ def test_registry_builds_selectors_from_resolved_declarations():
     registry = registry_from_declarations(
         [
             SymptomDeclaration(prefix="bus error"),
+            SymptomDeclaration(prefix="RuntimeError", fallback_prefix=True),
             SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
             SymptomDeclaration(prefix="XID-149", family=xid_149),
         ]
     )
 
     assert registry.selector_for("bus error") == SymptomSelector(symptom_id="bus error")
+    runtime_error = BaseSymptom(symptom_id="RuntimeError: dynamic detail")
+    assert registry.selector_for(runtime_error.symptom_id).member(runtime_error)
     assert registry.selector_for("XID-43-SW_NOTIFY") == SymptomSelector(family_name="xid")
     xid_149_selector = registry.selector_for("XID-149")
     assert xid_149_selector == SymptomSelector(family_name="xid", family_properties={"code": 149})

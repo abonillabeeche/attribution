@@ -70,7 +70,6 @@ class GeneratedSymptomRegistry:
     metadata: Mapping[str, GeneratedSymptomMetadata]
     scoped_cascade_discards: Mapping[CascadeScope, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
     symptoms_by_category: Mapping[SymptomCategory, frozenset[str]] = field(default_factory=dict)
-    families: Mapping[str, SymptomFamily] = field(default_factory=dict)
     # Runtime fallback prefixes for dynamic symptom ids. For example,
     # "NV_ERR_INSUFFICIENT_RESOURCES ..." resolves to the declared "NV_ERR_"
     # prefix. Add new runtime fallbacks with fallback_prefix=True in declarations.
@@ -87,6 +86,8 @@ class GeneratedSymptomRegistry:
     # Conditional-discard predicates resolved by name, registered onto the engine via
     # @symptom_predicate. symptom_set_operator resolves conditional_discards through this.
     predicates: Mapping[str, SymptomPredicate] = field(default_factory=dict)
+    # Appended to preserve positional compatibility for existing constructors.
+    families: Mapping[str, SymptomFamily] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         registered_symptoms = frozenset(self.registered_symptoms)
@@ -227,10 +228,11 @@ class GeneratedSymptomRegistry:
         Raises:
             UnknownSymptomError: If no declared symptom matches.
         """
-        resolved = self.resolve_symptom(symptom)
+        normalized = symptom.strip()
+        resolved = self.resolve_symptom(normalized)
         family = self.families.get(resolved)
         if family is None:
-            return SymptomSelector(symptom_id=resolved)
+            return SymptomSelector(symptom_id=normalized)
         return SymptomSelector(family_name=family.name, family_properties=family.properties)
 
     def dag_discard_for(self, symptom: str) -> DagDiscardBehavior:
