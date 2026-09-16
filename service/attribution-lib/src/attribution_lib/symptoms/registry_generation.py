@@ -31,6 +31,7 @@ from attribution_lib.symptoms.declarations import (
 from attribution_lib.symptoms.doc_validation import symptom_requires_doc
 from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
+from attribution_lib.symptoms.selector import SymptomSelector
 
 OUTCOME_PRIORITIES: tuple[OutcomePriority, ...] = tuple(sorted(OutcomePriority, key=lambda priority: priority.value))
 
@@ -209,6 +210,28 @@ class GeneratedSymptomRegistry:
         except UnknownSymptomError:
             return None
         return self.families.get(resolved)
+
+    def selector_for(self, symptom: str) -> SymptomSelector:
+        """Build the semantic selector declared for a symptom.
+
+        Family schemas select all members. Family members select their declared
+        properties. Declarations without family metadata retain exact-ID
+        selection.
+
+        Args:
+            symptom: Exact or dynamically resolved symptom ID.
+
+        Returns:
+            Selector representing the resolved declaration.
+
+        Raises:
+            UnknownSymptomError: If no declared symptom matches.
+        """
+        resolved = self.resolve_symptom(symptom)
+        family = self.families.get(resolved)
+        if family is None:
+            return SymptomSelector(symptom_id=resolved)
+        return SymptomSelector(family_name=family.name, family_properties=family.properties)
 
     def dag_discard_for(self, symptom: str) -> DagDiscardBehavior:
         """Return the projection behavior when the DAG discards this symptom.

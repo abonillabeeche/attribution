@@ -21,6 +21,7 @@ from attribution_lib.exceptions import (
     UnknownSymptomError,
 )
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.symptoms.base import BaseSymptom
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     OutcomePriority,
@@ -39,6 +40,7 @@ from attribution_lib.symptoms.registry_generation import (
     substring_aliases_from_declarations,
     symptom_docs_from_declarations,
 )
+from attribution_lib.symptoms.selector import SymptomSelector
 
 
 def _load_committed_symptom_defaults() -> list[SymptomDeclaration]:
@@ -669,6 +671,31 @@ def test_registry_rejects_conflicting_families_for_one_prefix():
 
     with pytest.raises(SymptomValidationError, match="Conflicting families for 'bus error'"):
         registry_from_declarations(declarations)
+
+
+def test_registry_builds_selectors_from_resolved_declarations():
+    xid_schema = SymptomFamily(name="xid", property_types={"code": int})
+    xid_149 = SymptomFamily(name="xid", properties={"code": 149})
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="bus error"),
+            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
+            SymptomDeclaration(prefix="XID-149", family=xid_149),
+        ]
+    )
+
+    assert registry.selector_for("bus error") == SymptomSelector(symptom_id="bus error")
+    assert registry.selector_for("XID-43-SW_NOTIFY") == SymptomSelector(family_name="xid")
+    xid_149_selector = registry.selector_for("XID-149")
+    assert xid_149_selector == SymptomSelector(family_name="xid", family_properties={"code": 149})
+    assert xid_149_selector.member(BaseSymptom(symptom_id="raw", family=xid_149))
+
+
+def test_registry_rejects_selector_lookup_for_unknown_symptom():
+    registry = registry_from_declarations([])
+
+    with pytest.raises(UnknownSymptomError, match="not a known symptom id"):
+        registry.selector_for("not declared")
 
 
 def test_scoped_cascade_lookup_rejects_unknown_symptom():
