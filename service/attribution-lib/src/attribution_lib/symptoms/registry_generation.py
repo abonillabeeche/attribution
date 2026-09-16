@@ -527,19 +527,48 @@ def symptom_families_from_declarations(
         Family metadata for each prefix that declares it.
 
     Raises:
-        SymptomValidationError: If one prefix declares conflicting families.
+        SymptomValidationError: If family schemas or members are invalid.
     """
     families: dict[str, SymptomFamily] = {}
+    schemas: dict[str, SymptomFamily] = {}
+    members: list[tuple[str, SymptomFamily]] = []
     for declaration in declarations:
         family = declaration.family
         if family is None:
             continue
+        if not isinstance(family, SymptomFamily):
+            raise SymptomValidationError(
+                f"Invalid family for {declaration.prefix!r}: expected SymptomFamily, got {type(family).__name__}"
+            )
         existing = families.get(declaration.prefix)
         if existing is not None and existing != family:
             raise SymptomValidationError(
                 f"Conflicting families for {declaration.prefix!r}: {existing!r} and {family!r}"
             )
         families[declaration.prefix] = family
+        if len(family.property_types) > 0:
+            existing_schema = schemas.get(family.name)
+            if existing_schema is not None and existing_schema != family:
+                raise SymptomValidationError(f"Conflicting schemas for family {family.name!r}")
+            schemas[family.name] = family
+        elif len(family.properties) > 0:
+            members.append((declaration.prefix, family))
+
+    for prefix, family in members:
+        schema = schemas.get(family.name)
+        if schema is None:
+            raise SymptomValidationError(
+                f"Family member {prefix!r} declares properties without a schema for {family.name!r}"
+            )
+        for name, value in family.properties.items():
+            property_type = schema.property_types.get(name)
+            if property_type is None:
+                raise SymptomValidationError(f"Unknown property {name!r} for family {family.name!r} on {prefix!r}")
+            if not isinstance(value, property_type):
+                raise SymptomValidationError(
+                    f"Invalid value for family {family.name!r} property {name!r} on {prefix!r}: "
+                    f"expected {property_type!r}, got {type(value).__name__}"
+                )
     return families
 
 

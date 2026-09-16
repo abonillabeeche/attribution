@@ -651,8 +651,8 @@ def test_registry_compiles_immutable_family_metadata():
     xid_149 = SymptomFamily(name="xid", properties={"code": 149})
     registry = registry_from_declarations(
         [
-            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
             SymptomDeclaration(prefix="XID-149", family=xid_149),
+            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
         ]
     )
 
@@ -670,6 +670,52 @@ def test_registry_rejects_conflicting_families_for_one_prefix():
     ]
 
     with pytest.raises(SymptomValidationError, match="Conflicting families for 'bus error'"):
+        registry_from_declarations(declarations)
+
+
+@pytest.mark.parametrize(
+    ("declarations", "error"),
+    [
+        (
+            [SymptomDeclaration(prefix="bad", family=cast(SymptomFamily, "not-a-family"))],
+            "expected SymptomFamily, got str",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(prefix="XID_", family=SymptomFamily(name="xid", property_types={"code": str})),
+            ],
+            "Conflicting schemas for family 'xid'",
+        ),
+        (
+            [SymptomDeclaration(prefix="XID-149", family=SymptomFamily(name="xid", properties={"code": 149}))],
+            "declares properties without a schema",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(
+                    prefix="XID-149",
+                    family=SymptomFamily(name="xid", properties={"severity": "fatal"}),
+                ),
+            ],
+            "Unknown property 'severity'",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(prefix="XID-149", family=SymptomFamily(name="xid", properties={"code": "149"})),
+            ],
+            "Invalid value for family 'xid' property 'code'",
+        ),
+    ],
+)
+def test_registry_rejects_invalid_family_contracts(
+    declarations: list[SymptomDeclaration],
+    error: str,
+):
+    """Reject malformed family metadata before publishing the registry."""
+    with pytest.raises(SymptomValidationError, match=error):
         registry_from_declarations(declarations)
 
 
