@@ -517,7 +517,6 @@ outcome_symptom(
     priority=OutcomePriority.HIGH_HW,
     doc="ecc-error",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-", "NV_ERR_RESET_REQUIRED"),
 )
 
 outcome_symptom(

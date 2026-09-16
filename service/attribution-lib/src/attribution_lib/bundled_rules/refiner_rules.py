@@ -727,7 +727,11 @@ def corroborated_node_failure_refiner(context: RefinerContext):
     priority=_priority("PoisonedGspComposite"),
 )
 def poisoned_gsp_composite(context: RefinerContext):
-    """Recognize ECC from fatal GSP, contained-error, and reset evidence on one node."""
+    """Recognize ECC from fatal GSP, contained-error, and reset evidence on one node.
+
+    Correlate active evidence within the node's job evidence window, without an
+    additional time-separation limit between the three signals.
+    """
     if context.my_bad_nodes is None:
         return
 
@@ -748,11 +752,18 @@ def poisoned_gsp_composite(context: RefinerContext):
         if not xid94 or not resets:
             continue
 
+        components = [fatal_error, *xid94, *resets]
         combined_sources = SourceSet("poisoned gsp")
-        for symptom in [fatal_error, *xid94, *resets]:
+        for symptom in components:
             for source in node_symptoms[symptom]:
                 combined_sources.add(source)
         node_group.add(combined_sources)
+
+        # Demote only the exact components used above, retaining their evidence.
+        # Declarative cascade discards use substring matching, which would also
+        # hide unrelated codes such as NV_ERR_RESET_REQUIRED_OTHER.
+        for symptom in components:
+            node_group.discard(symptom)
 
 
 # Raw-keyword promotion rules
