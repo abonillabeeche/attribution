@@ -43,6 +43,7 @@ from attribution_lib.observation.inbound import (
     LokiHealthCheckEntry,
     LokiSyslogEntry,
     NodeStr,
+    PrometheusMetricEntry,
     RawLogLine,
     Source as ObservationSource,
     TimeseriesEntry,
@@ -107,6 +108,12 @@ class BodyFallbacks:
     parse_node: bool = False
     parse_timestamp: bool = False
     year_fallback: Optional[datetime] = None
+    require_node: bool = False
+    """Per entry: no node in `resources` drops the entry instead of matching every job node.
+
+    Not `SourceProcessingConfig.requires_job_nodes`, which skips a whole source for a job with no
+    known nodes.
+    """
 
 
 class EntrySourceBase(ABC, Generic[E, T_co]):
@@ -634,7 +641,11 @@ class UFMEntrySource(EntrySourceBase[dict[str, Any], UFMEntry]):
 
 
 class MetricEntry(EntryBase):
-    """Represents a single metric data point"""
+    """One legacy `prometheus_metrics` sample.
+
+    TODO: Slated for deletion with that format since `entry_timeseries` producers render the same line with
+    `render_metric_body` and the library never sees this class.
+    """
 
     _context: Context
     _pos: int
@@ -870,6 +881,44 @@ class PrometheusMetricsEntrySource(EntrySourceBase[dict[str, Any], MetricEntry])
         )
 
 
+def render_metric_body(metric: PrometheusMetricEntry) -> str:
+    """The `body` of a metric entry under `entry_timeseries`: the line `prometheus_metrics` renders.
+
+    Args:
+        metric: The metric entry to render.
+
+    Returns:
+        The rendered metric body.
+
+    Raises:
+        ValueError: If the metric is not a dictionary, or if the value is not a string.
+    """
+    raw_value = metric.get("value", 0)
+    metric_value: int | float
+    if isinstance(raw_value, str):
+        try:
+            metric_value = int(raw_value)
+        except ValueError:
+            metric_value = float(raw_value)
+    else:
+        metric_value = raw_value
+
+    labels = metric.get("labels", {})
+    # Extract component information - preserve empty strings, only None if truly missing
+    component = metric.get("component")
+    if component is None:
+        component = labels.get("device")
+    # Extract cluster information - preserve empty strings, only None if truly missing
+    cluster = metric.get("cluster")
+    if cluster is None:
+        cluster = labels.get("s_cluster")
+
+    return (
+        f"time: {metric['timestamp']}, metric_name: {metric['metric']}, metric_value: {metric_value}, "
+        f"threshold: {metric.get('threshold')}, cluster: {cluster}, node: {metric['node']}, component: {component}"
+    )
+
+
 class TimeseriesEntryObj(EntryBase):
     """Entry for the `entry_timeseries` format.
 
@@ -927,6 +976,8 @@ class TimeseriesEntryObj(EntryBase):
             return ResourceSetClass.ANY
 
         if self._resources is None and not self._body_fallbacks.parse_node:
+            if self._body_fallbacks.require_node:
+                raise UnidentifiableNodeError(self.body())
             return ResourceSetClass.ANY
 
         verified: list[ResourceBase] = []
