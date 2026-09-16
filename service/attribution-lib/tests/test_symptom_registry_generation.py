@@ -27,6 +27,7 @@ from attribution_lib.symptoms.declarations import (
     SymptomCategory,
     SymptomDeclaration,
 )
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.registry_generation import (
     OUTCOME_PRIORITIES,
     GeneratedOutcomeMatch,
@@ -641,6 +642,33 @@ def test_category_membership_deduplicates_scoped_declarations():
     )
 
     assert registry.symptoms_in_category(SymptomCategory.CSP_EVENT) == frozenset({"primary"})
+
+
+def test_registry_compiles_immutable_family_metadata():
+    xid_schema = SymptomFamily(name="xid", property_types={"code": int})
+    xid_149 = SymptomFamily(name="xid", properties={"code": 149})
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
+            SymptomDeclaration(prefix="XID-149", family=xid_149),
+        ]
+    )
+
+    assert registry.family_for("XID-149") == xid_149
+    assert registry.family_for("XID-43-SW_NOTIFY") == xid_schema
+    assert registry.family_for("not declared") is None
+    with pytest.raises(TypeError):
+        registry.families["XID-31"] = SymptomFamily(name="xid", properties={"code": 31})
+
+
+def test_registry_rejects_conflicting_families_for_one_prefix():
+    declarations = [
+        SymptomDeclaration(prefix="bus error", family=SymptomFamily(name="network")),
+        SymptomDeclaration(prefix="bus error", family=SymptomFamily(name="pcie")),
+    ]
+
+    with pytest.raises(SymptomValidationError, match="Conflicting families for 'bus error'"):
+        registry_from_declarations(declarations)
 
 
 def test_scoped_cascade_lookup_rejects_unknown_symptom():

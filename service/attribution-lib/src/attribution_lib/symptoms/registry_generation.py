@@ -29,6 +29,7 @@ from attribution_lib.symptoms.declarations import (
     SymptomDeclaration,
 )
 from attribution_lib.symptoms.doc_validation import symptom_requires_doc
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
 OUTCOME_PRIORITIES: tuple[OutcomePriority, ...] = tuple(sorted(OutcomePriority, key=lambda priority: priority.value))
@@ -68,6 +69,7 @@ class GeneratedSymptomRegistry:
     metadata: Mapping[str, GeneratedSymptomMetadata]
     scoped_cascade_discards: Mapping[CascadeScope, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
     symptoms_by_category: Mapping[SymptomCategory, frozenset[str]] = field(default_factory=dict)
+    families: Mapping[str, SymptomFamily] = field(default_factory=dict)
     # Runtime fallback prefixes for dynamic symptom ids. For example,
     # "NV_ERR_INSUFFICIENT_RESOURCES ..." resolves to the declared "NV_ERR_"
     # prefix. Add new runtime fallbacks with fallback_prefix=True in declarations.
@@ -110,6 +112,7 @@ class GeneratedSymptomRegistry:
         object.__setattr__(self, "metadata", metadata)
         object.__setattr__(self, "scoped_cascade_discards", scoped_cascade_discards)
         object.__setattr__(self, "symptoms_by_category", symptoms_by_category)
+        object.__setattr__(self, "families", MappingProxyType(dict(self.families)))
         object.__setattr__(self, "fallback_prefixes", fallback_prefixes)
         object.__setattr__(self, "dag_discard_behaviors", MappingProxyType(dict(self.dag_discard_behaviors)))
         object.__setattr__(self, "substring_aliases", MappingProxyType(dict(self.substring_aliases)))
@@ -191,6 +194,21 @@ class GeneratedSymptomRegistry:
         except UnknownSymptomError:
             return None
         return self.metadata.get(resolved)
+
+    def family_for(self, symptom: str) -> Optional[SymptomFamily]:
+        """Return declared family metadata for a symptom.
+
+        Args:
+            symptom: Exact or dynamically resolved symptom ID.
+
+        Returns:
+            The declared family schema or member, or None when absent.
+        """
+        try:
+            resolved = self.resolve_symptom(symptom)
+        except UnknownSymptomError:
+            return None
+        return self.families.get(resolved)
 
     def dag_discard_for(self, symptom: str) -> DagDiscardBehavior:
         """Return the projection behavior when the DAG discards this symptom.
@@ -465,12 +483,41 @@ def registry_from_declarations(
         metadata=metadata_from_declarations(declaration_list),
         scoped_cascade_discards=scoped_cascade_discards_from_declarations(declaration_list),
         symptoms_by_category=symptom_categories_from_declarations(declaration_list),
+        families=symptom_families_from_declarations(declaration_list),
         fallback_prefixes=fallback_prefixes_from_declarations(declaration_list),
         dag_discard_behaviors=dag_discard_behaviors_from_declarations(declaration_list),
         substring_aliases=substring_aliases_from_declarations(declaration_list),
         symptom_docs=symptom_docs_from_declarations(declaration_list),
         predicates=predicates if predicates is not None else {},
     )
+
+
+def symptom_families_from_declarations(
+    declarations: Iterable[SymptomDeclaration],
+) -> dict[str, SymptomFamily]:
+    """Generate family metadata indexed by declared symptom prefix.
+
+    Args:
+        declarations: Symptom declarations.
+
+    Returns:
+        Family metadata for each prefix that declares it.
+
+    Raises:
+        SymptomValidationError: If one prefix declares conflicting families.
+    """
+    families: dict[str, SymptomFamily] = {}
+    for declaration in declarations:
+        family = declaration.family
+        if family is None:
+            continue
+        existing = families.get(declaration.prefix)
+        if existing is not None and existing != family:
+            raise SymptomValidationError(
+                f"Conflicting families for {declaration.prefix!r}: {existing!r} and {family!r}"
+            )
+        families[declaration.prefix] = family
+    return families
 
 
 def known_prefixes_from_declarations(declarations: Iterable[SymptomDeclaration]) -> set[str]:
