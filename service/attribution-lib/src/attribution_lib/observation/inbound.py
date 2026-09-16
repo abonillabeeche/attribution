@@ -57,7 +57,8 @@ class Source(str, Enum):
 
     - `node_metrics`
 
-       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds, entries must have node information.
+       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and
+       nanoseconds for `entry_timeseries`, entries must have node information.
 
        Prometheus metrics data for node attribution.
 
