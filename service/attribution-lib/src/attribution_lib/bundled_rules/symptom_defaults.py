@@ -512,6 +512,14 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "XID-140-",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="xid-140",
+    hw_cause="Known HW Cause - Node",
+)
+
+outcome_symptom(
     "poisoned gsp",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
