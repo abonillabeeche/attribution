@@ -70,6 +70,8 @@ def log_observation(
     """
     if (body is None) == (entries is None):
         raise ValueError("log_observation takes exactly one of body or entries")
+    if entries is not None and format is not Format.ENTRY_TIMESERIES:
+        raise ValueError(f"entries= requires Format.ENTRY_TIMESERIES, got {format.value!r}")
     if entries is not None:
         body = json.dumps(entries)
     if time_interval is None:
