@@ -937,15 +937,47 @@ class TestTimeseriesEntry:
         with pytest.raises(UnknownResourceError):
             unparsed.node(syslog_job_info)
 
+    def test_a_syslog_entry_declaring_no_resources_resolves_like_the_legacy_format(self, syslog_job_info, timezone):
+        """A null host specifier fell back to the line's hostname field under `loki_dict_list`; keep that."""
+        no_hostname = "Jan  5 06:59:25 kernel: no hostname field on this line"
+        lines = [(self.UNDECLARED, None, 1704466765800744155), (self.UNDECLARED, OTHER_JOB_NODE, 1704466766000000001)]
+        legacy = observation_base(
+            syslog_job_info,
+            timezone,
+            ObservationSource.SYSLOG,
+            ObservationFormat.LOKI_DICT_LIST,
+            [{"body": body, "timestamp": ts, "node": node} for body, node, ts in lines],
+        )
+        new = observation_base(
+            syslog_job_info,
+            timezone,
+            ObservationSource.SYSLOG,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [
+                entry(body, ts=ts, resources=None if node is None else [{"kind": "node", "hostname": node}])
+                for body, node, ts in lines
+            ]
+            + [entry(no_hostname, ts=lines[0][2])],
+        )
+
+        parsed, declared, unparsed = new
+        assert [parsed.node(syslog_job_info), declared.node(syslog_job_info)] == [JOB_NODE, OTHER_JOB_NODE]
+        assert [e.node(syslog_job_info) for e in legacy] == [JOB_NODE, OTHER_JOB_NODE]
+        # entry_timeseries rounds ns up to the microsecond; the legacy float path rounded to nearest.
+        assert all(abs(n.time() - o.time()) <= timedelta(microseconds=1) for n, o in zip(new, legacy))
+        with pytest.raises(UnknownResourceError):
+            unparsed.node(syslog_job_info)
+
+    @pytest.mark.parametrize("source", [ObservationSource.NODE_METRICS, ObservationSource.NVLINK_METRICS])
     def test_a_metric_entry_declaring_no_node_is_dropped_rather_than_charged_to_the_job(
-        self, syslog_job_info, timezone
+        self, syslog_job_info, timezone, source
     ):
         """Legacy `prometheus_metrics` rejected a node-less sample; the generic format would resolve it to ANY."""
         body = "time: 1718452800, metric_name: up, metric_value: 0, threshold: None, cluster: c1, node: x, component: "
         named, unnamed = observation_base(
             syslog_job_info,
             timezone,
-            ObservationSource.NODE_METRICS,
+            source,
             ObservationFormat.ENTRY_TIMESERIES,
             [entry(body, ts=1718452800_000_000_000, resources=[{"kind": "node", "hostname": JOB_NODE}]), entry(body)],
         )
