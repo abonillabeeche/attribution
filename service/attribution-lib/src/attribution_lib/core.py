@@ -78,7 +78,8 @@ register_source_config(
         time_start=lambda ji: ji.interest_start_time,
         time_end=lambda ji: ji.interest_end_time,
         # A line declaring no node is read for one and dropped if that fails.
-        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True),
+        # An explicit timestamp is expected, else the entry is dropped.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
         requires_job_nodes=True,
     ),
 )

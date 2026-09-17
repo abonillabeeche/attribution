@@ -288,8 +288,8 @@ class Format(str, Enum):
           no usable prefix is recorded against every job resource, never dropped. An explicit
           `"AllJobResources"` skips the prefix parse altogether.
       - `syslog`:
-        - `ts` is the line's timestamp in nanoseconds. An entry without it is kept, never
-          parsed out of the body, and treated as untimed.
+        - `ts` is the line's timestamp in nanoseconds. An entry without it is dropped, never
+          parsed out of the body.
         - A declared node in `resources` is used as-is, so a host specifier in IP form must be
           resolved by the producer. With `resources` absent or null the node is read out of the
           syslog line's hostname field instead; a line naming none is dropped.

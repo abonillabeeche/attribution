@@ -1006,7 +1006,7 @@ class TestTimeseriesExtraction:
         def surviving(time_interval):
             return extract(
                 syslog_job_info,
-                ObservationSource.SYSLOG,
+                ObservationSource.NODE_METRICS,
                 ObservationFormat.ENTRY_TIMESERIES,
                 entries,
                 time_interval=time_interval,
@@ -1017,6 +1017,24 @@ class TestTimeseriesExtraction:
         assert surviving(TimeInterval(None, None)) == [in_declared, in_job_window, untimed]
         # A half-null interval still filters on the bound it has, which two nulls would never exercise.
         assert surviving(TimeInterval(syslog_job_info.job_start_time, None)) == [in_job_window, untimed]
+
+    def test_a_syslog_entry_without_a_timestamp_is_dropped_even_with_no_window(self, extract, syslog_job_info):
+        """Legacy syslog always carried a timestamp, so the source requires one instead of keeping the entry untimed."""
+        timed = "timed"
+        entries = [
+            entry(timed, ts=ns(syslog_job_info.job_start_time + timedelta(minutes=30)), resources=NODE_RESOURCE),
+            entry("untimed", resources=NODE_RESOURCE),
+        ]
+
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.SYSLOG,
+            ObservationFormat.ENTRY_TIMESERIES,
+            entries,
+            time_interval=TimeInterval(None, None),
+        )
+
+        assert surviving == [timed]
 
 
 # TODO: Legacy tests should be removed once validated in production.
