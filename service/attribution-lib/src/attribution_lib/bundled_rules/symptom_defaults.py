@@ -512,6 +512,14 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "poisoned gsp",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="ecc-error",
+    hw_cause="Known HW Cause - Node",
+)
+
+outcome_symptom(
     "XID-120-",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
@@ -1502,6 +1510,14 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "cudaErrorIllegalAddress",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="cudaerrorillegaladdress",
+    dag_discard=DagDiscardBehavior.KEEP,
+)
+
+outcome_symptom(
     "cudaError",
     outcome="Fail User",
     priority=OutcomePriority.LOW_GENERIC,
@@ -2445,6 +2461,9 @@ known_symptom("EFA Error-connection-reset")
 
 known_symptom("Fabric manager lost connection to GPU")
 
+# The fatal GSP marker needs XID-94 and NV_ERR_RESET_REQUIRED to diagnose ECC.
+known_symptom("NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR")
+
 outcome_symptom(
     "Fabric manager lost connection to all GPUs",
     outcome="Fail InfraHW",
@@ -2549,8 +2568,6 @@ known_symptom("alias else")
 known_symptom("bad kernel stack frame pointer in python")
 
 known_symptom("cudaErrorContained")
-
-known_symptom("cudaErrorIllegalAddress", dag_discard=DagDiscardBehavior.KEEP)
 
 known_symptom("effective_ber_high")
 

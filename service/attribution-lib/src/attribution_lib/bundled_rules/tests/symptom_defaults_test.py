@@ -12,6 +12,7 @@
 
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.symptoms.declarations import DagDiscardBehavior
 from attribution_lib.symptoms.registry_generation import registry_from_declarations
 
 
@@ -32,3 +33,33 @@ def test_corroborated_node_failure_has_dedicated_documentation():
     registry = registry_from_declarations(loader.symptom_declarations)
 
     assert registry.symptom_docs["Corroborated node failure"] == "corroborated-node-failure"
+
+
+def test_cuda_illegal_address_resolves_its_own_guidance():
+    """Preserve CUDA outcome selection and KEEP behavior, including mixed NCCL evidence."""
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    assert registry.dag_discard_for("cudaErrorIllegalAddress") == DagDiscardBehavior.KEEP
+    for symptoms, expected_symptom, expected_outcome, expected_doc in (
+        (["cudaErrorIllegalAddress"], "cudaErrorIllegalAddress", "Fail User", "cudaerrorillegaladdress"),
+        (["ncclUnhandledCudaError"], "ncclUnhandledCudaError", "Fail MultiCategory", "ncclunhandledcudaerror"),
+        (
+            ["cudaErrorIllegalAddress", "ncclUnhandledCudaError"],
+            "cudaErrorIllegalAddress",
+            "Fail User",
+            "cudaerrorillegaladdress",
+        ),
+        (
+            ["ncclUnhandledCudaError", "cudaErrorIllegalAddress"],
+            "cudaErrorIllegalAddress",
+            "Fail User",
+            "cudaerrorillegaladdress",
+        ),
+    ):
+        match = registry.outcome_for(symptoms)
+        assert match is not None
+        assert match.symptom == expected_symptom
+        assert match.outcome == expected_outcome
+        assert match.doc == expected_doc
