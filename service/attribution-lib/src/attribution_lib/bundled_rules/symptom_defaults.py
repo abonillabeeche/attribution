@@ -288,7 +288,7 @@ outcome_symptom(
     "Corroborated node failure",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
-    doc="not-responding",
+    doc="corroborated-node-failure",
     hw_cause="Known HW Cause - Node",
     cascade_discards=("Node failure reported by slurm", "Node not responding"),
 )
