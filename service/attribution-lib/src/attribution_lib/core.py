@@ -86,7 +86,8 @@ register_source_config(
         time_start=lambda ji: ji.job_start_time,
         time_end=lambda ji: ji.job_end_time,
         # The job node is named inside the line; the producer's own node is the fabric manager host.
-        body_fallbacks=BodyFallbacks(parse_node=True),
+        # Therefore, attempt to parse the node, but drop it if it's not found.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True),
         requires_job_nodes=True,
     ),
 )

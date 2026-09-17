@@ -101,6 +101,13 @@ T_co = TypeVar("T_co", bound=EntryBase, covariant=True)
 class BodyFallbacks:
     """What an `entry_timeseries` entry may parse out of its body when the producer left it out.
 
+    `parse_node` and `require_node` are orthogonal. When `resources` declares nothing:
+
+    - neither: the entry matches every job resource (ANY)
+    - `require_node` only: the entry is dropped
+    - `parse_node` only: the node is read from the body if possible, else ANY
+    - both: the node is read from the body, else the entry is dropped
+
     `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
     and a parsed date after it rolls back a year. None (job end unknown) means current year.
     """
@@ -109,11 +116,6 @@ class BodyFallbacks:
     parse_timestamp: bool = False
     year_fallback: Optional[datetime] = None
     require_node: bool = False
-    """Per entry: no node in `resources` drops the entry instead of matching every job node.
-
-    Not `SourceProcessingConfig.requires_job_nodes`, which skips a whole source for a job with no
-    known nodes.
-    """
 
 
 class EntrySourceBase(ABC, Generic[E, T_co]):
@@ -966,18 +968,13 @@ class TimeseriesEntryObj(EntryBase):
     def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
         """The declared resources, with the declared node checked against the job.
 
-        ANY when `AllJobResources` was declared, or nothing was and `parse_node` is off. Replicas ride
-        along unread.
+        ANY when `AllJobResources` was declared, or when nothing was declared, nothing could be parsed
+        with `parse_node`, and `require_node` is off. Replicas ride along unread.
 
-        Raises UnidentifiableNodeError unless exactly one node is declared (or, with `parse_node`,
-        found in the body), UnknownNodeError when that node is not in the job.
+        Raises UnidentifiableNodeError when `require_node` finds no node, or when anything other than
+        exactly one node was declared; UnknownNodeError when that node is not in the job.
         """
         if self._resources == ResourceSetClass.ANY:
-            return ResourceSetClass.ANY
-
-        if self._resources is None and not self._body_fallbacks.parse_node:
-            if self._body_fallbacks.require_node:
-                raise UnidentifiableNodeError(self.body())
             return ResourceSetClass.ANY
 
         verified: list[ResourceBase] = []
@@ -990,8 +987,17 @@ class TimeseriesEntryObj(EntryBase):
                 verified.append(resource)
 
         if node_count == 0 and self._body_fallbacks.parse_node:
-            verified.append(NodeResource(hostname=job_info.extract_node(self._body, self._context.source)))
-            node_count = 1
+            try:
+                verified.append(NodeResource(hostname=job_info.extract_node(self._body, self._context.source)))
+                node_count = 1
+            except UnidentifiableNodeError:
+                # An unparseable body is the same as no declaration; `require_node` decides below.
+                pass
+
+        if len(verified) == 0:
+            if self._body_fallbacks.require_node:
+                raise UnidentifiableNodeError(self.body())
+            return ResourceSetClass.ANY
 
         # Potentially relaxable later; for now this matches every other format's one node per entry.
         if node_count != 1:

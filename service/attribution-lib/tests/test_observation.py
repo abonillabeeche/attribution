@@ -878,6 +878,13 @@ class TestTimeseriesEntry:
                 id="replica_without_a_node",
             ),
             pytest.param(
+                {"parse_node": True},
+                entry("Jan  5 06:59:25 kernel: no hostname field on this line"),
+                ResourceSetClass.ANY,
+                None,
+                id="unparseable_body_without_require_node",
+            ),
+            pytest.param(
                 {"parse_node": True, "parse_timestamp": True},
                 entry(UNDECLARED, ts=10**9, resources=OTHER_NODE),
                 ResourceSetClass([Node(hostname=OTHER_JOB_NODE)]),
