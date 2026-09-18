@@ -172,7 +172,9 @@ def _line_datetime(line: str, window_end: datetime, line_tz: Optional[tzinfo]) -
 
 
 def _iso_datetime(token: str) -> Optional[datetime]:
-    """Parse a token as an ISO 8601 timestamp, or None when it is not one."""
+    """Parse a token as a complete ISO 8601 date-time, or None when it is not one."""
+    if ":" not in token:
+        return None
     try:
         return datetime.fromisoformat(token.replace("Z", "+00:00"))
     except ValueError:
@@ -192,20 +194,19 @@ def _rfc3164_datetime(parts: list[str], window_end: datetime, line_tz: Optional[
         return None
 
     month = _MONTH_ABBREVS[parts[0]]
+    day = int(parts[1])
     hour, minute, second = (int(field) for field in parts[2].split(":"))
     local_window_end = window_end.astimezone(line_tz) if line_tz is not None else window_end
-    try:
-        parsed = datetime(local_window_end.year, month, int(parts[1]), hour, minute, second, tzinfo=line_tz)
-    except ValueError:
-        return None
-    # The format carries no year; bound it by the window end so a December line
-    # read in January lands in the past rather than a year ahead.
-    if parsed > window_end:
+    # The format carries no year, so take the latest candidate that has not run past the
+    # window end: a December line read in January lands last year, not a year ahead.
+    for year in (local_window_end.year, local_window_end.year - 1):
         try:
-            parsed = parsed.replace(year=window_end.year - 1)
+            parsed = datetime(year, month, day, hour, minute, second, tzinfo=line_tz)
         except ValueError:
-            return None
-    return parsed
+            continue
+        if parsed <= window_end:
+            return parsed
+    return None
 
 
 def _line_node(line: str) -> str:

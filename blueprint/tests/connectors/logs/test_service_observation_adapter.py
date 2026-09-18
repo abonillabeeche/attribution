@@ -11,13 +11,17 @@ _WINDOW_START = datetime(2026, 1, 5, 11, 0, 0, tzinfo=timezone.utc)
 _WINDOW_END = datetime(2026, 1, 5, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _adapted_entries(body: str, context_timezone: Optional[str] = None) -> list[dict]:
+def _adapted_entries(
+    body: str,
+    context_timezone: Optional[str] = None,
+    window_end: datetime = _WINDOW_END,
+) -> list[dict]:
     observation = {
         "context": {
             "source": Source.SYSLOG,
             "format": Format.RAW_LOG,
             "resources": "node-a",
-            "time_interval": {"start": _WINDOW_START, "end": _WINDOW_END},
+            "time_interval": {"start": _WINDOW_START, "end": window_end},
         },
         "body": body,
     }
@@ -119,17 +123,43 @@ def test_yearless_december_line_in_a_january_window_is_dated_to_the_previous_yea
     assert entries[0]["timestamp"] == 1767225543000000000
 
 
+def test_yearless_leap_day_line_is_dated_to_the_preceding_leap_year():
+    entries = _adapted_entries(
+        "Feb 29 12:00:00 node-a kernel: leap day\n",
+        window_end=datetime(2025, 3, 1, 0, 0, 0, tzinfo=timezone.utc),
+    )
+
+    dated = datetime.fromtimestamp(entries[0]["timestamp"] / 1e9, tz=timezone.utc)
+    assert dated == datetime(2024, 2, 29, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_yearless_line_is_not_dated_past_a_window_end_in_another_year():
+    entries = _adapted_entries(
+        "Dec 31 23:00:00 node-a kernel: stale oom\n",
+        context_timezone="America/New_York",
+        window_end=datetime(2026, 1, 1, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    dated = datetime.fromtimestamp(entries[0]["timestamp"] / 1e9, tz=timezone.utc)
+    assert dated == datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
+
+
 def test_lines_without_a_parseable_timestamp_are_dropped_with_one_warning():
     warnings: list[str] = []
     sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
     try:
-        entries = _adapted_entries("[12345.678901] NVRM: Xid 43\nnode-a nvrm\n2026-01-05T11:59:03Z node-a kernel: ok\n")
+        entries = _adapted_entries(
+            "[12345.678901] NVRM: Xid 43\n"
+            "node-a nvrm\n"
+            "2026-01-05 node-a kernel: date with no time\n"
+            "2026-01-05T11:59:03Z node-a kernel: ok\n"
+        )
     finally:
         logger.remove(sink_id)
 
     assert [entry["body"] for entry in entries] == ["2026-01-05T11:59:03Z node-a kernel: ok"]
     assert len(warnings) == 1
-    assert "dropped 2 of 3" in warnings[0]
+    assert "dropped 3 of 4" in warnings[0]
 
 
 def test_observation_with_only_undatable_lines_keeps_an_empty_entry_list():
