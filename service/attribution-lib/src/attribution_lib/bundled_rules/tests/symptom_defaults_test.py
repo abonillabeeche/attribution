@@ -63,6 +63,15 @@ def test_xid_family_represents_declared_identifier_shapes() -> None:
         "subcode": "RLW_SRC_TRACK",
         "error_status": 8,
     }
+    assert registry.families["XID-145-RLW_RXPIPE-8"].properties == {
+        "number": 145,
+        "subcode": "RLW_RXPIPE",
+        "error_status": 8,
+    }
+    assert registry.families["XID-137-NVLINK_PRIV_ERR"].properties == {
+        "number": 137,
+        "mnemonic": "NVLINK_PRIV_ERR",
+    }
 
     for symptom, reason_value, subcode, reason in (
         ("XID-149.0-NETIR_INT-NO_LINK_DOWN-0", 0, "NETIR_INT", "NO_LINK_DOWN"),

@@ -2592,9 +2592,13 @@ known_symptom(
     family=_xid_member(13, mnemonic="GR_EXCEPTION"),
 )
 
+known_symptom("XID-137-NVLINK_PRIV_ERR", family=_xid_member(137, mnemonic="NVLINK_PRIV_ERR"))
+
 known_symptom("XID-145-RLW_REMAP-4", family=_xid_member(145, subcode="RLW_REMAP", error_status=4))
 
 known_symptom("XID-145-RLW_REMAP-8", family=_xid_member(145, subcode="RLW_REMAP", error_status=8))
+
+known_symptom("XID-145-RLW_RXPIPE-8", family=_xid_member(145, subcode="RLW_RXPIPE", error_status=8))
 
 known_symptom("XID-145-RLW_SRC_TRACK-4", family=_xid_member(145, subcode="RLW_SRC_TRACK", error_status=4))
 
