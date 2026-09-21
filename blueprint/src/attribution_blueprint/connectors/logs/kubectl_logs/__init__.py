@@ -31,23 +31,26 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Callable
 from datetime import timezone
 
 from loguru import logger
 
 from attribution_blueprint.connectors.logs import entries_from_text, log_observation
+from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
-_FORMAT_FOR_SOURCE: dict[Source, Format] = {
-    Source.APPLOG: Format.ENTRY_TIMESERIES,
-    Source.SYSLOG: Format.RAW_LOG,
+# Splits one pod's full `kubectl logs` stdout into entries.
+_ENTRIES_FOR_SOURCE: dict[Source, Callable[[str, ExecutionContext], list[TimeseriesEntry]]] = {
+    Source.APPLOG: lambda text, context: entries_from_text(text),
+    Source.SYSLOG: syslog_entries_from_text,
 }
 
 DEFAULT_MAX_BYTES_PER_POD = 16 * 1024 * 1024  # 16 MiB — caps a single pod
@@ -156,14 +159,11 @@ class KubectlLogsConnector:
                 continue
             if self._max_bytes is not None:
                 body = _tail_bytes(body, self._max_bytes)
-            observations.append(self._observation(body, context))
-        return observations
 
-    def _observation(self, body: str, context: ExecutionContext) -> Observation:
-        fmt = _FORMAT_FOR_SOURCE[self._source]
-        if fmt == Format.ENTRY_TIMESERIES:
-            return log_observation(source=self._source, entries=entries_from_text(body), context=context)
-        return log_observation(source=self._source, format=fmt, body=body, context=context)
+            entries = _ENTRIES_FOR_SOURCE[self._source](body, context)
+            obs = log_observation(source=self._source, entries=entries, context=context)
+            observations.append(obs)
+        return observations
 
     # --- private kubectl plumbing -----------------------------------------
 
