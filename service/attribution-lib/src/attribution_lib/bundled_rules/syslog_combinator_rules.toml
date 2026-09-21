@@ -293,10 +293,10 @@ symptom = "OOM kill of user task"
 # branch 3: global OOM with a regular-user victim -> bad, system OOM symptom.
 [[extractor.cases]]
 expect  = "bad"
-line    = "Sep 18 15:39:54 nvl72d023-T14 kernel: Out of memory: Killed process 2945269 (python3) total-vm:7121196992kB, anon-rss:17715008kB, file-rss:161280kB, shmem-rss:204144640kB, UID:39367 pgtables:31808kB oom_score_adj:0"
+line    = "Sep 18 15:39:54 node-001 kernel: Out of memory: Killed process 12345 (python3) total-vm:200kB, UID:1000"
 symptom = "System-out of memory"
 # default: global OOM of a system-owned non-service process -> interesting, other.
 [[extractor.cases]]
 expect  = "interesting"
-line    = "Out of memory: Killed process 999 (chronyd) total-vm:200kB, UID:999"
+line    = "Out of memory: Killed process 999 (python) total-vm:200kB, UID:999"
 symptom = "OOM kill (other)"
