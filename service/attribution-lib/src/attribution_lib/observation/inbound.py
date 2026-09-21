@@ -52,7 +52,8 @@ class Source(str, Enum):
 
     - `health_check`
 
-        Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in milliseconds. Host-specifiers required.
+        Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in milliseconds for
+        `loki_dict_list`, nanoseconds otherwise. Host-specifiers required.
 
         Data from health checks.
 
@@ -260,7 +261,7 @@ class Format(str, Enum):
       Details:
       - Each entry object contains:
         - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the
-          `applog`, `syslog` and `ufmlog` fallbacks described below.
+          `applog`, `syslog`, `health_check` and `ufmlog` fallbacks described below.
         - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
           has no timestamp for this entry. It means "this entry occurred no later than this time".
           Rounded up to microsecond precision internally, since that is all a `datetime` holds. An
@@ -296,6 +297,13 @@ class Format(str, Enum):
         - `body` is the syslog line as received. The declared interval is what the producer meant
           to cover, typically the selected job record plus whatever slack it admits for terminal
           events logged just after the record ends.
+      - `health_check`:
+        - `ts` is the record's timestamp in nanoseconds. An entry without it is dropped, never
+          parsed out of the body.
+        - `resources` should name the node the record is about. An entry that declares none falls
+          back to parsing a node from the body; failing that, or naming a node outside the workload,
+          the entry is dropped.
+        - `body` is the health check reason as received.
       - `ufmlog`:
         - `ts` is the line's timestamp in nanoseconds. An entry without it is kept, never
           parsed out of the body, and treated as untimed.
