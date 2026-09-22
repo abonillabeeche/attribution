@@ -492,6 +492,7 @@ def _validate_source_format(context: ObservationContext) -> None:
             if context.format not in [
                 ObservationFormat.LOKI_DICT_LIST,
                 ObservationFormat.RAW_LOKI_STREAMS,
+                ObservationFormat.ENTRY_TIMESERIES,
             ]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.HEALTH_CHECK:
@@ -504,7 +505,7 @@ def _validate_source_format(context: ObservationContext) -> None:
             if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.NVLINK_METRICS:
-            if context.format not in [ObservationFormat.PROMETHEUS_METRICS]:
+            if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.CSP_EVENT:
             if context.format not in [ObservationFormat.CSP_EVENT_LIST]:
