@@ -1620,6 +1620,15 @@
         "title": "AttributorWorkloadInfoV2",
         "description": "V2 wire shape: ``nodes`` is the explicit node->ranks mapping."
       },
+      "CancellationActor": {
+        "type": "string",
+        "enum": [
+          "User",
+          "Operator"
+        ],
+        "title": "CancellationActor",
+        "description": "Possible initiators carried by `Cancelled`."
+      },
       "DecisionAction": {
         "type": "string",
         "enum": [
@@ -1860,6 +1869,16 @@
         ],
         "title": "EventStorageOverflowError",
         "description": "Error for when an attributor's event storage exceeds its memory budget.\n\nRaised instead of a generic 500 when ATTRIBUTOR_ALLOW_DISK_SPILL=false\n(the default for containerized deployments with no writable disk) and an\nattributor's DuckDB connection exceeds ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.\nIsolated to the one attributor/request that triggered it."
+      },
+      "FailureDomain": {
+        "type": "string",
+        "enum": [
+          "User",
+          "InfraHW",
+          "InfraSW"
+        ],
+        "title": "FailureDomain",
+        "description": "Possible domains of responsibility carried by `Fail`."
       },
       "Format": {
         "type": "string",
@@ -2477,6 +2496,17 @@
         "title": "SymptomStatus",
         "description": "Whether a source still drives attribution, or was demoted to supporting evidence."
       },
+      "TerminalState": {
+        "type": "string",
+        "enum": [
+          "Pass",
+          "Fail",
+          "ExpectedFail",
+          "Cancelled"
+        ],
+        "title": "TerminalState",
+        "description": "What happened to the job. Always present; every outcome maps to at\nleast one of these (possibly more than one, when NVIDIA Attribution can't\nnarrow it down further -- see \"Incomplete Info\" in `_OUTCOME_TABLE`)."
+      },
       "TimeInterval": {
         "properties": {
           "start": {
@@ -2511,6 +2541,15 @@
         ],
         "title": "TimeInterval",
         "description": "The window an observation declares it covers.\n\nBoth keys are required, so a payload that omits one is a validation error rather than unbounded.\nA null bound means unbounded on that side, and only the `entry_timeseries` format accepts one."
+      },
+      "UncertaintyType": {
+        "type": "string",
+        "enum": [
+          "Aleatoric",
+          "Epistemic"
+        ],
+        "title": "UncertaintyType",
+        "description": "NVIDIA Attribution's qualitative classification of the source of uncertainty.\n\nALEATORIC describes ambiguity in the available job evidence, including\ninsufficient data (\"Incomplete Info\"). It does not assert that the job\nbehaved randomly or that better observations could never resolve it.\nEPISTEMIC describes limitations of NVIDIA Attribution itself, such as missing rules or\nbugs (\"Fail Undetermined\"). These are the operational definitions from\nthe compound-outcome RFC, not a general statistical uncertainty model.\n\nNeither value measures likelihood, confidence, severity, or an error rate.\nNone means no uncertainty source is reported, not guaranteed correctness.\nThe source is supplied explicitly, not inferred from the possibility count."
       },
       "UnknownAttributorIdError": {
         "properties": {
@@ -2643,6 +2682,44 @@
             "type": "string",
             "title": "Detail"
           },
+          "terminal_states": {
+            "items": {
+              "$ref": "#/components/schemas/TerminalState"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Terminal States",
+            "description": "Plausible terminal states in NVIDIA Attribution's assessment. Values are alternatives, with no ranking or probabilities; omitted states are ruled out by that assessment. A singleton does not guarantee correctness, and the number of values is not a confidence score."
+          },
+          "failure_domains": {
+            "items": {
+              "$ref": "#/components/schemas/FailureDomain"
+            },
+            "type": "array",
+            "title": "Failure Domains",
+            "description": "Plausible failure domains, conditional on Fail. Values express alternatives, not simultaneous causes or equal probabilities. Empty means failure is absent or its domain is unspecified; consult terminal_states to distinguish these cases.",
+            "default": []
+          },
+          "cancellation_actors": {
+            "items": {
+              "$ref": "#/components/schemas/CancellationActor"
+            },
+            "type": "array",
+            "title": "Cancellation Actors",
+            "description": "Plausible initiators, conditional on Cancelled. Values express alternatives without ranking or probabilities. Empty means cancellation is absent or its actor is unspecified; consult terminal_states to distinguish these cases.",
+            "default": []
+          },
+          "uncertainty_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UncertaintyType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Qualitative source of uncertainty using NVIDIA Attribution's operational definitions: Aleatoric means ambiguous or insufficient job evidence; Epistemic means limitations of NVIDIA Attribution, such as rule gaps or bugs. This is not a probability, confidence score, or error rate. Null means no source is reported, not guaranteed correctness. The source is not inferred from set size."
+          },
           "decision_graph": {
             "anyOf": [
               {
@@ -2659,7 +2736,8 @@
         "required": [
           "root_symptom",
           "attribution_outcome",
-          "detail"
+          "detail",
+          "terminal_states"
         ],
         "title": "Verdict",
         "description": "Top-level attribution outcome: raw lib outcome, free-form detail, and the driving root-cause symptom if any."
