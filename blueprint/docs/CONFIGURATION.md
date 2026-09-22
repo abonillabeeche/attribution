@@ -486,10 +486,11 @@ Custom templates may use `{job_id}` (the execution context ID) and any `{key}` s
 
 ### Kubectl Pod Logs
 
-Use `kubectl_logs` with the Kueue adapter to collect pod stdout as APPLOG or
-SYSLOG observations. The Kueue adapter populates each execution context with
-`namespace` and `pod_names`; this connector reads those fields and runs
-`kubectl logs` for each pod.
+Use `kubectl_logs` to collect pod stdout as APPLOG or SYSLOG observations. It
+reads `namespace` and `pod_names` from the execution context and runs
+`kubectl logs` for each pod. Entries are attributed to the pod's node via the
+context's `pod_nodes` mapping (pod name to node). The Kueue adapter populates all
+three fields.
 
 ```toml
 [log.applog]

@@ -47,9 +47,10 @@ from attribution_blueprint.types import (
     assert_aware,
 )
 
-# Splits one pod's full `kubectl logs` stdout into entries.
-_ENTRIES_FOR_SOURCE: dict[Source, Callable[[str, ExecutionContext], list[TimeseriesEntry]]] = {
-    Source.APPLOG: lambda text, context: entries_from_text(text),
+# Splits one pod's full `kubectl logs` stdout into entries. `node` is declared on
+# each entry.
+_ENTRIES_FOR_SOURCE: dict[Source, Callable[[str, ExecutionContext, str | None], list[TimeseriesEntry]]] = {
+    Source.APPLOG: lambda text, context, node: entries_from_text(text, node),
     Source.SYSLOG: syslog_entries_from_text,
 }
 
@@ -98,9 +99,10 @@ class KubectlLogsConnector:
     """Collector that emits one APPLOG (or SYSLOG) Observation per pod by
     shelling ``kubectl logs``.
 
-    Reads ``context["namespace"]`` and ``context["pod_names"]`` (a list
-    populated by the kueue ECA). Pods listed there but missing from the
-    cluster (e.g. gc'd before query) produce a warning and are skipped.
+    Reads ``context["namespace"]`` and ``context["pod_names"]``. Pods listed
+    there but missing from the cluster (e.g. gc'd before query) produce a
+    warning and are skipped. ``context["pod_nodes"]`` (pod -> node) stamps
+    each entry with the node it came from. The kueue ECA populates all three.
     """
 
     def __init__(
@@ -152,6 +154,7 @@ class KubectlLogsConnector:
             )
             return []
 
+        pod_nodes: dict[str, str] = context.get("pod_nodes") or {}
         observations: list[Observation] = []
         for pod in pod_names:
             body = self._read_pod_logs(pod, namespace, context)
@@ -160,7 +163,7 @@ class KubectlLogsConnector:
             if self._max_bytes is not None:
                 body = _tail_bytes(body, self._max_bytes)
 
-            entries = _ENTRIES_FOR_SOURCE[self._source](body, context)
+            entries = _ENTRIES_FOR_SOURCE[self._source](body, context, pod_nodes.get(pod))
             obs = log_observation(source=self._source, entries=entries, context=context)
             observations.append(obs)
         return observations
