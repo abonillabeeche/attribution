@@ -701,6 +701,45 @@ def test_pod_nodes_maps_scheduled_pods_and_omits_unscheduled_ones():
     assert evidence.pod_names == ["w-0", "w-1", "w-pending"]
 
 
+def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
+    """The pod list is pooled across workloads and the JobSet label is only
+    unique per namespace, so pods must be scoped to the workload's namespace
+    before matching or `pod_nodes` from one tenant overwrites the other's."""
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _parse_workload
+
+    def _wl(ns: str) -> dict:
+        return {
+            "metadata": {
+                "name": "train",
+                "namespace": ns,
+                "uid": f"wl-{ns}",
+                "creationTimestamp": "2026-05-01T11:59:00Z",
+                "ownerReferences": [{"apiVersion": "jobset.x-k8s.io/v1alpha2", "kind": "JobSet", "name": "train"}],
+            },
+            "spec": {},
+            "status": {
+                "conditions": [
+                    {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:00:00Z"},
+                    {"type": "Finished", "status": "True", "lastTransitionTime": "2026-05-01T12:30:00Z"},
+                ]
+            },
+        }
+
+    def _pod(ns: str, node: str) -> dict:
+        return {
+            "metadata": {"name": "train-w-0-0", "namespace": ns, "labels": {"jobset.sigs.k8s.io/jobset-name": "train"}},
+            "spec": {"nodeName": node},
+            "status": {},
+        }
+
+    pods = [_pod("team-alpha", "node-a"), _pod("team-beta", "node-b")]
+    now = datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc)
+    alpha = _parse_workload(_wl("team-alpha"), pods, {}, now=now)
+    beta = _parse_workload(_wl("team-beta"), pods, {}, now=now)
+    assert alpha["nodes"] == ["node-a"] and alpha["pod_nodes"] == {"train-w-0-0": "node-a"}
+    assert beta["nodes"] == ["node-b"] and beta["pod_nodes"] == {"train-w-0-0": "node-b"}
+
+
 def test_discover_by_time_range_rejects_naive_datetimes(mocker):
     """Naive `start`/`end` would crash mid-loop (TypeError comparing naive vs
     tz-aware in the per-workload filter). Reject at the boundary instead so

@@ -533,7 +533,11 @@ def _parse_workload(
         end_time = now
         logger.debug(f"workload {namespace}/{name} not finished; substituting now() for end_time")
 
-    evidence = _collect_pod_evidence(pods, _pod_selector_for(workload))
+    # `pods` is pooled across every workload in the batch. The JobSet label is
+    # only unique within a namespace, so a same-named JobSet elsewhere would
+    # otherwise leak its pods (and overwrite `pod_nodes`) into this workload.
+    own_pods = [pod for pod in pods if ((pod.get("metadata") or {}).get("namespace") or "default") == namespace]
+    evidence = _collect_pod_evidence(own_pods, _pod_selector_for(workload))
 
     ctx: KueueExecutionContext = {
         "id": uid,
