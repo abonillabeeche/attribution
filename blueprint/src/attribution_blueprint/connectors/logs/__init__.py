@@ -54,36 +54,25 @@ def log_observation(
     *,
     source: Source,
     context: ExecutionContext,
-    format: Format = Format.ENTRY_TIMESERIES,
-    body: Optional[str] = None,
-    entries: Optional[list[TimeseriesEntry]] = None,
-    resources: str = "AllJobResources",
+    entries: list[TimeseriesEntry],
     time_interval: Optional[TimeInterval] = None,
 ) -> Observation:
-    """Build a log Observation, defaulting `time_interval` to the per-source contract.
+    """Build an ENTRY_TIMESERIES log Observation, defaulting `time_interval` to the per-source contract.
 
     Args:
-        body: Payload already serialized for `format`. Mutually exclusive with `entries`.
-        entries: ENTRY_TIMESERIES entries
+        entries: ENTRY_TIMESERIES entries, serialized into the observation body.
         time_interval: Override for `DEFAULT_TIME_INTERVAL[source]`, e.g. a tighter
             window when the backend returned unwindowed data.
     """
-    if (body is None) == (entries is None):
-        raise ValueError("log_observation takes exactly one of body or entries")
-    if entries is not None and format is not Format.ENTRY_TIMESERIES:
-        raise ValueError(f"entries= requires Format.ENTRY_TIMESERIES, got {format.value!r}")
-    if entries is not None:
-        body = json.dumps(entries)
     if time_interval is None:
         time_interval = DEFAULT_TIME_INTERVAL[source](context)
     return {
         "context": {
             "time_interval": time_interval,
             "source": source,
-            "format": format,
-            "resources": resources,
+            "format": Format.ENTRY_TIMESERIES,
         },
-        "body": body,
+        "body": json.dumps(entries),
     }
 
 

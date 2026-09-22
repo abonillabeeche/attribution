@@ -418,7 +418,7 @@ component = "local_file"
 paths = ["/path/to/syslog"]
 ```
 
-For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `raw_log`, with the regular syslog file text as its body.
+For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `entry_timeseries`: one entry per line, dated from the line's own timestamp and tagged with the directory's node. Lines without a recognizable timestamp are dropped; see [Manually Collected Syslogs](use-cases/manually-collected-syslogs.md#syslog-file-format) for the accepted forms.
 
 ### Loki SYSLOG Or APPLOG
 
