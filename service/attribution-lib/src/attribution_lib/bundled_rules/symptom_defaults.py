@@ -2700,6 +2700,8 @@ known_symptom("link down(nvlink physical layer)")
 
 known_symptom("link down(nvlink)")
 
+known_symptom("mlx5 port link down")
+
 known_symptom("performance_phy_effective_errors_high")
 
 known_symptom("performance_port_xmit_wait_bw_loss_host_1m_0p5pct")
