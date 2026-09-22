@@ -221,11 +221,11 @@ symptom = "kernel oops"
 [[extractor]]
 name         = "SyslogMlx5PortLinkDown"
 match_re     = '\bmlx5_core\s+[0-9a-fA-F:.]+\s+mlx5_[0-9]+:\s+Port:\s+[0-9]+\s+Link\s+DOWN\b'
-emit         = { type = "interesting_node", symptom = "mlx5 port link down" }
+emit         = { type = "interesting_node", symptom = "link down(mlx5 port)" }
 [[extractor.cases]]
 expect  = "interesting"
 line    = "<6>1 2026-01-01T00:00:00+00:00 test-node-001 kernel - - - mlx5_core 0000:be:00.0 mlx5_4: Port: 1 Link DOWN"
-symptom = "mlx5 port link down"
+symptom = "link down(mlx5 port)"
 [[extractor.cases]]
 expect = "none"
 line   = "mlx5_core 0000:be:00.0 mlx5_4: Port: 1 Link ACTIVE"

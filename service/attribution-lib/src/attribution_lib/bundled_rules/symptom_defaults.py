@@ -2696,11 +2696,11 @@ known_symptom("hist15_high")
 
 known_symptom("knvlinkUpdatePostRxDetectLinkMask_IMPL: Failed to update Rx Detect Link mask!")
 
+known_symptom("link down(mlx5 port)")
+
 known_symptom("link down(nvlink physical layer)")
 
 known_symptom("link down(nvlink)")
-
-known_symptom("mlx5 port link down")
 
 known_symptom("performance_phy_effective_errors_high")
 
