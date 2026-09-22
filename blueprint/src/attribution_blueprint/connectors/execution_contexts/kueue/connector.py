@@ -53,15 +53,21 @@ not the ECA.
 Pod ownership is resolved via the **standard batch/v1 Job pod labels**,
 not the Kueue label. `kueue.x-k8s.io/job-uid` is set by Kueue on the
 **Workload** object (carrying the owner Job's UID so callers can link a
-Workload back to its Job); it is NOT stamped on the pods. The pods are
-created by the Kubernetes Job controller, which stamps the canonical
-`batch.kubernetes.io/controller-uid=<job.uid>` and
-`batch.kubernetes.io/job-name=<job.name>` labels. This adapter pulls the
-owner Job's UID out of the Workload's `ownerReferences` and selects pods
-with `batch.kubernetes.io/controller-uid=<owner_uid>`. (Both an earlier
-bug — looking up by Workload UID — and a follow-on bug — looking up by
-the Kueue label rather than the batch label — produced empty pod sets
-on real clusters; the fixtures masked both by conflating UIDs.)
+Workload back to its Job. The pods are created by the Kubernetes Job 
+controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>` 
+and `batch.kubernetes.io/job-name=<job.name>` labels. 
+This adapter pulls the owner Job's UID out of the Workload's 
+`ownerReferences` and selects pods with 
+`batch.kubernetes.io/controller-uid=<owner_uid>`. 
+
+The JobSet pod label carries only a name, which is unique per namespace
+but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector` 
+always scope matching to the Workload's own namespace.
+
+Owner Jobs/JobSet children are looked up by namespace/name, but names are
+reusable after deletion. `_jobs_for_workload` confirms the fetched
+object's uid against the ownerReference's uid before trusting it as the
+real owner.
 """
 
 from __future__ import annotations
@@ -109,11 +115,9 @@ class KueueExecutionContext(TypedDict):
     queue_name: NotRequired[str]
     priority_class: NotRequired[int]
     gpu_count: NotRequired[int]
-    # Pod names belonging to this Workload at the time of discovery. Populated
-    # in `_finalize` from the same pod listing used for node/failed_node
-    # evidence. Downstream log/metric connectors consume this list so they
-    # don't need to re-derive the per-owner pod selector. Empty list when the
-    # owner type isn't supported or all pods have been garbage-collected.
+    # Pod names belonging to this Workload at the time of discovery. Empty 
+    # list when the owner type isn't supported or all pods have been 
+    # garbage-collected.
     pod_names: NotRequired[list[str]]
 
 
@@ -233,59 +237,54 @@ def _condition_time(conditions: list[dict], cond_type: str) -> datetime | None:
     return _parse_dt(c.get("lastTransitionTime"))
 
 
-def _pod_selector_for(workload: dict) -> tuple[str, str] | None:
-    """Return the `(label-key, label-value)` pair identifying pods that
-    belong to this Workload, or None if no selector can be derived.
+def _pod_selector_for(workload: dict) -> tuple[str, str, str] | None:
+    """Return the `(namespace, label-key, label-value)` triple identifying
+    pods that belong to this Workload, or None if no selector can be
+    derived.
 
     Two owner shapes are supported:
 
     - **batch/v1 Job** (`ownerReferences[].kind == "Job"`): the Kubernetes
       Job controller stamps `batch.kubernetes.io/controller-uid=<job.uid>`
-      on every pod it creates from the Job. We pull that uid out of the
-      Workload's ownerReferences.
+      on every pod it creates from the Job. 
     - **JobSet** (`ownerReferences[].kind == "JobSet"`): JobSet creates
-      one batch/v1 Job per replicatedJob, each with its own distinct uid,
-      so there is no single controller-uid to match. JobSet instead
-      stamps `jobset.sigs.k8s.io/jobset-name=<jobset.name>` on every pod
-      it transitively owns. We select by that label.
+      one batch/v1 Job per replicatedJob, each with its own distinct uid.
+      JobSet stamps `jobset.sigs.k8s.io/jobset-name=<jobset.name>` on 
+      every pod it transitively owns.
 
-    Contract: Kueue guarantees at most one Job/JobSet ownerReference per
-    Workload. We take the first match defensively; if multiple ever
-    appear, the behavior is silently first-wins. `_extract_time_limit`
-    makes the same assumption for its batch/v1 Job lookup.
-
-    Returns None for Workloads with no recognised owner — pending
-    Workloads whose Job hasn't been created yet, or workloads owned by
-    custom resources like RayJob/MPIJob that this adapter doesn't yet
-    know how to attribute.
+    Returns None for Workloads with no recognized owner.
     """
-    for owner in (workload.get("metadata") or {}).get("ownerReferences") or []:
+    meta = workload.get("metadata") or {}
+    namespace = meta.get("namespace") or "default"
+    for owner in meta.get("ownerReferences") or []:
         kind = owner.get("kind")
         if kind == "Job" and owner.get("uid"):
-            return (_POD_OWNER_LABEL, owner["uid"])
+            return (namespace, _POD_OWNER_LABEL, owner["uid"])
         if kind == "JobSet" and owner.get("name"):
-            return (_POD_JOBSET_LABEL, owner["name"])
+            return (namespace, _POD_JOBSET_LABEL, owner["name"])
     return None
+
+
+def _pod_matches_selector(pod: dict, selector: tuple[str, str, str]) -> bool:
+    """Return whether `pod` matches a `(namespace, label-key, label-value)`
+    selector from `_pod_selector_for`. See that function for why namespace
+    must be checked alongside the label."""
+    namespace, label_key, label_value = selector
+    metadata = pod.get("metadata") or {}
+    if metadata.get("namespace") != namespace:
+        return False
+    return (metadata.get("labels") or {}).get(label_key) == label_value
 
 
 _NODE_LOSS_DISRUPTION_REASONS = frozenset(
     {
         # PodGC's controller sets this only once the Node API object itself
-        # is confirmed deleted (cluster-autoscaler scale-down, an explicit
-        # `kubectl delete node`, or a cloud provider's node-lifecycle
-        # controller cleaning up after a confirmed VM termination). Verified
-        # empirically (kind, 2026-09-09): appears ~37s after the Node object
-        # is deleted.
+        # is confirmed deleted.
         "DeletionByPodGC",
-        # The more common real-world shape: the node goes unreachable/
-        # NotReady but its API object is never deleted (crash, network
-        # partition, kubelet death without a corresponding node-lifecycle
-        # cleanup). The taint manager evicts non-tolerating pods once the
+        # The node goes unreachable/NotReady but its API object is never 
+        # deleted. The taint manager evicts non-tolerating pods once the
         # `node.kubernetes.io/not-ready:NoExecute` toleration window expires
-        # (default 300s) and sets this reason instead of DeletionByPodGC.
-        # Verified empirically (kind, 2026-09-09): appears ~242s after the
-        # node's kubelet goes down, and DeletionByPodGC is never reached
-        # even after 7.5 minutes because the Node object was never deleted.
+        # and sets this reason instead of DeletionByPodGC.
         "DeletionByTaintManager",
     }
 )
@@ -315,17 +314,16 @@ def _pod_reports_node_failure(pod: dict) -> bool:
 
 def _collect_pod_evidence(
     pods: list[dict],
-    selector: tuple[str, str] | None,
+    selector: tuple[str, str, str] | None,
 ) -> tuple[list[str], str | None, list[str]]:
     """Return `(sorted unique nodes, lex-smallest failed_node, sorted pod
-    names)` for pods whose `metadata.labels[selector.key] == selector.value`.
+    names)` for pods matching `selector`.
 
     The caller is responsible for narrowing the input list to pods that
     might belong to this workload — typically via the kubectl label
-    selector in `_fetch_pods_for`. This function still re-checks each
-    pod's label as a defensive filter: a pod missing the label, or
-    carrying a different value, must NEVER be associated with this
-    workload's evidence even if it leaked into the input list.
+    selector in `_fetch_pods_for`. This function still re-checks each pod
+    against `_pod_matches_selector` as a defensive filter (namespace +
+    label), since cluster-wide discovery can pool pods across namespaces.
 
     Pod names are returned alongside the node evidence so downstream
     connectors (e.g. `kubectl_logs`) don't have to re-derive the
@@ -336,15 +334,13 @@ def _collect_pod_evidence(
     """
     if not selector:
         return [], None, []
-    key, value = selector
     nodes: set[str] = set()
     failed_nodes: set[str] = set()
     pod_names: set[str] = set()
     for pod in pods:
-        meta = pod.get("metadata") or {}
-        labels = meta.get("labels") or {}
-        if labels.get(key) != value:
+        if not _pod_matches_selector(pod, selector):
             continue
+        meta = pod.get("metadata") or {}
         pod_name = meta.get("name")
         if pod_name:
             pod_names.add(pod_name)
@@ -370,24 +366,47 @@ def _collect_pod_evidence(
     return sorted(nodes), failed_node, sorted(pod_names)
 
 
+def _job_jobset_owner_uid(job: dict) -> str | None:
+    """Return the uid of the JobSet that owns `job`, from `job`'s own
+    ownerReferences, or None if `job` has no JobSet controller reference."""
+    for owner in (job.get("metadata") or {}).get("ownerReferences") or []:
+        if owner.get("kind") == "JobSet" and owner.get("uid"):
+            return owner["uid"]
+    return None
+
+
 def _jobs_for_workload(workload: dict, owner_jobs: dict[str, dict]) -> list[dict]:
-    """Return direct or JobSet child Jobs associated with a Workload."""
+    """Return direct or JobSet child Jobs associated with a Workload.
+
+    Every returned Job's identity is confirmed by uid, not just the name
+    used to look it up: names are reusable after deletion, so a
+    namespace/name (or `jobset-name` label) lookup can return a different
+    object than the one the ownerReference originally pointed to. A uid
+    mismatch is treated as stale evidence, not a valid owner.
+    """
     owner_refs = (workload.get("metadata") or {}).get("ownerReferences") or []
     namespace = (workload.get("metadata") or {}).get("namespace") or ""
     for owner in owner_refs:
         owner_kind = owner.get("kind")
         owner_name = owner.get("name")
+        owner_uid = owner.get("uid")
         if not owner_name:
             continue
         if owner_kind == "Job":
             job = owner_jobs.get(f"{namespace}/{owner_name}")
-            return [job] if job is not None else []
+            if job is None:
+                return []
+            fetched_uid = (job.get("metadata") or {}).get("uid")
+            if not owner_uid or fetched_uid != owner_uid:
+                return []
+            return [job]
         if owner_kind == "JobSet":
             return [
                 job
                 for job in owner_jobs.values()
                 if (job.get("metadata") or {}).get("namespace") == namespace
                 and ((job.get("metadata") or {}).get("labels") or {}).get(_POD_JOBSET_LABEL) == owner_name
+                and _job_jobset_owner_uid(job) == owner_uid
             ]
     return []
 
@@ -498,14 +517,12 @@ def _owner_job_failure_reason(workload: dict, owner_jobs: dict[str, dict]) -> st
     return earliest_reason
 
 
-def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str] | None) -> bool:
+def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str, str] | None) -> bool:
     """Return whether a selected Pod reports a Kubernetes node-loss signal."""
     if selector is None:
         return False
-    key, value = selector
     for pod in pods:
-        metadata = pod.get("metadata") or {}
-        if (metadata.get("labels") or {}).get(key) != value:
+        if not _pod_matches_selector(pod, selector):
             continue
         if _pod_reports_node_failure(pod):
             return True
@@ -516,6 +533,11 @@ def _workload_condition_is_true(workload: dict, condition_type: str) -> bool:
     conditions = ((workload.get("status") or {}).get("conditions") or [])
     condition = _condition(conditions, condition_type)
     return bool(condition and condition.get("status") == "True")
+
+
+# kueue_state values where the Workload currently holds admission/quota.
+# These outrank stale Requeued=True history in `_service_state` below.
+_CURRENT_ADMISSION_OR_RESERVATION_STATES = frozenset({"ADMITTED", "RUNNING", "QUOTA_RESERVED"})
 
 
 def _service_state(
@@ -533,7 +555,17 @@ def _service_state(
         return "NODE_FAIL"
     if _has_node_failure_pod(pods, _pod_selector_for(workload)):
         return "NODE_FAIL"
-    if _workload_condition_is_true(workload, _COND_REQUEUED):
+    # Requeued=True can stay True after re-admission, so a raw condition
+    # check can't tell "still awaiting admission" from "running again".
+    # Gate on kueue_state instead: it already reflects current precedence
+    # (Finished/Admitted/RUNNING/QuotaReserved outrank requeue history).
+    currently_admitted_or_reserved = kueue_state in _CURRENT_ADMISSION_OR_RESERVATION_STATES
+    currently_finished = kueue_state.startswith("FINISHED")
+    if (
+        not currently_admitted_or_reserved
+        and not currently_finished
+        and _workload_condition_is_true(workload, _COND_REQUEUED)
+    ):
         return "REQUEUED"
     if kueue_state.startswith("EVICTED"):
         # Any other Evicted reasons (e.g. queue stopped,
@@ -1008,11 +1040,10 @@ class KueueExecutionContextAdapter:
             selector = _pod_selector_for(wl)
             if selector is None:
                 continue
-            key, value = selector
-            ns = (wl.get("metadata") or {}).get("namespace") or ""
-            args = ["get", "pods", "-l", f"{key}={value}"]
-            if ns:
-                args += ["-n", ns]
+            namespace, label_key, label_value = selector
+            args = ["get", "pods", "-l", f"{label_key}={label_value}"]
+            if namespace:
+                args += ["-n", namespace]
             else:
                 args += ["-A"]
             payload = self._run_json(args)
