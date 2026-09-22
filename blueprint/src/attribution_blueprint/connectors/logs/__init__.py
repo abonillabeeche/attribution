@@ -29,10 +29,17 @@ class LogConnector(Protocol):
     def collect(self, context: ExecutionContext) -> list[Observation]: ...
 
 
-def entries_from_text(text: str) -> list[TimeseriesEntry]:
-    """One ENTRY_TIMESERIES entry per newline-separated line. Only emits the body field.
-    Timestamp and resource parsing, if allowed, is handled by the service."""
-    return [TimeseriesEntry(body=line) for line in text.split("\n")]
+def entries_from_text(text: str, node: Optional[str] = None) -> list[TimeseriesEntry]:
+    """One ENTRY_TIMESERIES entry per newline-separated line.
+
+    Emits only the body unless `node` is given, in which case every entry declares
+    it. Timestamp and any remaining resource parsing is handled by the service.
+    """
+    entries = [TimeseriesEntry(body=line) for line in text.split("\n")]
+    if node is not None and node != "":
+        for entry in entries:
+            entry["resources"] = [{"kind": "node", "hostname": node}]
+    return entries
 
 
 def _unbounded(context: ExecutionContext) -> TimeInterval:
