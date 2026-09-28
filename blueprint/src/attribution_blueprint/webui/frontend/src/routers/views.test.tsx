@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import { MemoryRouter } from 'react-router-dom'
+import type { RunDetail } from '@/interfaces/attribution'
 import { NodeView } from '@/routers/node'
 import { VerdictView } from '@/routers/verdict'
 
@@ -14,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   nav: vi.fn(),
   downloadBlob: vi.fn(),
   clipboardWrite: vi.fn(),
+  symptomDocumentation: vi.fn(),
 }))
 
 vi.mock('react-router-dom', async (importOriginal) => ({
@@ -22,6 +27,7 @@ vi.mock('react-router-dom', async (importOriginal) => ({
 }))
 vi.mock('swr', () => ({ default: mocks.useSWR }))
 vi.mock('@/hooks/use-node-runs', () => ({ useNodeRuns: mocks.useNodeRuns }))
+vi.mock('@/hooks/use-symptom-documentation', () => ({ useSymptomDocumentation: mocks.symptomDocumentation }))
 vi.mock('@/hooks/use-nav', () => ({ useNav: () => mocks.nav }))
 vi.mock('@/services/api-context', () => ({ useApi: mocks.useApi }))
 vi.mock('@/lib/export', async (importOriginal) => ({
@@ -58,10 +64,10 @@ vi.mock('@/components/ui/hover-card', () => ({
   HoverCardContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }))
 vi.mock('@/routers/verdict/components/log-hero', () => ({
-  LogHero: ({ run }: { run: Run }) => <div>Log for {run.id}</div>,
+  LogHero: ({ run }: { run: RunDetail }) => <div>Log for {run.id}</div>,
 }))
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunDetail> = {}): RunDetail => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -79,6 +85,7 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware failure',
   detail: 'GPU fell off the bus.',
+  decisionGraphState: 'absent',
   rootSymptom: {
     symptom: 'Xid79',
     rule: 'xid',
@@ -108,12 +115,18 @@ const run = (overrides: Partial<Run> = {}): Run => ({
     supportDetails: ['run ID', 'node ID'],
     catalogId: 'xid-79',
   },
+  attribution: {
+    rootSymptom: { state: 'absent', data: null },
+    symptomSites: { state: 'absent', data: null },
+    decisionGraph: { state: 'absent', data: null },
+  },
   ...overrides,
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers()
+  mocks.symptomDocumentation.mockReturnValue({ data: undefined })
   mocks.useParams.mockReturnValue({ id: 'node-a' })
   mocks.useNodeRuns.mockReturnValue({ runs: [run()], isLoading: false, error: null })
   mocks.useSWR.mockReturnValue({ data: run(), isLoading: false, error: undefined })
@@ -166,20 +179,73 @@ describe('NodeView', () => {
 })
 
 describe('VerdictView', () => {
+  it('places the API document in the symptom table without a duplicate on the verdict root', () => {
+    mocks.useParams.mockReturnValue({ id: 'run-1' })
+    const detail = run()
+    detail.attribution.rootSymptom = { state: 'available', data: {
+      symptom: 'Xid79', catalog_id: 'xid-79',
+      source: { observation_id: '0', source: 'syslog', pos: 0, line: null, rule: null, time: null },
+    } }
+    detail.attribution.symptomSites = { state: 'available', data: {
+      Xid79: [{ type: 'NodeSource', node: 'node-a', status: 'bad', source: detail.attribution.rootSymptom.data.source }],
+    } }
+    mocks.useSWR.mockReturnValue({ data: detail })
+    mocks.symptomDocumentation.mockReturnValue({ data: { symptoms: {
+      'xid-79': { id: 'xid-79', title: 'XID 79', doc_url: 'https://docs.example/xid-79/' },
+      Xid79: { id: 'xid-79', title: 'XID 79', doc_url: 'https://docs.example/xid-79/' },
+    } } })
+    const { rerender } = render(<MemoryRouter><VerdictView /></MemoryRouter>)
+    const docs = screen.getAllByRole('link', { name: /Symptom documentation/ })
+    expect(docs).toHaveLength(1)
+    expect(docs[0].getAttribute('href')).toBe('https://docs.example/xid-79/')
+    expect(within(screen.getByRole('table', { name: 'Symptoms' })).getByRole('link', { name: /Symptom documentation/ })).toBe(docs[0])
+
+    detail.attribution.rootSymptom.data.catalog_id = null
+    rerender(<MemoryRouter><VerdictView /></MemoryRouter>)
+    expect(screen.getByRole('link', { name: /Symptom documentation/ }).getAttribute('href')).toBe('https://docs.example/xid-79/')
+
+    detail.attribution.rootSymptom.data.catalog_id = 'xid-79'
+    mocks.symptomDocumentation.mockReturnValue({ data: { symptoms: {
+      'xid-79': { id: 'xid-79', title: 'XID 79', doc_url: 'https://docs.example/xid-79/' },
+    } } })
+    rerender(<MemoryRouter><VerdictView /></MemoryRouter>)
+    expect(screen.queryByRole('link', { name: /Symptom documentation/ })).toBeNull()
+  })
+
+  it('lists each recorded node once without conflating responsibility with attempt membership', () => {
+    mocks.useSWR.mockReturnValue({
+      data: run({ nodeIds: ['group/node one', 'shared-node', 'shared-node'], responsibleNodes: ['shared-node', 'attributed-node', 'attributed-node'], gpuCount: 96 }),
+      isLoading: false,
+      error: undefined,
+    })
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
+
+    const nodes = within(screen.getByRole('region', { name: 'Nodes' }))
+    expect(nodes.getByRole('link', { name: 'group/node one' }).getAttribute('href')).toBe('/node/group%2Fnode%20one')
+    expect(nodes.getAllByRole('link')).toHaveLength(3)
+    expect(nodes.getByRole('link', { name: 'shared-node Responsible' }).getAttribute('href')).toBe('/node/shared-node')
+    expect(nodes.getByRole('link', { name: 'attributed-node Not listed in attempt nodes Responsible' }).getAttribute('href')).toBe('/node/attributed-node')
+    expect(nodes.getByText('GPUs').textContent).toBe('96 GPUs')
+    expect(nodes.getByRole('paragraph').textContent).toBe('2 in attempt · 2 responsible')
+  })
+
   it('renders loading and missing states', () => {
     mocks.useParams.mockReturnValue({ id: 'run-1' })
     mocks.useSWR.mockReturnValue({ data: undefined, isLoading: true, error: undefined })
-    const { rerender } = render(<VerdictView />)
+    const { rerender } = render(<MemoryRouter><VerdictView /></MemoryRouter>)
     expect(screen.getByText('Loading execution context...')).toBeTruthy()
 
     mocks.useSWR.mockReturnValue({ data: undefined, isLoading: false, error: undefined })
-    rerender(<VerdictView />)
+    rerender(<MemoryRouter><VerdictView /></MemoryRouter>)
     expect(screen.getByText('Execution context not found')).toBeTruthy()
   })
 
-  it('renders verdict evidence and executes actions', () => {
+  it.each(['absent', 'null'] as const)('renders verdict evidence and actions with a %s graph', (state) => {
     mocks.useParams.mockReturnValue({ id: 'run-1' })
-    render(<VerdictView />)
+    const detail = run()
+    detail.attribution.decisionGraph = { state, data: null }
+    mocks.useSWR.mockReturnValue({ data: detail, isLoading: false, error: undefined })
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
 
     expect(screen.getByRole('heading', { name: 'Attempt 2 · team/job' })).toBeTruthy()
     expect(screen.getByText('Log for run-1')).toBeTruthy()
@@ -210,7 +276,7 @@ describe('VerdictView', () => {
       error: undefined,
     })
 
-    render(<VerdictView />)
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
 
     expect(screen.getByText('error_pairs')).toBeTruthy()
     const pairRows = within(screen.getByRole('list', { name: 'error pairs' })).getAllByRole('listitem')

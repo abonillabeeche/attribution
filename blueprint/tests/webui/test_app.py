@@ -8,7 +8,9 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import json
 import sqlite3
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -18,8 +20,13 @@ pytest.importorskip("fastapi")  # NOTE: jinja2 importorskip removed
 from fastapi.testclient import TestClient
 
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
-from attribution_blueprint.webui import app as appmod
+from attribution_blueprint.webui import (
+    app as appmod,
+    bootstrap,
+    db,
+)
 from attribution_blueprint.webui.app import create_app
+from attribution_blueprint.webui.attribution_detail import attribution_detail
 from attribution_blueprint.webui.db import DatabaseSchemaError
 
 
@@ -53,13 +60,21 @@ def _ctx(job_id, sluid, *, nodes=("node-a",), state="FAILED", user="alice"):
 
 
 def _attr(cls, symptom="XID-79", node="node-a", rule="r"):
+    source = {
+        "observation_id": 0,
+        "source": "syslog",
+        "pos": 0,
+        "rule": rule,
+        "line": "kernel: ...",
+        "time": "2026-05-01T00:30:00+00:00",
+    }
     return {
         "verdict": {
             "attribution_outcome": cls,
             "detail": "d",
             "root_symptom": {
                 "symptom": symptom,
-                "source": {"rule": rule, "line": "kernel: ...", "time": "2026-05-01T00:30:00+00:00"},
+                "source": dict(source),
             },
         },
         "symptoms": {
@@ -67,7 +82,8 @@ def _attr(cls, symptom="XID-79", node="node-a", rule="r"):
                 {
                     "type": "NodeSource",
                     "node": node,
-                    "source": {"rule": rule, "line": "kernel: ...", "time": "2026-05-01T00:30:00+00:00"},
+                    "status": "bad",
+                    "source": dict(source),
                 }
             ]
         },
@@ -799,6 +815,196 @@ def test_dashboard_rollup_pareto_ledgers_follow_outcome_filter(tmp_path):
 def test_create_app_missing_db(tmp_path):
     with pytest.raises(FileNotFoundError):
         create_app(str(tmp_path / "nope.db"))
+
+
+@pytest.mark.parametrize(
+    "observation_id", [0, -1, 9007199254740993, -9007199254740993, 9223372036854775807, -9223372036854775808]
+)
+def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path, observation_id):
+    payload = _attr("Fail InfraHW")
+    payload["collectors"] = {"bad_pairs": "pair evidence"}
+    payload["verdict"]["root_symptom"]["catalog_id"] = None
+    source = payload["verdict"]["root_symptom"]["source"]
+    source.update(
+        observation_id=observation_id,
+        line=None,
+        time=None,
+        extra_provenance={"observation_id": 23, "retained": True},
+    )
+    payload["symptoms"]["XID-79"][0]["source"]["observation_id"] = observation_id
+    payload["symptoms"]["XID-79"].append(
+        {
+            "type": "ResourcelessSource",
+            "status": "interesting",
+            "source": dict(source),
+        }
+    )
+    raw_payload = deepcopy(payload)
+    p = tmp_path / "detail.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("job", "attempt"), payload)
+    out.close()
+    client = TestClient(create_app(str(p)))
+
+    summary = client.get("/api/v1/runs").json()["runs"][0]
+    assert "attribution" not in summary and "log" not in summary
+    assert summary["decisionGraphState"] == "absent"
+    response = client.get(f"/api/v1/runs/{summary['id']}")
+    detail = response.json()
+    assert {key: detail[key] for key in summary} == summary
+    assert detail["errorPairs"] == "pair evidence"
+    assert detail["responsibleNodes"] == ["node-a"]
+    expected_root = deepcopy(payload["verdict"]["root_symptom"])
+    expected_root["source"]["observation_id"] = str(observation_id)
+    expected_sites = deepcopy(payload["symptoms"])
+    for site in expected_sites["XID-79"]:
+        site["source"]["observation_id"] = str(observation_id)
+    expected_attribution = {
+        "rootSymptom": {"state": "available", "data": expected_root},
+        "symptomSites": {"state": "available", "data": expected_sites},
+        "decisionGraph": {"state": "absent", "data": None},
+    }
+    assert detail["attribution"] == expected_attribution
+    # The wire value is already a string: an ordinary browser JSON.parse needs no
+    # reviver or original-token support to retain every digit, including zero.
+    assert response.text.count(f'"observation_id":"{observation_id}"') == 3
+    assert detail["symptoms"] == [{"name": "XID-79", "sites": 2}]
+    assert detail["nodes"] == 1
+    assert detail["attribution"]["rootSymptom"]["data"]["source"]["pos"] == 0
+
+    run = db.get_run(str(p), summary["id"])
+    assert bootstrap.run_to_react(run)["attribution"] == expected_attribution
+    assert run.raw_result == raw_payload
+    injected = bootstrap.inject('<div id="root"></div>', bootstrap.build_payload(str(p)))
+    blob = injected.split('id="attr-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(blob)["runs"][0]["attribution"] == expected_attribution
+    assert payload == raw_payload
+    assert db.get_run(str(p), summary["id"]).raw_result == raw_payload
+    assert client.get("/api/v1/runs/missing").status_code == 404
+
+
+@pytest.mark.parametrize("section,key", [("rootSymptom", "root_symptom"), ("symptomSites", "symptoms")])
+@pytest.mark.parametrize("state,value", [("absent", None), ("null", None), ("invalid", {"source": {}})])
+def test_observation_id_projection_preserves_unavailable_sections(section, key, state, value):
+    payload = _attr("Fail InfraHW")
+    parent = payload["verdict"] if key == "root_symptom" else payload
+    if state == "absent":
+        del parent[key]
+    else:
+        parent[key] = value
+    raw_payload = deepcopy(payload)
+
+    detail = attribution_detail(payload)
+
+    assert detail[section] == {"state": state, "data": None}
+    other_section = "symptomSites" if section == "rootSymptom" else "rootSymptom"
+    assert detail[other_section]["state"] == "available"
+    assert payload == raw_payload
+
+
+@pytest.mark.parametrize(
+    "graph,state",
+    [
+        (None, "null"),
+        ({"nodes": [], "edges": []}, "empty"),
+        ({"nodes": [], "edges": [{"parent_id": "missing", "child_id": "missing", "edge_type": "cause"}]}, "invalid"),
+        ({"nodes": "broken", "edges": []}, "invalid"),
+        (
+            {
+                "nodes": [
+                    {
+                        "node_id": "0",
+                        "node_type": "EXTRACTION",
+                        "hostname": None,
+                        "symptom": "XID-79",
+                        "rule_name": None,
+                        "action": "CREATED",
+                    }
+                ]
+                * 2,
+                "edges": [],
+            },
+            "invalid",
+        ),
+        (
+            {
+                "nodes": [
+                    {
+                        "node_id": "0",
+                        "node_type": "EXTRACTION",
+                        "hostname": None,
+                        "symptom": "XID-79",
+                        "rule_name": None,
+                        "action": "CREATED",
+                    }
+                ],
+                "edges": [{"parent_id": "0", "child_id": "0", "edge_type": "cause"}],
+            },
+            "invalid",
+        ),
+    ],
+)
+def test_decision_graph_state_does_not_invalidate_other_evidence(tmp_path, graph, state):
+    payload = _attr("Fail InfraHW")
+    payload["verdict"]["decision_graph"] = graph
+    p = tmp_path / "graph.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("job", "attempt"), payload)
+    out.close()
+    client = TestClient(create_app(str(p)))
+    summary = client.get("/api/v1/runs").json()["runs"][0]
+    detail = client.get(f"/api/v1/runs/{summary['id']}").json()
+    sections = detail["attribution"]
+    assert summary["decisionGraphState"] == detail["decisionGraphState"] == state
+    assert "attribution" not in summary and "log" not in summary
+    assert sections["decisionGraph"] == {"state": state, "data": graph if state == "empty" else None}
+    assert sections["rootSymptom"]["state"] == "available"
+    assert sections["symptomSites"]["state"] == "available"
+    assert detail["log"][0]["text"] == "kernel: ..."
+
+
+@pytest.mark.parametrize(
+    "symptoms,state",
+    [
+        (None, "null"),
+        ({}, "empty"),
+        ({"XID-79": []}, "empty"),
+        ([], "invalid"),
+        ({"XID-79": [None]}, "invalid"),
+        ({"XID-79": [{"source": {}}]}, "invalid"),
+    ],
+)
+def test_invalid_sites_do_not_break_list_or_valid_graph(tmp_path, symptoms, state):
+    graph = {
+        "nodes": [
+            {
+                "node_id": "0",
+                "node_type": "UNKNOWN",
+                "hostname": None,
+                "symptom": "XID-79",
+                "rule_name": None,
+                "action": "UNKNOWN",
+                "line_num": 0,
+                "datum": None,
+            }
+        ],
+        "edges": [],
+    }
+    payload = _attr("Fail InfraHW")
+    payload["symptoms"] = symptoms
+    payload["verdict"]["decision_graph"] = graph
+    p = tmp_path / "partial.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("job", "attempt"), payload)
+    out.close()
+    client = TestClient(create_app(str(p)))
+    summary = client.get("/api/v1/runs").json()["runs"][0]
+    detail = client.get(f"/api/v1/runs/{summary['id']}").json()
+    assert summary["decisionGraphState"] == detail["decisionGraphState"] == "available"
+    assert "attribution" not in summary and "log" not in summary
+    assert detail["attribution"]["symptomSites"]["state"] == state
+    assert detail["attribution"]["rootSymptom"]["state"] == "available"
+    assert detail["attribution"]["decisionGraph"] == {"state": "available", "data": graph}
 
 
 def test_create_app_missing_spa_build_fails_loud(tmp_path, monkeypatch):

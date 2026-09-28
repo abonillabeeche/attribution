@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 export type OutcomeKey = 'hardware' | 'software' | 'multi' | 'user' | 'undetermined' | 'pass'
 
 export interface Outcome {
@@ -39,7 +42,90 @@ export interface PersonaDiagnose {
   catalogId?: string | null
 }
 
-export interface Run {
+export type AttributionSection<T> =
+  | { state: 'available'; data: T }
+  | { state: 'empty'; data: T }
+  | { state: 'absent' | 'null' | 'invalid'; data: null }
+
+// WebUI detail fields preserve Service V2 evidence and nullability. Observation
+// IDs are decoded from the original JSON number tokens as strings, since Service
+// integers can exceed JavaScript's exact range. Source positions stay numeric.
+export type ObservationSource =
+  | ''
+  | 'slurm_info'
+  | 'job_keywords'
+  | 'applog'
+  | 'syslog'
+  | 'health_check'
+  | 'node_metrics'
+  | 'nvlink_metrics'
+  | 'ib_metrics'
+  | 'eth_metrics'
+  | 'network_syslog'
+  | 'ufmlog'
+  | 'csp_event'
+
+export interface AttributionSource {
+  observation_id: string
+  source: ObservationSource
+  pos: number | null
+  line: string | null
+  rule: string | null
+  time: string | null
+}
+
+export interface SourcedSymptom {
+  symptom: string
+  source: AttributionSource
+  catalog_id?: string | null
+}
+
+export type SymptomSite = {
+  status: 'bad' | 'interesting'
+  source: AttributionSource
+} & (
+  | { type: 'NodeSource'; node: string }
+  | { type: 'ResourcelessSource' }
+)
+
+export type DecisionNodeType =
+  | 'UNKNOWN'
+  | 'EXTRACTION'
+  | 'FILTER'
+  | 'SCRUB'
+  | 'REFINER'
+  | 'CASCADE_PRUNE'
+  | 'OUTCOME'
+
+export type DecisionAction = 'UNKNOWN' | 'CREATED' | 'MATCHED' | 'REMOVED' | 'PRUNED'
+
+export interface DecisionNode {
+  node_id: string
+  node_type: DecisionNodeType
+  hostname: string | null
+  symptom: string
+  rule_name: string | null
+  action: DecisionAction
+  reason?: string | null
+  datum?: string | null
+  line_num?: number | null
+  timestamp?: string | null
+  obs_source?: string | null
+}
+
+export interface DecisionEdge {
+  parent_id: string
+  child_id: string
+  edge_type: string
+}
+
+export interface DecisionGraph {
+  nodes: DecisionNode[]
+  edges: DecisionEdge[]
+}
+
+export interface RunSummary {
+  decisionGraphState: AttributionSection<DecisionGraph>['state']
   id: string
   jobId: string
   workload: string
@@ -63,10 +149,19 @@ export interface Run {
   responsibleNodes: string[]
   pipeline: string
   service: string
-  log: LogLine[]
   sibling?: string
   diagnose?: PersonaDiagnose
   operatorDiagnose?: PersonaDiagnose
+}
+
+export interface RunDetail extends RunSummary {
+  log: LogLine[]
+  attribution: {
+    rootSymptom: AttributionSection<SourcedSymptom>
+    symptomSites: AttributionSection<Record<string, SymptomSite[]>>
+    // Missing and null graphs both mean no graph is available to display.
+    decisionGraph: AttributionSection<DecisionGraph>
+  }
 }
 
 // Daily buckets cover only the outcomes the day-by-day charts plot. 'undetermined'

@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import type { FleetFilter } from '@/interfaces/filter'
 import { applyFilter } from '@/lib/filter-state'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { BootstrapPayload, Meta } from '@/interfaces/meta'
 import { ApiService } from '@/services/api.service'
 
@@ -25,13 +28,13 @@ export class ApiBootstrapService implements ApiService {
   private payload(): BootstrapPayload {
     return readBootstrap() ?? { runs: [], meta: EMPTY_META }
   }
-  async getAllRuns(): Promise<Run[]> {
+  async getAllRuns(): Promise<RunSummary[]> {
     return this.payload().runs
   }
-  async getRuns(filter: FleetFilter): Promise<Run[]> {
+  async getRuns(filter: FleetFilter): Promise<RunSummary[]> {
     return applyFilter(this.payload().runs, filter)
   }
-  async getRun(id: string): Promise<Run | undefined> {
+  async getRun(id: string): Promise<RunDetail | undefined> {
     return this.payload().runs.find((r) => r.id === id)
   }
   async getMeta(): Promise<Meta> {

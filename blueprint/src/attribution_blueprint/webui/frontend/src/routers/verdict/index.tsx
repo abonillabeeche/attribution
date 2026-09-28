@@ -1,8 +1,11 @@
-import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+import { useId, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import useSWR from 'swr'
-import { ChevronRight } from 'lucide-react'
-import type { Run } from '@/interfaces/attribution'
+import { ChevronRight, Server } from 'lucide-react'
+import type { RunDetail } from '@/interfaces/attribution'
 import { useApi } from '@/services/api-context'
 import { buildVerdictMarkdown } from '@/lib/evidence'
 import {
@@ -32,25 +35,21 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-} from '@/components/ui/table'
 import { VerdictPill } from '@/components/chip'
 import { DefHover } from '@/components/def-hover'
-import { NodeBubble } from '@/routers/verdict/components/node-bubble'
 import { NodeHoverCard } from '@/components/node-hover-card'
 import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
 import { useNav } from '@/hooks/use-nav'
+import { navigateService } from '@/services/navigate.service'
 import { LogHero } from '@/routers/verdict/components/log-hero'
+import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
+import { SymptomsSection } from '@/routers/verdict/components/symptom-sites'
 
 const SECTION_LABEL =
   'font-mono text-xs font-semibold tracking-widest uppercase text-foreground-muted my-5 mb-2.5 flex items-center gap-2.5'
 
-function Actions({ run }: { run: Run }) {
+function Actions({ run }: { run: RunDetail }) {
   const nav = useNav()
   const [copied, setCopied] = useState('')
   const flash = (label: string) => {
@@ -188,7 +187,7 @@ function GuidanceLine({ label, children }: { label: string; children: React.Reac
   )
 }
 
-function CloudOperatorGuidance({ run }: { run: Run }) {
+function CloudOperatorGuidance({ run }: { run: RunDetail }) {
   const card = run.operatorDiagnose
   if (card?.hasPersona !== true) return null
 
@@ -214,7 +213,8 @@ function CloudOperatorGuidance({ run }: { run: Run }) {
   )
 }
 
-function EvidenceList({ run }: { run: Run }) {
+function EvidenceList({ run }: { run: RunDetail }) {
+  const root = run.attribution.rootSymptom.state === 'available' ? run.attribution.rootSymptom.data : null
   return (
     <Card size="sm">
       <CardHead title="Verdict" />
@@ -224,12 +224,10 @@ function EvidenceList({ run }: { run: Run }) {
             <VerdictPill outcome={run.outcome} label={run.verdictLabel} />
           </KvCell>
           <KvCell label={<DefHover term="root-symptom-symptom">root_symptom.symptom</DefHover>}>
-            <b className="font-semibold">{run.rootSymptom.symptom}</b>
+            <b className="wrap-anywhere font-semibold">{root ? root.symptom : run.rootSymptom.symptom}</b>
           </KvCell>
           <KvCell label={<DefHover term="rule">root_symptom.rule</DefHover>}>
-            <Badge variant="outline" className="font-mono text-primary border-border">
-              {run.rootSymptom.rule}
-            </Badge>
+            <span className="wrap-anywhere">{run.rootSymptom.rule}</span>
           </KvCell>
           <KvCell label="root_symptom.time">
             <TimeHover date={run.rootSymptom.time} format="YYYY-MM-DD HH:mm:ss" />
@@ -259,6 +257,7 @@ function EvidenceList({ run }: { run: Run }) {
           </KvCell>
         </div>
         <CloudOperatorGuidance run={run} />
+        <div className="mt-4"><DecisionGraphAction run={run} detail={run} /></div>
       </CardContent>
       <CardFooter className="border-t flex-wrap gap-2 bg-background-secondary p-3">
         <Actions run={run} />
@@ -267,81 +266,46 @@ function EvidenceList({ run }: { run: Run }) {
   )
 }
 
-function SymptomsCard({ run }: { run: Run }) {
+function NodesSection({ run }: { run: RunDetail }) {
+  const titleId = useId()
+  const attemptNodes = new Set(run.nodeIds)
+  const responsibleNodes = new Set(run.responsibleNodes)
+  const nodes = [...new Set([...run.nodeIds, ...run.responsibleNodes])]
   return (
-    <Card size="sm">
-      <CardHead title="Symptoms" sub={`${run.symptoms.length} distinct`} />
-      <CardContent>
-        <div className="flex flex-wrap gap-1.5 py-1">
-          {run.symptoms.map((s, i) => (
-            <Badge
-              key={i}
-              variant="outline"
-              className="font-mono text-foreground border-border gap-2"
-            >
-              <span className="font-semibold">{s.name}</span>
-              <span className="text-foreground-muted">{s.sites}</span>
-            </Badge>
+    <section aria-labelledby={titleId} className="min-w-0 rounded-sm border border-border bg-card">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-3.5 py-3">
+        <h2 id={titleId} className="m-0 text-xs font-semibold uppercase tracking-[0.055em]">Nodes</h2>
+        <p className="m-0 text-[11px] text-foreground-muted">
+          <span className="font-mono tabular-nums">{attemptNodes.size}</span> in attempt · <span className="font-mono tabular-nums">{responsibleNodes.size}</span> responsible
+        </p>
+        <span className="ml-auto text-[11px] text-foreground-muted"><span className="font-mono tabular-nums">{run.gpuCount}</span> GPUs</span>
+      </div>
+      {nodes.length > 0 ? (
+        <ul aria-label="Nodes" className="m-0 flex max-h-72 list-none flex-wrap items-center gap-x-[22px] gap-y-1 overflow-y-auto px-1.5 py-2.5">
+          {nodes.map((node) => (
+            <li key={node} className="max-w-full">
+              <NodeHoverCard nodeId={node} asChild>
+                <Link
+                  to={navigateService.getPath('node', { id: node })}
+                  className="inline-flex max-w-full items-center gap-2 rounded-sm px-2 py-[5px] text-xs text-foreground-secondary no-underline transition-colors hover:bg-background-active hover:text-foreground focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted"
+                >
+                  <Server aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
+                  <span className="min-w-0 break-words leading-5">
+                    {node}{' '}
+                    {!attemptNodes.has(node) && <span className="mt-0.5 block text-[11px] text-foreground-muted">Not listed in attempt nodes</span>}
+                  </span>{' '}
+                  {responsibleNodes.has(node) && (
+                    <Badge variant="accent" className="ml-1">Responsible</Badge>
+                  )}
+                </Link>
+              </NodeHoverCard>
+            </li>
           ))}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function NodesCard({ run }: { run: Run }) {
-  const nav = useNav()
-  return (
-    <Card size="sm">
-      <CardHead title="GPUs" sub={`${run.gpuCount} this attempt`} />
-      <CardContent>
-        <div className="flex flex-wrap gap-1.5 py-1">
-          {run.nodeIds.map((n) => (
-            <NodeHoverCard key={n} nodeId={n}>
-              <NodeBubble
-                node={n}
-                responsible={run.responsibleNodes.includes(n)}
-                onClick={() => nav('node', { id: n })}
-              />
-            </NodeHoverCard>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ResponsibleNodesCard({ run }: { run: Run }) {
-  const nav = useNav()
-  if (run.responsibleNodes.length === 0) return null
-
-  return (
-    <Card size="sm">
-      <CardHead title="Responsible nodes" sub={`${run.responsibleNodes.length} listed`} />
-      <CardContent>
-        <ScrollArea className="max-h-72 w-full">
-          <Table>
-            <TableBody>
-              {run.responsibleNodes.map((node) => (
-                <TableRow key={node}>
-                  <TableCell className="font-mono text-xs">
-                    <NodeHoverCard nodeId={node}>
-                      <a
-                        className="text-foreground hover:text-primary cursor-pointer"
-                        onClick={() => nav('node', { id: node })}
-                      >
-                        {node}
-                      </a>
-                    </NodeHoverCard>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <ScrollBar orientation="vertical" />
-        </ScrollArea>
-      </CardContent>
-    </Card>
+        </ul>
+      ) : (
+        <p className="m-0 px-3.5 py-3 text-xs leading-5 text-foreground-muted">No nodes recorded for this attempt.</p>
+      )}
+    </section>
   )
 }
 
@@ -394,7 +358,7 @@ function RawPayload({ label, payload }: { label: string; payload: object }) {
   )
 }
 
-function RawPayloads({ run }: { run: Run }) {
+function RawPayloads({ run }: { run: RunDetail }) {
   return (
     <div>
       <div className={SECTION_LABEL}>
@@ -435,9 +399,8 @@ function RawPayloads({ run }: { run: Run }) {
 
 export function VerdictView() {
   const { id: verdictId = '' } = useParams<{ id: string }>()
-  const nav = useNav()
   const api = useApi()
-  const { data: fetchedRun, isLoading } = useSWR<Run | undefined, Error>(
+  const { data: fetchedRun, isLoading } = useSWR<RunDetail | undefined, Error>(
     verdictId !== '' ? ['run', verdictId] : null,
     () => api.getRun(verdictId),
   )
@@ -454,34 +417,25 @@ export function VerdictView() {
 
   return (
     <div>
-      <Breadcrumb className="mb-3.5 font-mono">
+      <Breadcrumb className="mb-3.5 font-sans">
         <BreadcrumbList>
           <BreadcrumbItem>
-            <BreadcrumbLink
-              onClick={() => nav('fleet')}
-              className="text-primary cursor-pointer"
-            >
-              Attribution
+            <BreadcrumbLink asChild className="text-primary cursor-pointer">
+              <Link to={navigateService.getPath('fleet')}>Attribution</Link>
             </BreadcrumbLink>
           </BreadcrumbItem>
-          {hasWorkload && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>{run.workload}</BreadcrumbItem>
-            </>
-          )}
           <BreadcrumbSeparator />
           <BreadcrumbItem>
-            <BreadcrumbPage className="inline-block text-foreground font-medium border-b-2 border-foreground-secondary pb-0.5">
+            <BreadcrumbPage className="inline-block text-foreground font-medium">
               {run.jobId}
-              {hasWorkload ? ` · attempt ${run.attempt}` : ''}
+              {hasWorkload && <> · attempt <span className="font-mono">{run.attempt}</span></>}
             </BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
 
       <div className="flex items-start gap-4 my-1.5 mb-2">
-        <h1 className="text-3xl font-bold m-0 tracking-tight">
+        <h1 className="min-w-0 break-words text-3xl font-bold m-0 tracking-tight">
           {hasWorkload ? (
             <>
               Attempt <span className="font-mono text-foreground">{run.attempt}</span> ·{' '}
@@ -534,15 +488,12 @@ export function VerdictView() {
           <EvidenceList run={run} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4 mb-5">
-        <SymptomsCard run={run} />
-        <NodesCard run={run} />
+      <div className="mb-5">
+        <SymptomsSection run={run} />
       </div>
-      {run.responsibleNodes.length > 0 && (
-        <div className="mb-5">
-          <ResponsibleNodesCard run={run} />
-        </div>
-      )}
+      <div className="mb-5">
+        <NodesSection run={run} />
+      </div>
 
       <RawPayloads run={run} />
     </div>
