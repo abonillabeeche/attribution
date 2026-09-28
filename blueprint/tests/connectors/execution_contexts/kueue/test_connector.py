@@ -1891,8 +1891,14 @@ class TestMergePrometheusPlacements:
         ctx.update(overrides)
         return ctx
 
-    def test_complete_live_placement_skips_prometheus(self, mocker):
+    def test_complete_live_placement_still_queries_prometheus(self, mocker):
+        """G5 regression: neither the live Pod count nor the Workload's
+        declared podSets count proves every historical Pod attempt has been
+        observed (a deleted-and-replaced Pod would look identical to a
+        never-recycled one from a live-only view). Prometheus must still be
+        queried even when live evidence already looks complete."""
         resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {"workload-uid-1": []}
         eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
 
         eca._merge_prometheus_placements_batched(
@@ -1900,7 +1906,7 @@ class TestMergePrometheusPlacements:
             owner_jobs={},
         )
 
-        resolver.placements_for_many.assert_not_called()
+        resolver.placements_for_many.assert_called_once()
 
     def test_partial_multi_pod_placement_queries_prometheus(self, mocker):
         resolver = mocker.Mock()
@@ -1925,8 +1931,13 @@ class TestMergePrometheusPlacements:
 
         resolver.placements_for_many.assert_called_once()
 
-    def test_declared_multi_pod_placement_skips_prometheus_when_complete(self, mocker):
+    def test_declared_multi_pod_placement_still_queries_prometheus_when_complete(self, mocker):
+        """G5 regression: a Workload declaring 2 desired Pods, with 2 live
+        placements observed, must still query Prometheus — the desired
+        count can be satisfied entirely by replacement Pods, silently
+        losing an earlier deleted Pod's placement if the query is skipped."""
         resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {"workload-uid-1": []}
         eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
         workload = self._workload()
         workload["spec"] = {"podSets": [{"name": "workers", "count": 2}]}
@@ -1946,7 +1957,7 @@ class TestMergePrometheusPlacements:
 
         eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
 
-        resolver.placements_for_many.assert_not_called()
+        resolver.placements_for_many.assert_called_once()
 
     @pytest.mark.parametrize(
         ("nodes", "pod_names"),
@@ -1979,6 +1990,7 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-1",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
+                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1"}],
                 }
             },
             "team-a/set-a-workers-1": {
@@ -1986,6 +1998,7 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-2",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
+                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1"}],
                 }
             },
         }
@@ -2035,6 +2048,37 @@ class TestMergePrometheusPlacements:
         assert [query.owner_job_uids for query in queries] == [{"job-uid-1"}, {"job-uid-2"}]
         assert first["nodes"] == ["node-a"]
         assert second["nodes"] == ["node-b"]
+
+    def test_deleted_original_pod_is_recovered_alongside_live_replacement(self, mocker):
+        """G5 end-to-end: a Workload declares 1 desired Pod. Its original
+        Pod (uid pod-uid-A) ran on node-a and was deleted; a replacement
+        Pod (uid pod-uid-B) is now live on node-b. Live evidence alone
+        satisfies the declared count (1 Pod, 1 node), which is exactly the
+        shape that made the old completeness gate skip Prometheus and lose
+        pod-uid-A's placement forever. The merged context must contain
+        both Pod UIDs and both nodes."""
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {
+            "workload-uid-1": [
+                {"pod_uid": "pod-uid-A", "pod_name": "pod-a", "node_name": "node-a", "source": "prometheus"},
+            ]
+        }
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        workload = self._workload()
+        workload["spec"] = {"podSets": [{"name": "workers", "count": 1}]}
+        context = self._context(
+            nodes=["node-b"],
+            pod_names=["pod-b"],
+            pod_placements=[
+                {"pod_uid": "pod-uid-B", "pod_name": "pod-b", "node_name": "node-b", "source": "live"},
+            ],
+        )
+
+        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+
+        resolver.placements_for_many.assert_called_once()
+        assert {p["pod_uid"] for p in context["pod_placements"]} == {"pod-uid-A", "pod-uid-B"}
+        assert set(context["nodes"]) == {"node-a", "node-b"}
 
 
 class TestPlacementReader:

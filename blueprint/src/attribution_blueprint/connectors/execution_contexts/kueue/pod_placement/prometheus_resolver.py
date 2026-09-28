@@ -42,7 +42,6 @@ class PrometheusPlacementResolver:
         auth: Auth | None = None,
         timeout_seconds: float = 60.0,
         lookback_padding_seconds: int = 300,
-        step_seconds: int = 60,
         cluster: str | None = None,
         cluster_label: str | None = None,
         pod_info_metric: str = "kube_pod_info",
@@ -54,8 +53,6 @@ class PrometheusPlacementResolver:
             raise ValueError("timeout_seconds must be positive")
         if lookback_padding_seconds < 0:
             raise ValueError("lookback_padding_seconds must not be negative")
-        if step_seconds <= 0:
-            raise ValueError("step_seconds must be positive")
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if bool(cluster) != bool(cluster_label):
@@ -79,7 +76,6 @@ class PrometheusPlacementResolver:
             timeout_seconds=timeout_seconds,
         )
         self.lookback_padding_seconds = lookback_padding_seconds
-        self.step_seconds = step_seconds
         self.cluster = cluster
         self.cluster_label = cluster_label
         self.pod_info_metric = pod_info_metric
@@ -221,7 +217,10 @@ class PrometheusPlacementResolver:
         owner_job_uids: set[str],
         window_seconds: int,
     ) -> str:
-        pod_matchers = self._base_matchers(namespace)
+        # `node!=""` excludes samples for a Pod that hasn't been scheduled
+        # yet, so an unscheduled sample can never masquerade as a recovered
+        # placement.
+        pod_matchers = [*self._base_matchers(namespace), 'node!=""']
         sorted_uids = sorted(owner_job_uids)
         if not sorted_uids:
             raise ValueError("owner_job_uids must not be empty")
@@ -236,11 +235,31 @@ class PrometheusPlacementResolver:
         ]
         pod_selector = f"{self.pod_info_metric}{{{','.join(pod_matchers)}}}"
         labels_selector = f"{self.pod_labels_metric}{{{','.join(labels_matchers)}}}"
-        return (
-            "last_over_time(("
-            f"{labels_selector} * on(namespace,pod,uid) group_left(node) {pod_selector}"
-            f")[{window_seconds}s:{self.step_seconds}s])"
-        )
+
+        # Window each raw metric independently, THEN join — never wrap the
+        # join itself in a subquery. A subquery re-evaluates its inner
+        # expression (here, the whole join) only at each step tick; a Pod
+        # that existed only briefly between two ticks would then never
+        # produce a joined sample, even though its raw kube_pod_labels/
+        # kube_pod_info samples are still in storage. last_over_time on each
+        # raw metric first retains that history regardless of tick timing.
+        labels_last = f"last_over_time({labels_selector}[{window_seconds}s])"
+        pod_last = f"last_over_time({pod_selector}[{window_seconds}s])"
+
+        # Aggregate away exporter-identity labels (instance/prometheus/
+        # replica/scrape-target labels an HA or federated backend such as
+        # Thanos/Mimir can attach) before matching, keeping only the
+        # semantic identity each side needs. Without this, two otherwise-
+        # identical retained series for the same Pod produce a
+        # "many-to-many matching not allowed" error and the whole batch's
+        # recovery is lost. A genuine conflict (the same Pod UID reported
+        # on two different nodes) still yields two distinct groups on the
+        # right and correctly fails the join rather than silently picking
+        # one node over the other.
+        labels_deduped = f"group by (namespace,pod,uid) ({labels_last})"
+        pod_deduped = f"group by (namespace,pod,uid,node) ({pod_last})"
+
+        return f"{labels_deduped} * on(namespace,pod,uid) group_left(node) {pod_deduped}"
 
     def _base_matchers(self, namespace: str) -> list[str]:
         matchers = [f"namespace={promql_string(namespace)}"]

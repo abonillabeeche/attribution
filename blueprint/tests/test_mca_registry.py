@@ -196,7 +196,6 @@ def test_built_schema_has_expected_shape():
         "cluster_label",
         "timeout_seconds",
         "lookback_padding_seconds",
-        "step_seconds",
         "batch_size",
         "pod_info_metric",
         "pod_labels_metric",

@@ -294,7 +294,6 @@ cluster = "prod-batch"
 cluster_label = "cluster"
 timeout_seconds = 60
 lookback_padding_seconds = 300
-step_seconds = 60
 batch_size = 20
 
 [eca.kueue.prometheus_metrics.auth]
@@ -314,7 +313,6 @@ Fields:
 | `auth.type`                | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki and PromQL metrics. Omit the `auth` block for unauthenticated endpoints. |
 | `timeout_seconds`          | No       | HTTP timeout. Defaults to `60.0`.                                                                                                          |
 | `lookback_padding_seconds` | No       | Seconds padded onto both ends of the Workload interval before querying. Defaults to `300`.                                                 |
-| `step_seconds`             | No       | Resolution step used inside the `last_over_time(...)` subquery. Defaults to `60`.                                                          |
 | `batch_size`               | No       | Maximum owner Job UIDs included in one shared query. Defaults to `20`.                                                                     |
 | `pod_info_metric`          | No       | kube-state-metrics Pod-to-node metric name. Defaults to `kube_pod_info`.                                                                   |
 | `pod_labels_metric`        | No       | kube-state-metrics Pod-label metric name. Defaults to `kube_pod_labels`.                                                                   |

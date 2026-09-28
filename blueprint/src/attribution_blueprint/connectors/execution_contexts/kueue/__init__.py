@@ -58,7 +58,6 @@ def _build_prometheus_metrics(spec: dict):
         spec.get("lookback_padding_seconds", 300),
         "eca.kueue.prometheus_metrics.lookback_padding_seconds",
     )
-    step = _coerce_int(spec.get("step_seconds", 60), "eca.kueue.prometheus_metrics.step_seconds")
     batch_size = _coerce_int(spec.get("batch_size", 20), "eca.kueue.prometheus_metrics.batch_size")
     try:
         return PrometheusPlacementResolver(
@@ -66,7 +65,6 @@ def _build_prometheus_metrics(spec: dict):
             auth=auth,
             timeout_seconds=timeout,
             lookback_padding_seconds=padding,
-            step_seconds=step,
             cluster=spec.get("cluster"),
             cluster_label=spec.get("cluster_label"),
             pod_info_metric=spec.get("pod_info_metric", "kube_pod_info"),
@@ -228,7 +226,6 @@ _registry.register_component(
             "cluster_label": _PARAM,
             "timeout_seconds": _PARAM,
             "lookback_padding_seconds": _PARAM,
-            "step_seconds": _PARAM,
             "batch_size": _PARAM,
             "pod_info_metric": _PARAM,
             "pod_labels_metric": _PARAM,

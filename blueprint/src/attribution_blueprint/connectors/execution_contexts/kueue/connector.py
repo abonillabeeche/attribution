@@ -548,22 +548,6 @@ def _non_negative_int(value: object) -> int | None:
     return None
 
 
-def _expected_pod_count(workload: dict) -> int | None:
-    """Return the Workload's declared Pod count, or None when unavailable."""
-    pod_sets = (workload.get("spec") or {}).get("podSets")
-    if not isinstance(pod_sets, list) or not pod_sets:
-        return None
-    total = 0
-    for pod_set in pod_sets:
-        if not isinstance(pod_set, dict):
-            return None
-        count = _non_negative_int(pod_set.get("count", 1))
-        if count is None:
-            return None
-        total += count
-    return total
-
-
 def _resource_gpu_count(resources: object) -> int:
     """Return GPU count from one Kubernetes resources map.
 
@@ -1189,13 +1173,17 @@ class KueueExecutionContextAdapter:
         queries: list[PlacementQuery] = []
         contexts_by_workload_uid: dict[str, KueueExecutionContext] = {}
         for workload, context in parsed:
-            expected_pods = _expected_pod_count(workload)
-            observed_placements = len(context.get("pod_placements") or [])
-            placement_complete = bool(context["nodes"] and context.get("pod_names")) and (
-                expected_pods is None or observed_placements >= expected_pods
-            )
-            if placement_complete:
-                continue
+            # Do NOT skip based on "placement already looks complete": neither
+            # the live Pod count nor the Workload's declared podSets count
+            # proves every historical Pod attempt has been observed. A
+            # Workload can declare one Pod, have its original Pod deleted and
+            # replaced, and still show observed_placements == expected_pods
+            # == 1 from live evidence alone — silently losing the deleted
+            # Pod's placement, which defeats this resolver's entire purpose
+            # (recovering placement history that Kubernetes itself no longer
+            # retains). Always query when the resolver is enabled and usable;
+            # results are merged by Pod UID below, so re-querying an already
+            # fully-observed Workload is just a harmless no-op merge.
             owner_job_uids = _owner_job_uids(workload, owner_jobs)
             workload_uid = context["workload_uid"]
             if not owner_job_uids or not workload_uid:

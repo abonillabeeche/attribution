@@ -41,7 +41,6 @@ placement_records_enabled = false
 # cluster = "CHANGE_ME_CLUSTER"
 # cluster_label = "cluster"
 # lookback_padding_seconds = 300
-# step_seconds = 60
 # batch_size = 20
 # pod_labels_metric = "kube_pod_labels"
 # pod_controller_uid_label = "label_batch_kubernetes_io_controller_uid"

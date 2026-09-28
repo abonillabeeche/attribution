@@ -90,10 +90,6 @@ class TestConstructorValidation:
         with pytest.raises(ValueError, match="lookback_padding_seconds"):
             PrometheusPlacementResolver(endpoint="https://prom.example", lookback_padding_seconds=-1)
 
-    def test_non_positive_step_rejected(self):
-        with pytest.raises(ValueError, match="step_seconds"):
-            PrometheusPlacementResolver(endpoint="https://prom.example", step_seconds=0)
-
     def test_non_positive_batch_size_rejected(self):
         with pytest.raises(ValueError, match="batch_size"):
             PrometheusPlacementResolver(endpoint="https://prom.example", batch_size=0)
@@ -185,19 +181,25 @@ class TestPlacementsForGuards:
 
 class TestUIDQueryConstruction:
     def test_single_job_uid_query_shape(self):
-        source = PrometheusPlacementResolver(endpoint="https://prom.example", step_seconds=60)
+        """G6: last_over_time must wrap each raw metric individually (never
+        the joined expression, never a subquery). G7: each side must be
+        dedup-aggregated over its semantic identity labels before the join.
+        `node!=""` on the info side excludes unscheduled samples."""
+        source = PrometheusPlacementResolver(endpoint="https://prom.example")
         query = source._job_uids_query(
             namespace="team-a",
             owner_job_uids={"job-uid-1"},
             window_seconds=3600,
         )
         assert query == (
-            "last_over_time(("
+            "group by (namespace,pod,uid) (last_over_time("
             'kube_pod_labels{namespace="team-a",'
-            'label_batch_kubernetes_io_controller_uid="job-uid-1"} '
+            'label_batch_kubernetes_io_controller_uid="job-uid-1"}'
+            "[3600s])) "
             "* on(namespace,pod,uid) group_left(node) "
-            'kube_pod_info{namespace="team-a"}'
-            ")[3600s:60s])"
+            "group by (namespace,pod,uid,node) (last_over_time("
+            'kube_pod_info{namespace="team-a",node!=""}'
+            "[3600s]))"
         )
 
     def test_uid_query_includes_cluster_matcher_first(self):
@@ -207,7 +209,7 @@ class TestUIDQueryConstruction:
             owner_job_uids={"job-uid-1"},
             window_seconds=60,
         )
-        assert 'kube_pod_info{cluster="prod",namespace="team-a"}' in query
+        assert 'kube_pod_info{cluster="prod",namespace="team-a",node!=""}' in query
         assert (
             'kube_pod_labels{cluster="prod",namespace="team-a",'
             'label_batch_kubernetes_io_controller_uid="job-uid-1"}'
@@ -236,6 +238,41 @@ class TestUIDQueryConstruction:
             window_seconds=1200,
         )
         assert 'label_batch_kubernetes_io_controller_uid=~"job-uid-1|job\\\\.uid-2"' in query
+
+    def test_raw_metrics_are_windowed_before_the_join_not_the_joined_result(self):
+        """G6 regression: `last_over_time` must appear once around each raw
+        metric selector. It must NOT wrap the join itself (that structure
+        is a subquery re-evaluated only at each step tick, which loses
+        Pods that lived only between two ticks)."""
+        source = PrometheusPlacementResolver(endpoint="https://prom.example")
+        query = source._job_uids_query(
+            namespace="team-a",
+            owner_job_uids={"job-uid-1"},
+            window_seconds=3600,
+        )
+        assert query.count("last_over_time(") == 2
+        # The join operator must sit BETWEEN the two last_over_time(...)
+        # results, not inside a last_over_time(...) itself.
+        join_index = query.index("* on(namespace,pod,uid) group_left(node)")
+        first_last_over_time_end = query.index("]))") + len("]))")
+        assert join_index >= first_last_over_time_end
+        assert not query.startswith("last_over_time((")
+
+    def test_dedup_aggregation_wraps_each_side_before_the_join(self):
+        """G7 regression: each side of the join must be pre-aggregated by
+        its semantic identity (namespace/pod/uid[/node]) so duplicate
+        exporter-replica series (differing only in instance/prometheus/
+        replica labels on an HA/federated backend) collapse to one series
+        per Pod before matching, instead of triggering a many-to-many
+        matching error."""
+        source = PrometheusPlacementResolver(endpoint="https://prom.example")
+        query = source._job_uids_query(
+            namespace="team-a",
+            owner_job_uids={"job-uid-1"},
+            window_seconds=60,
+        )
+        assert query.startswith("group by (namespace,pod,uid) (last_over_time(")
+        assert "group by (namespace,pod,uid,node) (last_over_time(" in query
 
 
 class TestPlacementsForMany:
