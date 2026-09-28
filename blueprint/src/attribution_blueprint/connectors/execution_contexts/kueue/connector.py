@@ -299,11 +299,11 @@ def _pod_reports_node_failure(pod: dict) -> bool:
     """Return whether a Pod carries a node-loss signal.
 
     `DisruptionTarget` is only patched onto a pod that isn't already in a
-    terminal phase; it's stable as of Kubernetes v1.31. Its `reason` tells
-    apart which subsystem detected the loss — see
-    `_NODE_LOSS_DISRUPTION_REASONS` for why both are needed: PodGC's
-    reason alone misses a genuinely dead node whose API object was never
-    explicitly deleted.
+    terminal phase; it's stable as of Kubernetes v1.31. Its `reason` must be
+    in `_NODE_LOSS_DISRUPTION_REASONS` (only `DeletionByPodGC`) to count as
+    node loss — `DeletionByTaintManager` only proves the node was
+    unreachable/NotReady, not that the Node API object was ever deleted, so
+    it is deliberately excluded.
     """
     status = pod.get("status") or {}
     if status.get("reason") == "NodeLost":

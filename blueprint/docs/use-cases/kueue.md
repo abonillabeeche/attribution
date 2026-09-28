@@ -199,8 +199,8 @@ Kueue derives `FINISHED_SUCCEEDED` from a `Finished=True` condition with reason
 and preserves the original value as `kueue_state` in `raw_scheduler_json`. For
 `FINISHED_FAILED`, the adapter uses the direct Job or JobSet child Job reason
 to normalize the service-facing state to `TIMEOUT` or `FAILED`. Legacy
-`NodeLost` pod status and the Kubernetes 1.37 `DisruptionTarget=True`,
-`DeletionByPodGC` condition normalize the state to `NODE_FAIL`, even if Kueue
+`NodeLost` pod status and the `DisruptionTarget=True` (stable since Kubernetes
+v1.31), `DeletionByPodGC` condition normalize the state to `NODE_FAIL`, even if Kueue
 remains `ADMITTED`. The adapter also normalizes `EVICTED_PREEMPTED` and
 `PREEMPTED` to the service-facing state `PREEMPTED`, and
 `EVICTED_NODEFAILURES` to `NODE_FAIL`. A native `Requeued=True` condition uses
