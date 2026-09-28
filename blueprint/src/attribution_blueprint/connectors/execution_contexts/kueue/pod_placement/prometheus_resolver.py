@@ -217,9 +217,6 @@ class PrometheusPlacementResolver:
         owner_job_uids: set[str],
         window_seconds: int,
     ) -> str:
-        # `node!=""` excludes samples for a Pod that hasn't been scheduled
-        # yet, so an unscheduled sample can never masquerade as a recovered
-        # placement.
         pod_matchers = [*self._base_matchers(namespace), 'node!=""']
         sorted_uids = sorted(owner_job_uids)
         if not sorted_uids:
@@ -236,33 +233,14 @@ class PrometheusPlacementResolver:
         pod_selector = f"{self.pod_info_metric}{{{','.join(pod_matchers)}}}"
         labels_selector = f"{self.pod_labels_metric}{{{','.join(labels_matchers)}}}"
 
-        # Window each raw metric independently, THEN join — never wrap the
-        # join itself in a subquery. A subquery re-evaluates its inner
-        # expression (here, the whole join) only at each step tick; a Pod
-        # that existed only briefly between two ticks would then never
-        # produce a joined sample, even though its raw kube_pod_labels/
-        # kube_pod_info samples are still in storage. last_over_time on each
-        # raw metric first retains that history regardless of tick timing.
+        # Window each raw metric independently, THEN join. A subquery 
+        # re-evaluates its inner expression only at each step tick.
         labels_last = f"last_over_time({labels_selector}[{window_seconds}s])"
         pod_last = f"last_over_time({pod_selector}[{window_seconds}s])"
 
-        # Aggregate away exporter-identity labels (instance/prometheus/
-        # replica/scrape-target labels an HA or federated backend such as
-        # Thanos/Mimir can attach) before matching, keeping only the
-        # semantic identity each side needs. Without this, two otherwise-
-        # identical retained series for the same Pod produce a
-        # "many-to-many matching not allowed" error and the whole batch's
-        # recovery is lost. A genuine conflict (the same Pod UID reported
-        # on two different nodes) still yields two distinct groups on the
-        # right and correctly fails the join rather than silently picking
-        # one node over the other.
-        #
-        # pod_controller_uid_label must be kept in the left side's `by`
-        # clause: a PromQL aggregation drops every label not named in it,
-        # and placements_for_many() reads that label back out of the
-        # result to know which owner Job (and therefore which batched
-        # Workload query) each joined series belongs to. Dropping it here
-        # would silently discard every real result in the batched path.
+        # Aggregate away exporter-identity labels before matching. 
+        # A genuine conflict (the same Pod UID reported on two different nodes) 
+        # still yields two distinct groups on the right.
         labels_deduped = f"group by (namespace,pod,uid,{self.pod_controller_uid_label}) ({labels_last})"
         pod_deduped = f"group by (namespace,pod,uid,node) ({pod_last})"
 

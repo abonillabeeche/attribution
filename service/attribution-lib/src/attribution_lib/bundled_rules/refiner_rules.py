@@ -1018,11 +1018,7 @@ def slurm_state_symptoms(context: RefinerContext):
         and len(job_info.nodes) != 1
     ):
         # Scheduler-level node-loss evidence is still actionable when the
-        # exact failed node cannot be identified (for example, a multi-node
-        # Kueue Topology-Aware Scheduling eviction). Kept as the "slurm"
-        # symptom name (not a Kueue-specific string) so it participates in
-        # the existing cascade_discards/pattern lists without needing every
-        # one of them to also list a second variant.
+        # exact failed node cannot be identified.
         symptoms.add(
             job_info.source_value(
                 "Node failure reported by slurm",
