@@ -192,7 +192,7 @@ class TestUIDQueryConstruction:
             window_seconds=3600,
         )
         assert query == (
-            "group by (namespace,pod,uid) (last_over_time("
+            "group by (namespace,pod,uid,label_batch_kubernetes_io_controller_uid) (last_over_time("
             'kube_pod_labels{namespace="team-a",'
             'label_batch_kubernetes_io_controller_uid="job-uid-1"}'
             "[3600s])) "
@@ -271,8 +271,32 @@ class TestUIDQueryConstruction:
             owner_job_uids={"job-uid-1"},
             window_seconds=60,
         )
-        assert query.startswith("group by (namespace,pod,uid) (last_over_time(")
+        assert query.startswith("group by (namespace,pod,uid,label_batch_kubernetes_io_controller_uid) (last_over_time(")
         assert "group by (namespace,pod,uid,node) (last_over_time(" in query
+
+    def test_dedup_aggregation_preserves_owner_uid_label(self):
+        """Regression: a PromQL aggregation drops every label not named in
+        its `by` clause. placements_for_many() reads
+        `pod_controller_uid_label` back out of each result series to know
+        which owner Job (and therefore which batched Workload query) it
+        belongs to (see TestPlacementsForMany below) - if the left-hand
+        aggregation drops that label, every real Prometheus result is
+        silently discarded in the batched path even though the query
+        itself succeeds."""
+        source = PrometheusPlacementResolver(
+            endpoint="https://prom.example",
+            pod_controller_uid_label="custom_controller_uid",
+        )
+        query = source._job_uids_query(
+            namespace="team-a",
+            owner_job_uids={"job-uid-1"},
+            window_seconds=60,
+        )
+        left_aggregation = query.split(" * on(namespace,pod,uid)")[0]
+        assert left_aggregation.startswith("group by (")
+        by_clause = left_aggregation[len("group by (") : left_aggregation.index(")")]
+        by_labels = set(by_clause.split(","))
+        assert source.pod_controller_uid_label in by_labels
 
 
 class TestPlacementsForMany:

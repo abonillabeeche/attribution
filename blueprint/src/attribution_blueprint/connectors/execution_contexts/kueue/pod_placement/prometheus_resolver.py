@@ -256,7 +256,14 @@ class PrometheusPlacementResolver:
         # on two different nodes) still yields two distinct groups on the
         # right and correctly fails the join rather than silently picking
         # one node over the other.
-        labels_deduped = f"group by (namespace,pod,uid) ({labels_last})"
+        #
+        # pod_controller_uid_label must be kept in the left side's `by`
+        # clause: a PromQL aggregation drops every label not named in it,
+        # and placements_for_many() reads that label back out of the
+        # result to know which owner Job (and therefore which batched
+        # Workload query) each joined series belongs to. Dropping it here
+        # would silently discard every real result in the batched path.
+        labels_deduped = f"group by (namespace,pod,uid,{self.pod_controller_uid_label}) ({labels_last})"
         pod_deduped = f"group by (namespace,pod,uid,node) ({pod_last})"
 
         return f"{labels_deduped} * on(namespace,pod,uid) group_left(node) {pod_deduped}"
