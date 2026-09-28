@@ -616,13 +616,13 @@ def test_disruption_target_pod_normalizes_admitted_workload_to_node_fail(mocker)
     assert ctx["failed_node"] == "node020"
 
 
-def test_taint_manager_disruption_target_normalizes_admitted_workload_to_node_fail(mocker):
-    """A node that goes unreachable without its Node API object ever being
-    deleted (crash, network partition) never gets a DeletionByPodGC
-    DisruptionTarget — only DeletionByTaintManager, once the NoExecute
-    toleration window expires. Verified empirically on a kind cluster
-    (2026-09-09): DeletionByPodGC requires an explicit Node deletion and is
-    never reached on this path even after 7.5 minutes.
+def test_taint_manager_disruption_target_alone_does_not_indicate_node_fail(mocker):
+    """DeletionByTaintManager only proves the node was unreachable/NotReady
+    long enough for the NoExecute toleration window to expire - it does
+    NOT prove the Node API object was ever deleted, unlike DeletionByPodGC.
+    Treating it as node-loss evidence risks misclassifying transient
+    unreachability or a routine eviction as a hardware failure, so it must
+    not normalize the Workload to NODE_FAIL on its own.
     """
     workloads = deepcopy(WORKLOADS)
     workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-still-running-qq01")
@@ -651,9 +651,9 @@ def test_taint_manager_disruption_target_normalizes_admitted_workload_to_node_fa
 
     ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-still-running-qq01"])[0]
 
-    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["state"] != "NODE_FAIL"
     assert ctx["kueue_state"] == "ADMITTED"
-    assert ctx["failed_node"] == "node020"
+    assert "failed_node" not in ctx
 
 
 def test_evicted_workload_state_and_end_time(mocker):

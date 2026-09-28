@@ -284,11 +284,13 @@ _NODE_LOSS_DISRUPTION_REASONS = frozenset(
         # PodGC's controller sets this only once the Node API object itself
         # is confirmed deleted.
         "DeletionByPodGC",
-        # The node goes unreachable/NotReady but its API object is never 
-        # deleted. The taint manager evicts non-tolerating pods once the
-        # `node.kubernetes.io/not-ready:NoExecute` toleration window expires
-        # and sets this reason instead of DeletionByPodGC.
-        "DeletionByTaintManager",
+        # DeletionByTaintManager is deliberately excluded: the taint manager
+        # evicts non-tolerating pods once the
+        # `node.kubernetes.io/not-ready:NoExecute` toleration window
+        # expires, which only proves the node was unreachable/NotReady, not
+        # that the Node API object itself was ever deleted. Treating it as
+        # node loss risks misclassifying transient unreachability or a
+        # routine eviction as a hardware failure.
     }
 )
 
