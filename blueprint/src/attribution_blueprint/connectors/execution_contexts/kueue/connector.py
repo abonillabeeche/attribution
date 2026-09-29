@@ -885,12 +885,14 @@ class KueueExecutionContextAdapter:
         context: str | None = None,
         namespace: str | None = None,
         timeout_seconds: int = 60,
+        event_max_age_seconds: int = 3600,
     ):
         self.kubectl_path = kubectl_path
         self.kubeconfig = kubeconfig
         self.context = context
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        self.event_max_age_seconds = event_max_age_seconds
 
     # --- public protocol ---------------------------------------------------
 
@@ -1129,7 +1131,13 @@ class KueueExecutionContextAdapter:
         `--field-selector` — never a namespace-wide Event list. This keeps
         the RBAC/scale/retention footprint bounded to this one workload
         one `kubectl get events` call per owner Job UID and per pod name.
+        Skips entirely (no calls) once `context["end_time"]` is older than
+        `event_max_age_seconds`.
         """
+        age = datetime.now(tz=timezone.utc) - context["end_time"]
+        if age.total_seconds() > self.event_max_age_seconds:
+            return [], []
+
         namespace = context["namespace"]
         job_uids = _owner_job_uids(workload, owner_jobs)
         if not job_uids:
