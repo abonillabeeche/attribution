@@ -322,9 +322,9 @@ Fields:
 `cluster` and `cluster_label` are optional for a single-cluster endpoint, but
 must be set together for a shared backend. The source evaluates an instant
 `last_over_time` query over the relevant Workload intervals. Following FACT's
-node-metadata collection pattern, the adapter combines owner Job UIDs from all
-incomplete Workloads in the run, groups them by namespace, and queries them in
-bounded batches. It then partitions the returned mappings back to each
+node-metadata collection pattern, the adapter combines owner Job UIDs from
+every Workload in the run that has one, groups them by namespace, and queries
+them in bounded batches. It then partitions the returned mappings back to each
 Workload by exact Job UID. The query joins `kube_pod_labels` to
 `kube_pod_info` on namespace, Pod name, and Pod UID. For JobSets, the adapter
 first resolves the current child Job UIDs from Kubernetes. Configure
@@ -368,9 +368,11 @@ child Job objects so the adapter can resolve their exact UIDs.
 
 Kueue time-range filtering is client-side because the Workload API does not
 provide server-side time filtering. The adapter reads pod and node names from
-live owned pods and recorder records. It queries configured Prometheus
-placement data when either list is unavailable or the number of structured
-placements is below the Pod count declared by the Workload's `podSets`.
+live owned pods and recorder records, then always merges in configured
+Prometheus placement data for Workloads with an owner Job (already-known Pod
+UIDs take precedence). If nodes or pod names are still missing afterward, it
+falls back to querying Kubernetes Events for UID-matched Pod scheduling
+evidence, bounded by `event_max_age_seconds`.
 
 Prometheus recovery is bounded by kube-state-metrics scrape cadence and backend
 retention. A Pod that exists entirely between scrapes is not recoverable.
