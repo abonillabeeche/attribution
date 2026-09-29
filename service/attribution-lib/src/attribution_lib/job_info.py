@@ -40,6 +40,32 @@ T = TypeVar("T")
 
 NVRX_TAG = "nvrx"
 
+# Scheduler identities recognized well enough to render scheduler-aware output.
+# See the Scheduler-Aware Language RFC (workload.scheduler / JobInfo.scheduler):
+# unrecognized tokens normalize to "" rather than passing through raw, so no
+# unvalidated string is ever threaded into an emitted symptom ID.
+SUPPORTED_SCHEDULERS: frozenset[str] = frozenset({"slurm", "kueue"})
+
+
+def normalize_scheduler_identity(raw: "str | None") -> str:
+    """Normalize a raw scheduler token to a supported, lowercase scheduler identity.
+
+    Args:
+        raw: A raw scheduler token, e.g. from ``workload.scheduler`` or a legacy
+            ``workload.type`` value used as a migration-era fallback.
+
+    Returns:
+        The lowercased token when it is a member of ``SUPPORTED_SCHEDULERS``;
+        otherwise ``""``. Empty/absent input also normalizes to ``""``. The
+        empty string means "no known scheduler": callers must not use it to
+        build a rendered ID and should fall back to Slurm-preserving or
+        generic wording instead.
+    """
+    if not raw:
+        return ""
+    normalized = raw.strip().lower()
+    return normalized if normalized in SUPPORTED_SCHEDULERS else ""
+
 
 def _coerce_optional_int(raw: "str | int | None") -> Optional[int]:
     """Parse a SlurmDB integer field, treating None and empty string as absent.
@@ -70,7 +96,16 @@ class JobInfo(NamedTuple):
     """Container class for parameters extracted from the job system, intended to be given to attribution engines (and not modified)"""
 
     id: str
+    # Legacy workload/category token from the wire (e.g. "slurm", "runai", "",
+    # "interactive"). Preserved verbatim for compatibility with existing
+    # consumers; new code that needs scheduler identity should read
+    # `scheduler` instead. See the Scheduler-Aware Language RFC.
     type: str
+    # Normalized scheduler identity: "slurm", "kueue", or "" when unset/not
+    # recognized. Set explicitly via JobInfoBuilder.scheduler(...), or derived
+    # by falling back to normalizing `type` when not set. Unlike `type`, this
+    # is always one of SUPPORTED_SCHEDULERS or "" -- never an arbitrary string.
+    scheduler: str
     state: str
     cluster: str
     nodes: list[str]
@@ -233,6 +268,10 @@ class JobInfo(NamedTuple):
                 source_name="slurmdb",
                 node_to_ranks=node_to_ranks,
             )
+            # This ingestion path is dedicated to Slurm, independent of whatever
+            # `type` happens to carry, so pin the scheduler identity explicitly
+            # rather than relying on the type-derived fallback.
+            .scheduler("slurm")
             .num_gpus(int(slurmdb_job.get("gpus", 0)))
             .srun_cmd(slurmdb_job["srun_cmd"])
             .exit_code_signal(_coerce_optional_int(slurmdb_job.get("exit_code_signal")))
@@ -257,6 +296,7 @@ class JobInfoBuilder:
     _exit_code: Optional[int] = None
     _tags: Optional[frozenset[str]] = None
     _type: str
+    _scheduler: Optional[str] = None
     _cancelled_by: Optional[str] = None
     _state: str
     _failed_node: Optional[str] = None
@@ -383,6 +423,21 @@ class JobInfoBuilder:
         self._tags = in_tags
         return self
 
+    def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
+        """Set the explicit scheduler identity (e.g. "slurm", "kueue").
+
+        Optional: when not called, `build()` falls back to normalizing `type`,
+        which keeps existing V1-style callers compatible without any code
+        change. The final value is always normalized through
+        `normalize_scheduler_identity`, so an unrecognized token here still
+        resolves to "" rather than being threaded through verbatim.
+        """
+        if self._scheduler is not None:
+            raise JobInfoDuplicateFieldError("scheduler")
+        if in_scheduler:  # Normalize empty/None scheduler to unset, like cancelled_by.
+            self._scheduler = in_scheduler
+        return self
+
     def cancelled_by(self, in_cancelled_by: str) -> "JobInfoBuilder":
         if self._cancelled_by is not None:
             raise JobInfoDuplicateFieldError("cancelled_by")
@@ -471,6 +526,11 @@ class JobInfoBuilder:
 
         node_from_rank: dict[int, str] = {r: n for n, ranks in self._node_to_ranks.items() for r in ranks}
 
+        # Prefer an explicit scheduler(...) call; otherwise fall back to deriving it
+        # from `type` (the pre-RFC wire value). Either way, always normalize so an
+        # unrecognized token resolves to "" rather than passing through verbatim.
+        scheduler = normalize_scheduler_identity(self._scheduler if self._scheduler is not None else self._type)
+
         return JobInfo(
             id=self._id,
             srun_cmd=self._srun_cmd,
@@ -478,6 +538,7 @@ class JobInfoBuilder:
             exit_code=self._exit_code,
             tags=self._tags if self._tags is not None else frozenset(),
             type=self._type,
+            scheduler=scheduler,
             cancelled_by=self._cancelled_by,
             state=self._state,
             failed_node=self._failed_node,

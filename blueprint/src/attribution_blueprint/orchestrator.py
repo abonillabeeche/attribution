@@ -300,6 +300,13 @@ class AttributionOrchestrator:
             "interest_end_time": ctx["end_time"].isoformat(),
             "nodes": node_to_ranks,
         }
+        # `workload.scheduler` is a new, explicit V2 field (Scheduler-Aware
+        # Language RFC) decoupled from `workload.type`/`workload_type`. The BP
+        # already tracks its own execution-context `scheduler` value for
+        # SQLite labeling (see ExecutionContext.scheduler); forward it here so
+        # the service can key scheduler-aware rendering off it too.
+        if "scheduler" in ctx:
+            workload["scheduler"] = ctx["scheduler"]
         if "failed_node" in ctx:
             workload["failed_node"] = ctx["failed_node"].lower()
         if "cancelled_by" in ctx:

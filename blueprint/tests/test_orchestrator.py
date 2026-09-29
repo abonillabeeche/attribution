@@ -482,8 +482,9 @@ def test_build_attributor_info_missing_workload_type_is_undefined():
     assert info["workload"]["type"] == ""
 
 
-def test_wire_kueue_workload_type_is_forwarded_without_scheduler_field():
-    """Kueue is explicit on the wire; the internal scheduler field stays private."""
+def test_wire_carries_scheduler_independently_of_workload_type():
+    """`workload.scheduler` is forwarded onto the wire alongside, but decoupled
+    from, `workload.type`."""
     ctx = _make_ctx("ctx-7")
     ctx["workload_type"] = "kueue"
     ctx["scheduler"] = "kueue"
@@ -492,6 +493,18 @@ def test_wire_kueue_workload_type_is_forwarded_without_scheduler_field():
     info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == "kueue"
+    assert info["workload"]["scheduler"] == "kueue"
+
+
+def test_wire_omits_scheduler_when_context_has_none():
+    """Contexts without a `scheduler` key (e.g. the static adapter today) must
+    not send an explicit `null`/empty scheduler."""
+    ctx = _make_ctx("ctx-7")
+    assert "scheduler" not in ctx
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
     assert "scheduler" not in info["workload"]
 
 

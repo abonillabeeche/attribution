@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 from attribution_lib.exceptions import UnprocessedObservationError
 
+from app.attributor import WorkloadTypeEnum
 from app.exceptions import (
     DuplicateAttributorError,
     DuplicateObservationError,
@@ -439,6 +440,43 @@ class TestV2WorkloadValidation:
         info = make_up_attributor_info("v2", nodes={"node0": [0, 1], "node1": [2]})
         response = client.post("/v2/attributor", content=info.model_dump_json())
         self._assert_validation_error_shape(response)
+
+
+class TestSchedulerIdentityTranslation:
+    """workload.scheduler -> JobInfo.scheduler (Scheduler-Aware Language RFC).
+
+    V2 carries the new explicit field; V1 has no wire change and instead falls
+    back to deriving JobInfo.scheduler from workload.type."""
+
+    def test_v2_explicit_scheduler_is_normalized_onto_job_info(self):
+        info = make_up_attributor_info("v2", type="anything", scheduler="KUEUE")
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == "kueue"
+        assert job_info.type == "anything"  # type is preserved verbatim regardless
+
+    def test_v2_missing_scheduler_falls_back_to_normalizing_type(self):
+        info = make_up_attributor_info("v2", type="slurm", scheduler=None)
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == "slurm"
+
+    def test_v2_unrecognized_scheduler_normalizes_to_empty(self):
+        info = make_up_attributor_info("v2", type="slurm", scheduler="not-a-real-scheduler")
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == ""
+
+    def test_v1_has_no_scheduler_field_and_derives_from_type(self):
+        info = make_up_attributor_info("v1", type=WorkloadTypeEnum.SLURM)
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == "slurm"
+        assert not hasattr(info.workload, "scheduler")
 
 
 class TestV1NodeToRanksOverride:

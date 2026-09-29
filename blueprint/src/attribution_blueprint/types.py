@@ -34,7 +34,8 @@ class ExecutionContext(TypedDict):
     workload_type: NotRequired[str]
     # BP-internal scheduler identity (the ECA component that discovered this
     # context: "slurm", "kueue", "static", ...). SQLiteOutput reads this for
-    # the `scheduler_type` column independently of the service wire value.
+    # the `scheduler_type` column. Also forwarded as `workload.scheduler` on
+    # the V2 wire, decoupled from the legacy `workload_type`.
     scheduler: NotRequired[str]
     # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
     # it = the Workload's metadata.uid (a new Workload is created per

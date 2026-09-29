@@ -18,7 +18,14 @@ from attribution_lib.exceptions import (
     JobInfoNodeNameCollisionError,
     JobInfoUnevenNodeToRanksError,
 )
-from attribution_lib.job_info import JobInfoBuilder, UnknownNodeError, _coerce_optional_int, _coerce_tags
+from attribution_lib.job_info import (
+    JobInfo,
+    JobInfoBuilder,
+    UnknownNodeError,
+    _coerce_optional_int,
+    _coerce_tags,
+    normalize_scheduler_identity,
+)
 
 
 class TestJobInfo:
@@ -317,3 +324,83 @@ class TestJobInfoTags:
     )
     def test_coerce_optional_int(self, raw, expected):
         assert _coerce_optional_int(raw) == expected
+
+
+class TestNormalizeSchedulerIdentity:
+    """The allowlist-based normalizer shared by JobInfoBuilder.build()."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("slurm", "slurm"),
+            ("kueue", "kueue"),
+            ("SLURM", "slurm"),  # case-insensitive
+            (" kueue ", "kueue"),  # trims surrounding whitespace
+            ("runai", ""),  # recognized workload type, but not yet a supported scheduler
+            ("interactive", ""),  # non-scheduler workload.type value
+            ("nonsense", ""),  # unrecognized token must not pass through
+            ("", ""),
+            (None, ""),
+        ],
+    )
+    def test_normalize_scheduler_identity(self, raw, expected):
+        assert normalize_scheduler_identity(raw) == expected
+
+
+def _end_time(timezone):
+    return datetime.fromtimestamp(1700001000, tz=timezone)
+
+
+class TestJobInfoBuilderScheduler:
+    """JobInfoBuilder.scheduler(...) and its build()-time fallback."""
+
+    def test_explicit_scheduler_is_normalized(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="anything")
+        job_info = builder.scheduler("KUEUE").job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler == "kueue"
+        assert job_info.type == "anything"  # `type` is preserved verbatim regardless
+
+    def test_falls_back_to_normalizing_type_when_unset(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="slurm")
+        job_info = builder.job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler == "slurm"
+
+    def test_unrecognized_type_falls_back_to_empty_scheduler(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="training")
+        job_info = builder.job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler == ""
+
+    def test_scheduler_setter_rejects_duplicate(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.scheduler("slurm")
+        with pytest.raises(JobInfoDuplicateFieldError):
+            builder.scheduler("kueue")
+
+    def test_empty_scheduler_call_does_not_count_as_set(self, timezone):
+        """Calling scheduler("") is a no-op, like cancelled_by(""); the type-derived
+        fallback still applies and a later real call is not treated as a duplicate."""
+        builder = _builder(timezone, node_to_ranks={}, type="kueue")
+        job_info = builder.scheduler("").job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler == "kueue"
+
+    def test_from_slurmdb_pins_scheduler_to_slurm(self, timezone):
+        slurmdb_job = {
+            "id": "job-1",
+            "start_time": "1700000000",
+            "end_time": "1700001000",
+            "nodelist": "None assigned",
+            "state": "COMPLETED",
+            "framework": "pytorch",
+            "type": "anything-else",
+            "srun_cmd": "",
+            "cancelled_by": "",
+        }
+        job_info = JobInfo.from_slurmdb(slurmdb_job=slurmdb_job, cluster="c", RANKS_PER_NODE=8, timezone=timezone)
+
+        assert job_info.scheduler == "slurm"
+        assert job_info.type == "anything-else"  # type is untouched even though scheduler is pinned
+        assert isinstance(job_info.job_start_time, datetime)

@@ -1464,6 +1464,17 @@
             "type": "string",
             "title": "Type"
           },
+          "scheduler": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler"
+          },
           "srun_cmd": {
             "anyOf": [
               {
