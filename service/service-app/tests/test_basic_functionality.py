@@ -463,12 +463,12 @@ class TestSchedulerIdentityTranslation:
 
         assert job_info.scheduler == "slurm"
 
-    def test_v2_unrecognized_scheduler_normalizes_to_empty(self):
+    def test_v2_unrecognized_scheduler_normalizes_to_unknown(self):
         info = make_up_attributor_info("v2", type="slurm", scheduler="not-a-real-scheduler")
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == ""
+        assert job_info.scheduler == ""  # Scheduler.UNKNOWN
 
     def test_v1_has_no_scheduler_field_and_derives_from_type(self):
         info = make_up_attributor_info("v1", type=WorkloadTypeEnum.SLURM)
