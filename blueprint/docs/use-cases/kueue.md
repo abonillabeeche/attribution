@@ -1,9 +1,10 @@
 # Attribute Kueue Workloads
 
 Use this workflow to attribute Kubernetes Jobs or JobSets that Kueue admitted.
-Attribution Blueprint reads the Kueue Workload, follows its owner to the pods,
-collects application logs with `kubectl logs`, and queries Loki for node-system
-logs.
+Attribution Blueprint reads the Kueue Workload, resolves its Job or JobSet
+owner, and builds Pod placement from live Pods and any configured historical
+sources. The included configuration also collects application logs with
+`kubectl logs` and queries Loki for node-system logs.
 
 The files for this use case are:
 
@@ -18,19 +19,27 @@ The blueprint host must have:
 
 - network access to a running Attribution Service
 - `kubectl` access to the target cluster
-- permission to read Kueue Workloads, their Job or JobSet owners, pods, and
-  Kubernetes Events (used only as a best-effort heuristic; see below)
+- permission to read Kueue Workloads, their Job or JobSet owners, pods
+
+Optional capabilities require:
+
 - permission to run `kubectl logs` for the workload pods
 - network access and credentials for Loki when collecting node syslogs
+- network access to the Pod placement recorder or Prometheus when either
+  fallback placement source is configured
+- permission to read Kubernetes Events for the best-effort placement
+  fallback
 
-Run attribution before the owned pods are deleted. Kueue Workload metadata may
-remain after pod garbage collection, but node placement and pod stdout depend
-on the pods still existing. If pod or node names are missing, the adapter makes
-a best-effort recovery from short-lived Job and Pod Events. This can recover
-identity for node-scoped telemetry, but cannot restore `kubectl logs` for a
-deleted pod. Event recovery is a heuristic, not a guaranteed API contract: it
-parses Kubernetes' human-readable Event messages, which have no versioned
-schema.
+The Kueue Workload must still exist when attribution runs. Run attribution
+before its owned Pods are deleted when application logs are required:
+Pod and node identity can be recovered, but no source can restore `kubectl logs`
+for a deleted Pod.
+
+Pod Placement sources are merged in this order: live Pods, the Pod placement
+recorder, and Prometheus metrics. If Pod or node names are still missing, the
+adapter makes a best-effort recovery from short-lived Kubernetes Events.
+Event recovery is a heuristic: it parses human-readable Event messages, which
+have no versioned schema.
 
 Loki configuration requires an auth block. The included configuration uses
 mTLS, so its client certificate and private key must exist on the blueprint
@@ -68,26 +77,31 @@ Edit
 [examples/kueue/attribution-blueprint.kueue.toml](../../examples/kueue/attribution-blueprint.kueue.toml)
 and replace every `CHANGE_ME` value.
 
-| Entry | Required value |
-|---|---|
-| `attribution.service_url` | Base URL of the Attribution Service. |
-| `workload.gpus_per_node` | GPUs, or training ranks, allocated per node. |
-| `eca.component` | `kueue`, which selects Kueue Workload discovery. |
-| `eca.kueue.kubeconfig` | kubeconfig file for the target cluster. |
-| `eca.kueue.context` | kubeconfig context for the target cluster. |
-| `eca.kueue.namespace` | namespace containing the target Workload. |
-| `log.applog.component` | `kubectl_logs`, which collects pod stdout and stderr. |
-| `log.applog.kubectl_logs.kubeconfig` | The same kubeconfig file used for discovery. |
-| `log.applog.kubectl_logs.context` | The same kubeconfig context used for discovery. |
-| `log.applog.kubectl_logs.timestamps` | `false`, so the service can read application-provided rank prefixes at the start of each line. |
-| `log.syslog.component` | `loki`, which collects node-system evidence. |
-| `log.syslog.loki.endpoint` | Base URL of the Loki service. |
-| `log.syslog.loki.query` | LogQL selector for journal streams from the target cluster. |
-| `log.syslog.loki.auth.type` | `mtls`, which selects certificate authentication. |
-| `log.syslog.loki.auth.cert_path` | Readable client certificate. |
-| `log.syslog.loki.auth.key_path` | Readable private key for the client certificate. |
-| `output.db.component` | `sqlite`, which enables the persisted sample-output workflow. |
-| `output.db.sqlite.path` | Location of the SQLite result database. |
+Baseline settings:
+
+| Entry | When needed | Value |
+|---|---|---|
+| `attribution.service_url` | Every run | Base URL of the Attribution Service. |
+| `workload.gpus_per_node` | For correct rank-to-node mapping | GPUs, or training ranks, allocated per node. |
+| `eca.component` | Every Kueue run | `kueue`, which selects Kueue Workload discovery. |
+| `eca.kueue.kubeconfig` | When the kubectl default is not suitable | Kubeconfig file for the target cluster. |
+| `eca.kueue.context` | When the current context is not suitable | Kubeconfig context for the target cluster. |
+| `eca.kueue.namespace` | For bare Workload names | Namespace containing the target Workload. Explicit `namespace/name` IDs do not require it. |
+
+Optional evidence and output settings:
+
+| Entry | When needed | Value |
+|---|---|---|
+| `log.applog.component` | To collect Pod logs | `kubectl_logs`. |
+| `log.applog.kubectl_logs.kubeconfig` | When the kubectl default is not suitable | The same kubeconfig file used for discovery. |
+| `log.applog.kubectl_logs.context` | When the current context is not suitable | The same kubeconfig context used for discovery. |
+| `log.applog.kubectl_logs.timestamps` | For application-provided rank prefixes | `false`, so kubectl does not insert a timestamp before the rank prefix. |
+| `log.syslog.component` | To collect node-system evidence | `loki`. |
+| `log.syslog.loki.endpoint` | When Loki is enabled | Base URL of the Loki service. |
+| `log.syslog.loki.query` | When Loki is enabled | LogQL selector for journal streams from the target cluster. |
+| `log.syslog.loki.auth.*` | When Loki is enabled | An authentication block; the example uses an mTLS certificate and key. |
+| `output.db.component` | For the persisted sample-output workflow | `sqlite`. |
+| `output.db.sqlite.path` | When SQLite output is enabled | Location of the result database. |
 
 The doubled braces in the `query` value are intentional. They produce literal
 LogQL braces after template rendering. When pods provide node names, the Loki
@@ -98,8 +112,7 @@ must provide `host_name` values that exactly match Kubernetes node names.
 Set `workload.gpus_per_node` to the workload's actual per-node GPU allocation.
 The blueprint assumes one training rank per GPU and uses this value to build the
 rank-to-node mapping sent to the Attribution Service. Omitting it silently uses
-the default of four GPUs per node. The adapter's separately derived `gpu_count`
-is persisted for reporting; it does not replace `gpus_per_node` in rank mapping.
+the default of four GPUs per node.
 
 If node syslogs are unavailable, remove the complete `[log.syslog]`,
 `[log.syslog.loki]`, and `[log.syslog.loki.auth]` sections. Pod-log attribution
@@ -121,6 +134,70 @@ which prevents rank parsing and can prevent application rules from matching.
 The example therefore sets `timestamps = false`. This setting only controls
 the prefix added by `kubectl`; the application log itself must still put its
 rank prefix first.
+
+### Recover Pod placement after deletion
+
+The recorder and Prometheus sources are optional. The baseline adapter can use
+live Pods and the final Kubernetes Events fallback without either source.
+
+#### Pod placement recorder
+
+The namespace-scoped recorder stores Pod placement in SQLite. Install one recorder
+in each workload namespace before submitting workloads whose placement must
+survive Pod deletion. Schedule it outside the workload failure domain so it can
+observe the final Pod update.
+
+Enable recorder reads in the Blueprint:
+
+```toml
+[eca.kueue]
+placement_records_enabled = true
+
+[eca.kueue.placement_recorder]
+endpoint = "http://attribution-pod-placement-recorder.team-a.svc:8080"
+timeout_seconds = 10
+```
+
+Recorder reads are fail-closed. When `placement_records_enabled = true`, the
+endpoint is required and attribution fails if it cannot be read. The recorder
+retains Pod UID, name, node, and observed `NodeLost`, `DeletionByPodGC`, or
+non-zero-exit evidence. It does not retain Pod logs or Pod specifications.
+
+See the
+[recorder reference](../../src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
+for installation, retention, RBAC, and troubleshooting.
+
+#### Prometheus metrics
+
+The adapter can recover placement from retained `kube_pod_info` and
+`kube_pod_labels` metrics. Configure `kube-state-metrics` to expose the controller
+Job UID:
+
+```yaml
+metricLabelsAllowlist:
+  - pods=[batch.kubernetes.io/controller-uid]
+```
+
+Then configure the Prometheus-compatible endpoint:
+
+```toml
+[eca.kueue.prometheus_metrics]
+endpoint = "https://prometheus.example"
+cluster = "prod-batch"
+cluster_label = "cluster"
+lookback_padding_seconds = 300
+batch_size = 20
+```
+
+`cluster` and `cluster_label` are optional for a single-cluster endpoint but
+must be set together for a shared backend. Authentication is optional and
+supports token and mTLS.
+
+When configured, Prometheus placement is always queried and merged; it is not
+limited to Workloads whose live placement appears incomplete. Query failures
+are fail-open: the adapter logs a warning and continues with other sources.
+Prometheus restores placement only, not Pod logs, exit status, or node-loss
+conditions.
 
 ## Verify Data Access
 
@@ -144,6 +221,25 @@ The second command lists every pod in the namespace. Use the Workload owner and
 pod labels to confirm which pods belong to the workload. For a Job, Kubernetes
 uses `batch.kubernetes.io/controller-uid`. For a JobSet, the adapter uses
 `jobset.sigs.k8s.io/jobset-name`.
+
+To verify recorder recovery, query the recorder with the exact Workload UID:
+
+```bash
+kubectl -n "${NAMESPACE}" port-forward \
+  service/attribution-pod-placement-recorder 18080:8080
+curl -fsS \
+  "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&workload_uid=WORKLOAD_UID"
+```
+
+To verify Prometheus recovery, confirm this query returns the target Job UID
+after at least one kube-state-metrics scrape:
+
+```promql
+kube_pod_labels{
+  namespace="CHANGE_ME_NAMESPACE",
+  label_batch_kubernetes_io_controller_uid="CHANGE_ME_JOB_UID"
+}
+```
 
 ## Run Attribution
 
@@ -205,7 +301,10 @@ and preserves the original value as `kueue_state` in `raw_scheduler_json`. For
 to normalize the service-facing state to `TIMEOUT` or `FAILED`. Legacy
 `NodeLost` pod status and `DisruptionTarget=True` with
 `DeletionByPodGC` normalize the state to `NODE_FAIL`, even if Kueue remains
-`ADMITTED`. The adapter also normalizes `EVICTED_PREEMPTED` and
+`ADMITTED`. Recorder records can preserve this node-loss evidence and the
+failed node after Pod deletion. Prometheus placement alone cannot restore
+Pod-status evidence or derive `NODE_FAIL`. The adapter also normalizes
+`EVICTED_PREEMPTED` and
 `PREEMPTED` to the service-facing state `PREEMPTED`, and
 `EVICTED_NODEFAILURES` to `NODE_FAIL`. A native `Requeued=True` condition uses
 the existing service state `REQUEUED`. Other eviction reasons (queue
@@ -230,12 +329,9 @@ Workload name requires `eca.kueue.namespace`; an explicit
 Confirm that owned pods still exist and that `kubectl logs` is authorized. The
 adapter supports standard Job and JobSet ownership. Pod garbage collection or
 an unsupported owner can leave no pod names for the log connector. The adapter
-can recover recently deleted pod and node names from Kubernetes Events, but
-`kubectl logs` still returns `NotFound` after the pod object is deleted. If
-neither live pods nor Events contain the mapping, the adapter reports that the
-pod or node list is unavailable. This recovery relies on parsing Event message
-text rather than a structured field, so a future Kubernetes version that
-changes that wording would silently degrade recovery back to unavailable.
+can recover Pod names from recorder records, retained Prometheus metrics, or
+Kubernetes Events, but `kubectl logs` still returns `NotFound` after the Pod
+object is deleted.
 
 ### Loki returns no syslog observations
 
