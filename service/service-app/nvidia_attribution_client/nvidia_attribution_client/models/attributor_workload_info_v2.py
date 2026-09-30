@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from nvidia_attribution_client.models.scheduler import Scheduler
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,7 +30,7 @@ class AttributorWorkloadInfoV2(BaseModel):
     """ # noqa: E501
     id: StrictStr
     type: StrictStr
-    scheduler: Optional[StrictStr] = None
+    scheduler: Optional[Scheduler] = None
     srun_cmd: Optional[StrictStr] = None
     job_start_time: datetime
     timezone: StrictStr

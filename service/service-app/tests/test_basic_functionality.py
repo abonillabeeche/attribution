@@ -14,7 +14,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
-from attribution_lib.exceptions import JobInfoUnknownSchedulerError, UnprocessedObservationError
+from attribution_lib.exceptions import UnprocessedObservationError
 
 from app.attributor import WorkloadTypeEnum
 from app.exceptions import (
@@ -429,6 +429,16 @@ class TestV2WorkloadValidation:
         response = client.post("/v2/attributor", content=json.dumps(info_dict))
         self._assert_validation_error_shape(response)
 
+    @pytest.mark.parametrize("scheduler", ["slurmm", "kueue-v1", "KUEUE", "runai"])
+    def test_unrecognized_scheduler_returns_422(self, client, scheduler):
+        """`workload.scheduler` is an enum on the wire, so typos are rejected instead of
+        silently becoming UNKNOWN."""
+        info_dict = json.loads(make_up_attributor_info("v2").model_dump_json())
+        info_dict["workload"]["scheduler"] = scheduler
+
+        response = client.post("/v2/attributor", content=json.dumps(info_dict))
+        self._assert_validation_error_shape(response)
+
     def test_empty_nodes_dict_is_accepted_as_never_ran(self, client):
         """Mirroring the lib, empty `nodes` mapping is a valid workload representing a job that
         never received an allocation."""
@@ -448,8 +458,8 @@ class TestSchedulerIdentityTranslation:
     V2 carries the explicit field and never derives it from `type`; V1 has no
     wire change, so its conversion maps the legacy `type` to a scheduler."""
 
-    def test_v2_explicit_scheduler_is_normalized_onto_job_info(self):
-        info = make_up_attributor_info("v2", type="anything", scheduler="KUEUE")
+    def test_v2_explicit_scheduler_is_set_on_job_info(self):
+        info = make_up_attributor_info("v2", type="anything", scheduler="kueue")
 
         job_info = info.to_lib_jobinfo()
 
@@ -463,12 +473,6 @@ class TestSchedulerIdentityTranslation:
 
         assert job_info.scheduler == ""  # Scheduler.UNKNOWN
         assert job_info.type == "slurm"
-
-    def test_v2_unrecognized_scheduler_is_rejected(self):
-        info = make_up_attributor_info("v2", type="slurm", scheduler="not-a-real-scheduler")
-
-        with pytest.raises(JobInfoUnknownSchedulerError):
-            info.to_lib_jobinfo()
 
     @pytest.mark.parametrize(
         "workload_type,expected",

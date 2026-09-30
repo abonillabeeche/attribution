@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
+from nvidia_attribution_client import Scheduler
 
 from attribution_blueprint.connectors.attribution import (
     AttributionConnector,
@@ -27,7 +28,9 @@ from attribution_blueprint.connectors.outputs import OutputConnector
 from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
-_SUPPORTED_WORKLOAD_SCHEDULERS = frozenset({"slurm", "kueue"})
+# Scheduler identities the service accepts on `workload.scheduler`, taken from
+# the generated client so the values are not retyped here.
+_SUPPORTED_WORKLOAD_SCHEDULERS = frozenset(s.value for s in Scheduler if s is not Scheduler.EMPTY)
 
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
@@ -304,8 +307,8 @@ class AttributionOrchestrator:
         }
         # ExecutionContext.scheduler is also used for connector provenance
         # (for example, "static"). Only actual scheduler identities belong on
-        # the service wire; omitting unknown values preserves the service's
-        # migration fallback from workload.type.
+        # the service wire; omitting other values leaves the service's
+        # scheduler unset (`UNKNOWN`).
         scheduler = ctx.get("scheduler")
         if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
             workload["scheduler"] = scheduler

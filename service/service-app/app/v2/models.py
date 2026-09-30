@@ -33,7 +33,7 @@ from attribution_lib.decision_trace_recorder import (
     Action as LibAction,
     NodeType as LibNodeType,
 )
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
@@ -58,10 +58,8 @@ class AttributorWorkloadInfoV2(HashableModel):
 
     id: str
     type: str
-    # Explicit scheduler identity (e.g. "slurm", "kueue"), decoupled from `type`.
-    # Optional: requests without it get `Scheduler.UNKNOWN`; it is never derived
-    # from `type`.
-    scheduler: Optional[str] = None
+    # Explicit scheduler identity (e.g. "slurm", "kueue").
+    scheduler: Optional[Scheduler] = None
     srun_cmd: Optional[str] = "dummy"
     job_start_time: AwareDatetime
     timezone: ZoneInfo

@@ -511,7 +511,7 @@ def test_wire_carries_slurm_scheduler():
 
 def test_wire_omits_connector_only_scheduler_identity():
     """The static adapter uses `scheduler="static"` for local provenance, not
-    as a service scheduler. Omitting it preserves the type-derived fallback."""
+    as a service scheduler, so it is omitted from the wire."""
     ctx = _make_ctx("ctx-7")
     ctx["workload_type"] = "slurm"
     ctx["scheduler"] = "static"

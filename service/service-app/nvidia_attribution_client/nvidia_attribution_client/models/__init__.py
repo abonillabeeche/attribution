@@ -53,6 +53,7 @@ from nvidia_attribution_client.models.observation_response_v2 import Observation
 from nvidia_attribution_client.models.recommendation_enum import RecommendationEnum
 from nvidia_attribution_client.models.resourceless_source import ResourcelessSource
 from nvidia_attribution_client.models.rule_parameters import RuleParameters
+from nvidia_attribution_client.models.scheduler import Scheduler
 from nvidia_attribution_client.models.single_attribution import SingleAttribution
 from nvidia_attribution_client.models.source import Source
 from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom
