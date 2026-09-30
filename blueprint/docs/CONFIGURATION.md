@@ -188,19 +188,41 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `timeout_seconds` | No | `60` | Timeout for each `kubectl` command. |
 
 Kueue time-range filtering is client-side because the Workload API does not
-provide server-side time filtering. Pod evidence and `kubectl_logs` collection
-depend on the owned pods still existing when the blueprint runs.
+provide server-side time filtering. The adapter reads pod and node names from
+live owned pods first. When either list is unavailable, it makes a best-effort
+recovery from the owner Job's `SuccessfulCreate` Events and the pods'
+`Scheduled` Events, matched by owner UID and execution interval. Kubernetes
+Events are short-lived and may already be gone; if recovery fails, the adapter
+reports which list is unavailable. A deleted pod's recovered name does not
+make `kubectl logs` available again.
 
-The adapter derives `state` from Kueue conditions, using finished conditions
-before evicted, preempted, admitted, quota-reserved, and pending conditions.
-For example, a `Finished=True` condition with reason `Succeeded` becomes
-`FINISHED_SUCCEEDED`. This scheduler lifecycle state is separate from the
-Attribution Service verdict.
+The adapter derives `kueue_state` from Kueue conditions, using finished
+conditions before evicted, preempted, admitted, quota-reserved, and pending
+conditions. For example, a `Finished=True` condition with reason `Succeeded`
+becomes `FINISHED_SUCCEEDED`. It also exposes a service-facing `state`.
+`FINISHED_SUCCEEDED` is normalized to `COMPLETED`. `FINISHED_FAILED` is
+normalized to `TIMEOUT` when its direct Job or a JobSet child Job failed with
+reason `DeadlineExceeded`, and otherwise to `FAILED`. A selected pod carrying
+either the legacy reason `NodeLost` or a `DisruptionTarget=True` condition with
+reason `DeletionByPodGC` normalizes the service-facing state to `NODE_FAIL`,
+even when Kueue still reports the workload as admitted. Both
+`EVICTED_PREEMPTED` and `PREEMPTED` are normalized to `PREEMPTED`, while
+`EVICTED_NODEFAILURES` becomes `NODE_FAIL`. A native `Requeued=True` condition
+becomes the existing service state `REQUEUED`. Other eviction reasons (queue
+stopped, admission check failed, pods-ready timeout, deactivated, ...)
+normalize to the generic service state `EVICTED`, which produces
+`Incomplete Info` when no stronger symptoms are available. The original `kueue_state`
+remains available in `raw_scheduler_json`.
+
+Kubernetes Job `activeDeadlineSeconds` values are converted from seconds to
+the positive integer minutes expected by the Attribution Service, rounding
+up. For JobSets, the shortest child-Job deadline is used.
 
 The adapter marks a node as failed when one of its selected pods has a
-container with a non-zero terminated exit code. If more than one node meets
-that condition, `failed_node` is the alphabetically first node name so the
-result is stable across Kubernetes response orderings.
+container with a non-zero terminated exit code or carries either node-loss
+signal described above. If more than one node meets that condition,
+`failed_node` is the alphabetically first node name so the result is stable
+across Kubernetes response orderings.
 
 For a complete runnable configuration, see
 [examples/kueue](../examples/kueue/README.md).
@@ -267,9 +289,8 @@ to `job failed`. Use the scheduler's real state, and do not use `state` to
 preselect the desired attribution outcome.
 
 `workload_type` identifies the workload manager to the service. The Kueue
-adapter currently sends an empty value and records `scheduler = "kueue"`
-internally for SQLite output. Static contexts can send `kueue` directly
-because service v2 accepts open string values.
+adapter sends `kueue` and also records `scheduler = "kueue"` internally for
+SQLite output. Service v2 accepts open string values.
 
 ### `[workload]`
 

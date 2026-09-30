@@ -31,12 +31,20 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         timeout = _coerce_int(timeout, "eca.kueue.timeout_seconds")
         if timeout <= 0:
             raise MCAError(f"eca.kueue.timeout_seconds must be positive, got {timeout}")
+    event_max_age = spec.get("event_max_age_seconds")
+    if event_max_age is None:
+        event_max_age = 3600
+    else:
+        event_max_age = _coerce_int(event_max_age, "eca.kueue.event_max_age_seconds")
+        if event_max_age <= 0:
+            raise MCAError(f"eca.kueue.event_max_age_seconds must be positive, got {event_max_age}")
     return KueueExecutionContextAdapter(
         kubectl_path=spec.get("kubectl_path", "kubectl"),
         kubeconfig=spec.get("kubeconfig"),
         context=spec.get("context"),
         namespace=spec.get("namespace"),
         timeout_seconds=timeout,
+        event_max_age_seconds=event_max_age,
     )
 
 
@@ -61,6 +69,9 @@ _registry.register_component(
         # clusters or to allow bare `<name>` --ids values.
         "namespace": _PARAM,
         "timeout_seconds": _PARAM,
+        # Max age of a Workload's end_time before Event-based recovery is
+        # skipped entirely.
+        "event_max_age_seconds": _PARAM,
     },
     build=_build,
 )

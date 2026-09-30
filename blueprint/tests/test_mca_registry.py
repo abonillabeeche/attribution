@@ -180,6 +180,7 @@ def test_built_schema_has_expected_shape():
         "context",
         "namespace",
         "timeout_seconds",
+        "event_max_age_seconds",
     }
 
     assert "log" in schema
