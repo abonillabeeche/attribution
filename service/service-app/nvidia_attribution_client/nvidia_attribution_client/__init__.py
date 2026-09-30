@@ -60,11 +60,13 @@ __all__ = [
     "NewResponseV2",
     "NodeAttribution",
     "NodeSource",
-    "Observation",
-    "ObservationContext",
+    "ObservationContextV1",
+    "ObservationContextV2",
     "ObservationIngestionErrorResponse",
     "ObservationResponseV1",
     "ObservationResponseV2",
+    "ObservationV1",
+    "ObservationV2",
     "RecommendationEnum",
     "ResourcelessSource",
     "RuleParameters",
@@ -79,6 +81,7 @@ __all__ = [
     "SymptomsValueInner",
     "TerminalState",
     "TimeInterval",
+    "TimeIntervalV2",
     "UncertaintyType",
     "UnknownAttributorIdError",
     "UnknownObservationFormatError",
@@ -137,11 +140,13 @@ from nvidia_attribution_client.models.new_response_v1 import NewResponseV1 as Ne
 from nvidia_attribution_client.models.new_response_v2 import NewResponseV2 as NewResponseV2
 from nvidia_attribution_client.models.node_attribution import NodeAttribution as NodeAttribution
 from nvidia_attribution_client.models.node_source import NodeSource as NodeSource
-from nvidia_attribution_client.models.observation import Observation as Observation
-from nvidia_attribution_client.models.observation_context import ObservationContext as ObservationContext
+from nvidia_attribution_client.models.observation_context_v1 import ObservationContextV1 as ObservationContextV1
+from nvidia_attribution_client.models.observation_context_v2 import ObservationContextV2 as ObservationContextV2
 from nvidia_attribution_client.models.observation_ingestion_error_response import ObservationIngestionErrorResponse as ObservationIngestionErrorResponse
 from nvidia_attribution_client.models.observation_response_v1 import ObservationResponseV1 as ObservationResponseV1
 from nvidia_attribution_client.models.observation_response_v2 import ObservationResponseV2 as ObservationResponseV2
+from nvidia_attribution_client.models.observation_v1 import ObservationV1 as ObservationV1
+from nvidia_attribution_client.models.observation_v2 import ObservationV2 as ObservationV2
 from nvidia_attribution_client.models.recommendation_enum import RecommendationEnum as RecommendationEnum
 from nvidia_attribution_client.models.resourceless_source import ResourcelessSource as ResourcelessSource
 from nvidia_attribution_client.models.rule_parameters import RuleParameters as RuleParameters
@@ -156,6 +161,7 @@ from nvidia_attribution_client.models.symptom_status import SymptomStatus as Sym
 from nvidia_attribution_client.models.symptoms_value_inner import SymptomsValueInner as SymptomsValueInner
 from nvidia_attribution_client.models.terminal_state import TerminalState as TerminalState
 from nvidia_attribution_client.models.time_interval import TimeInterval as TimeInterval
+from nvidia_attribution_client.models.time_interval_v2 import TimeIntervalV2 as TimeIntervalV2
 from nvidia_attribution_client.models.uncertainty_type import UncertaintyType as UncertaintyType
 from nvidia_attribution_client.models.unknown_attributor_id_error import UnknownAttributorIdError as UnknownAttributorIdError
 from nvidia_attribution_client.models.unknown_observation_format_error import UnknownObservationFormatError as UnknownObservationFormatError

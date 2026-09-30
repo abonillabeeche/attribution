@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from attribution_lib.exceptions import UnprocessedObservationError
+from attribution_lib.observation.inbound import Source as ObservationSource
 
 from app.attributor import WorkloadTypeEnum
 from app.exceptions import (
@@ -24,42 +25,49 @@ from app.exceptions import (
     ResponseModel,
     UnknownAttributorIdError,
 )
-from app.observation import (
-    Observation,
-    ObservationContext,
-    ObservationFormat,
-    ObservationSource,
-)
 from app.util import TimeInterval
-from app.v2.models import AttributionResponseV2
+from app.v1.observation import ObservationContextV1, ObservationFormat, ObservationV1
+from app.v2.observation import ObservationContextV2, ObservationV2, TimeIntervalV2
 from tests.conftest import (
     make_up_attributor_info,
     post_attributor,
 )
 
+START = datetime(2025, 3, 14, 9, 10, 00).astimezone()
+END = datetime(2025, 3, 14, 9, 11, 00).astimezone()
 
-def fake_applog_observation(body: str) -> Observation:
-    start = datetime(2025, 3, 14, 9, 10, 00).astimezone()
-    end = datetime(2025, 3, 14, 9, 11, 00).astimezone()
-    context = ObservationContext(
-        time_interval=TimeInterval(start=start, end=end),
-        resources="AllJobResources",
-        source=ObservationSource.APPLOG,
-        format=ObservationFormat.RAW_LOG_LINES,
+
+def fake_applog_observation(body: str, version: str = "v1") -> ObservationV1 | ObservationV2:
+    """Applog lines as a V1 `raw_log` observation, or as a V2 entry list with one entry per line."""
+    if version == "v1":
+        context = ObservationContextV1(
+            time_interval=TimeInterval(start=START, end=END),
+            resources="AllJobResources",
+            source=ObservationSource.APPLOG,
+            format=ObservationFormat.RAW_LOG_LINES,
+        )
+        return ObservationV1(context=context, body=body)
+    return _fake_v2_observation(ObservationSource.APPLOG, json.dumps([{"body": line} for line in body.split("\n")]))
+
+
+def fake_syslog_observation(body: str, version: str = "v1") -> ObservationV1 | ObservationV2:
+    """A JSON syslog body as a V1 `raw_loki_streams` observation, or as a V2 entry list."""
+    if version == "v1":
+        context = ObservationContextV1(
+            time_interval=TimeInterval(start=START, end=END),
+            resources="AllJobResources",
+            source=ObservationSource.SYSLOG,
+            format=ObservationFormat.RAW_LOKI_STREAMS,
+        )
+        return ObservationV1(context=context, body=body)
+    return _fake_v2_observation(ObservationSource.SYSLOG, body)
+
+
+def _fake_v2_observation(source: ObservationSource, body: str) -> ObservationV2:
+    return ObservationV2(
+        context=ObservationContextV2(time_interval=TimeIntervalV2(start=START, end=END), source=source),
+        body=body,
     )
-    return Observation(context=context, body=body)
-
-
-def fake_syslog_observation(body: str) -> Observation:
-    start = datetime(2025, 3, 14, 9, 10, 00).astimezone()
-    end = datetime(2025, 3, 14, 9, 11, 00).astimezone()
-    context = ObservationContext(
-        time_interval=TimeInterval(start=start, end=end),
-        resources="AllJobResources",
-        source=ObservationSource.SYSLOG,
-        format=ObservationFormat.RAW_LOKI_STREAMS,
-    )
-    return Observation(context=context, body=body)
 
 
 def test_v1_accepts_kueue_workload_type(client):
@@ -205,7 +213,7 @@ class TestEndpoints:
 
     def test_post_observation_success(self, client, version):
         att_id = post_attributor(client, make_up_attributor_info(version))
-        obs = fake_applog_observation("Example\nLines")
+        obs = fake_applog_observation("Example\nLines", version)
 
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
 
@@ -213,7 +221,7 @@ class TestEndpoints:
 
     def test_post_observation_duplicate_rejected(self, client, version):
         att_id = post_attributor(client, make_up_attributor_info(version))
-        obs = fake_applog_observation("Example\nLines")
+        obs = fake_applog_observation("Example\nLines", version)
 
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
         assert response.status_code == 201
@@ -223,12 +231,12 @@ class TestEndpoints:
         assert response.status_code == DuplicateObservationError.code
         assert ResponseModel.from_dict(response.json()) == DuplicateObservationError.new(obs_id)
 
-    def test_post_observation_invalid_format(self, client, version):
-        att_id = post_attributor(client, make_up_attributor_info(version))
+    def test_post_observation_invalid_format(self, client):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
         obs = fake_applog_observation("Example\nLines")
         obs.context.format = "fooey"
 
-        response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
+        response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 422
 
@@ -240,22 +248,22 @@ class TestEndpoints:
             (ObservationSource.CSP_EVENT, ObservationFormat.CSP_EVENT_LIST),
         ],
     )
-    def test_post_observation_supported_structured_format(self, client, version, source, format):
-        att_id = post_attributor(client, make_up_attributor_info(version))
+    def test_post_observation_supported_structured_format(self, client, source, format):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
         obs = fake_applog_observation("[]")
         obs.context.source = source
         obs.context.format = format
 
-        response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
+        response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 201
 
-    def test_post_observation_incompatible_source_format_returns_400(self, client, version):
-        att_id = post_attributor(client, make_up_attributor_info(version))
+    def test_post_observation_incompatible_source_format_returns_400(self, client):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
         obs = fake_applog_observation("Example\nLines")
         obs.context.format = ObservationFormat.STRING_LIST
 
-        response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
+        response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 400
         assert response.json() == {
@@ -274,13 +282,13 @@ class TestEndpoints:
             (ObservationSource.CSP_EVENT, ObservationFormat.CSP_EVENT_LIST),
         ],
     )
-    def test_post_observation_malformed_structured_body_returns_400(self, client, version, source, format):
-        att_id = post_attributor(client, make_up_attributor_info(version))
+    def test_post_observation_malformed_structured_body_returns_400(self, client, source, format):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
         obs = fake_applog_observation("not-json")
         obs.context.source = source
         obs.context.format = format
 
-        response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
+        response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 400
         assert response.json() == {
@@ -319,7 +327,7 @@ class TestUserJourneys:
         att_id = post_attributor(client, make_up_attributor_info(version))
 
         # Ingest observation
-        obs = fake_applog_observation("applog line 1\napplog line 2")
+        obs = fake_applog_observation("applog line 1\napplog line 2", version)
         obs_response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
         assert obs_response.status_code == 201
         obs_id = obs_response.json()["observation_id"]
@@ -339,13 +347,13 @@ class TestUserJourneys:
         att_id = post_attributor(client, make_up_attributor_info(version))
 
         # Ingest syslog
-        syslog_obs = fake_syslog_observation("[]")
+        syslog_obs = fake_syslog_observation("[]", version)
         obs_response = client.post(f"/{version}/attributor/{att_id}/observation", content=syslog_obs.model_dump_json())
         assert obs_response.status_code == 201
         syslog_obs_id = obs_response.json()["observation_id"]
 
         # Ingest applog
-        applog_obs = fake_applog_observation("applog line 1\napplog line 2")
+        applog_obs = fake_applog_observation("applog line 1\napplog line 2", version)
         obs_response = client.post(f"/{version}/attributor/{att_id}/observation", content=applog_obs.model_dump_json())
         assert obs_response.status_code == 201
         applog_obs_id = obs_response.json()["observation_id"]
@@ -360,19 +368,19 @@ class TestUserJourneys:
         att_id = post_attributor(client, make_up_attributor_info(version))
 
         # Ingest 1st applog
-        applog_obs_1 = fake_applog_observation("applog line 1\napplog line 2")
+        applog_obs_1 = fake_applog_observation("applog line 1\napplog line 2", version)
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=applog_obs_1.model_dump_json())
         assert response.status_code == 201
         applog_obs_id_1 = response.json()["observation_id"]
 
         # Ingest syslog
-        syslog_obs = fake_syslog_observation("[]")
+        syslog_obs = fake_syslog_observation("[]", version)
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=syslog_obs.model_dump_json())
         assert response.status_code == 201
         syslog_obs_id = response.json()["observation_id"]
 
         # Ingest 2nd applog with distinct content
-        applog_obs_2 = fake_applog_observation("applog line 3\napplog line 4")
+        applog_obs_2 = fake_applog_observation("applog line 3\napplog line 4", version)
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=applog_obs_2.model_dump_json())
         assert response.status_code == 201
         applog_obs_id_2 = response.json()["observation_id"]
@@ -387,7 +395,7 @@ class TestUserJourneys:
         att_id = post_attributor(client, make_up_attributor_info(version))
 
         # Phase 1: ingest + attribute
-        obs1 = fake_applog_observation("phase 1 log data")
+        obs1 = fake_applog_observation("phase 1 log data", version)
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs1.model_dump_json())
         assert response.status_code == 201
         obs_id_1 = response.json()["observation_id"]
@@ -396,7 +404,7 @@ class TestUserJourneys:
         assert set(att_resp_1["observation_context"]) == {obs_id_1}
 
         # Phase 2: ingest more + attribute again
-        obs2 = fake_syslog_observation("[]")
+        obs2 = fake_syslog_observation("[]", version)
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs2.model_dump_json())
         assert response.status_code == 201
         obs_id_2 = response.json()["observation_id"]

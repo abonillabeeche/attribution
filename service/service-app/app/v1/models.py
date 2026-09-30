@@ -14,6 +14,7 @@ from typing import Annotated, Literal, NamedTuple, Optional, Union
 from attribution_lib.attr_types import NodeAttributionGroup
 from attribution_lib.core import AttributionResult
 from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
+from attribution_lib.observation.inbound import Id as ObservationId
 from attribution_lib.outcome import calculate_outcome
 from attribution_lib.sources import SourceSet, SymptomSet
 from loguru import logger
@@ -34,7 +35,6 @@ from app.attributor import (
     WorkloadTypeEnum,
 )
 from app.exceptions import ResponseModel
-from app.observation import ObservationId
 from app.util import HashableModel, to_zoneinfo
 
 # Legacy V1 `workload.type` values that name a scheduler. 
