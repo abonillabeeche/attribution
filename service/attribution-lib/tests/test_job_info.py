@@ -37,6 +37,17 @@ class TestJobInfo:
         assert job_info.verify_node("node-Name01") == "node-name01"
         assert job_info.verify_node("NODE-NAME01") == "node-name01"
 
+    def test_verify_node_matches_fully_qualified_name_to_short_allocation(self, simple_job_factory):
+        """A fully qualified log hostname maps to the short name in the allocation."""
+        job_info = simple_job_factory(nodes=["node-12"], ranks_per_node=4)
+        line = "3: [2026-01-02 03:04:05] node-12.example.internal:1234567:1234568 [0] NCCL WARN port error(10)"
+
+        assert job_info.verify_node("Node-12.example.internal") == "node-12"
+        assert job_info.applog_extract_node(line) == "node-12"
+        assert simple_job_factory(nodes=["node-12.example.internal"]).verify_node("node-12.example.internal") == (
+            "node-12.example.internal"
+        )
+
     def test_verify_node_raises_for_unknown_node(self, simple_job_factory):
         """verify_node raises UnknownNodeError when node is not in the job at all."""
         job_info = simple_job_factory(nodes=["node-Name01"])
