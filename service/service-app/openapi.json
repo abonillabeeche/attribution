@@ -2293,7 +2293,7 @@
           "kueue"
         ],
         "title": "Scheduler",
-        "description": "Recognized values for `JobInfo.scheduler`.\n\nUnlike `JobInfo.type`, which is a free-form legacy wire token, every\n`JobInfo.scheduler` value is one of these members. `UNKNOWN` means \"no\nrecognized scheduler identity\": callers must not use it to build a\nrendered ID and should fall back to generic wording. Existing Slurm\nwording is unchanged; it only applies when the scheduler is `SLURM`."
+        "description": "Recognized values for `JobInfo.scheduler`.\n\nUnlike `JobInfo.type`, which is a free-form legacy wire token, every\n`JobInfo.scheduler` value is one of these members. `UNKNOWN` means \"no\nrecognized scheduler identity\": callers must not use it to build a\nrendered ID and should fall back to generic wording. Existing Slurm\nsymptom strings are unchanged."
       },
       "SingleAttribution": {
         "properties": {

@@ -334,18 +334,26 @@ class TestNormalizeSchedulerIdentity:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("slurm", Scheduler.SLURM),
-            ("kueue", Scheduler.KUEUE),
-            ("SLURM", Scheduler.SLURM),  # case-insensitive
-            (" kueue ", Scheduler.KUEUE),  # trims surrounding whitespace
-            ("", Scheduler.UNKNOWN),
-            (None, Scheduler.UNKNOWN),
+            pytest.param("slurm", Scheduler.SLURM, id="slurm"),
+            pytest.param("kueue", Scheduler.KUEUE, id="kueue"),
+            pytest.param("SLURM", Scheduler.SLURM, id="case-insensitive"),
+            pytest.param(" kueue ", Scheduler.KUEUE, id="trims surrounding whitespace"),
+            pytest.param("", Scheduler.UNKNOWN, id="empty is unknown"),
+            pytest.param(None, Scheduler.UNKNOWN, id="none is unknown"),
         ],
     )
     def test_normalize_scheduler_identity(self, raw, expected):
         assert normalize_scheduler_identity(raw) is expected
 
-    @pytest.mark.parametrize("raw", ["slurmm", "kueue-v1", "runai", "interactive"])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("slurmm", id="typo"),
+            pytest.param("kueue-v1", id="suffixed name"),
+            pytest.param("runai", id="workload type that is not yet a scheduler"),
+            pytest.param("interactive", id="non-scheduler workload type"),
+        ],
+    )
     def test_unrecognized_scheduler_raises(self, raw):
         with pytest.raises(JobInfoUnknownSchedulerError) as exc_info:
             normalize_scheduler_identity(raw)

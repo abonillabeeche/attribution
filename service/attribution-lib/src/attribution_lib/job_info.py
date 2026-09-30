@@ -50,7 +50,7 @@ class Scheduler(StrEnum):
     `JobInfo.scheduler` value is one of these members. `UNKNOWN` means "no
     recognized scheduler identity": callers must not use it to build a
     rendered ID and should fall back to generic wording. Existing Slurm
-    wording is unchanged; it only applies when the scheduler is `SLURM`.
+    symptom strings are unchanged.
     """
 
     UNKNOWN = ""
@@ -71,7 +71,7 @@ def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
 
     Raises:
         JobInfoUnknownSchedulerError: If `raw` is non-empty but not a recognized
-            scheduler, e.g. a typo such as "slurmm".
+            scheduler.
     """
     if not raw:
         return Scheduler.UNKNOWN
