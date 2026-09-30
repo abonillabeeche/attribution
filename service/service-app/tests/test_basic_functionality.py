@@ -61,6 +61,17 @@ def fake_syslog_observation(body: str) -> Observation:
     return Observation(context=context, body=body)
 
 
+def test_v1_accepts_kueue_workload_type(client):
+    """v1's `type` is the `WorkloadTypeEnum`, which gates accepted values -
+    unlike v2's plain `str`. Post to v1 so this actually exercises the enum
+    change, not just the always-permissive v2 field."""
+    info = make_up_attributor_info("v1", type="kueue")
+
+    response = client.post("/v1/attributor", content=info.model_dump_json())
+
+    assert response.status_code == http.HTTPStatus.CREATED
+
+
 def test_observation_ingestion_errors_are_declared_in_openapi(app):
     schema = app.openapi()
     expected_ref = {"$ref": "#/components/schemas/ObservationIngestionErrorResponse"}
