@@ -17,6 +17,7 @@ from attribution_lib.exceptions import (
     JobInfoDuplicateFieldError,
     JobInfoNodeNameCollisionError,
     JobInfoUnevenNodeToRanksError,
+    JobInfoUnknownSchedulerError,
 )
 from attribution_lib.job_info import (
     JobInfo,
@@ -337,15 +338,19 @@ class TestNormalizeSchedulerIdentity:
             ("kueue", Scheduler.KUEUE),
             ("SLURM", Scheduler.SLURM),  # case-insensitive
             (" kueue ", Scheduler.KUEUE),  # trims surrounding whitespace
-            ("runai", Scheduler.UNKNOWN),  # recognized workload type, but not yet a supported scheduler
-            ("interactive", Scheduler.UNKNOWN),  # non-scheduler workload.type value
-            ("nonsense", Scheduler.UNKNOWN),  # unrecognized token must not pass through
             ("", Scheduler.UNKNOWN),
             (None, Scheduler.UNKNOWN),
         ],
     )
     def test_normalize_scheduler_identity(self, raw, expected):
         assert normalize_scheduler_identity(raw) is expected
+
+    @pytest.mark.parametrize("raw", ["slurmm", "kueue-v1", "runai", "interactive"])
+    def test_unrecognized_scheduler_raises(self, raw):
+        with pytest.raises(JobInfoUnknownSchedulerError) as exc_info:
+            normalize_scheduler_identity(raw)
+
+        assert exc_info.value.scheduler == raw
 
 
 def _end_time(timezone):
@@ -369,6 +374,13 @@ class TestJobInfoBuilderScheduler:
 
         assert job_info.scheduler is Scheduler.UNKNOWN
         assert job_info.type == type_
+
+    def test_unrecognized_scheduler_fails_build(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="slurm")
+        builder.scheduler("slurmm").job_end_time(_end_time(timezone))
+
+        with pytest.raises(JobInfoUnknownSchedulerError):
+            builder.build()
 
     def test_scheduler_setter_rejects_duplicate(self, timezone):
         builder = _builder(timezone, node_to_ranks={})

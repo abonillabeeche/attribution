@@ -22,6 +22,7 @@ from attribution_lib.exceptions import (
     JobInfoInvalidTimeLimitError,
     JobInfoNodeNameCollisionError,
     JobInfoUnevenNodeToRanksError,
+    JobInfoUnknownSchedulerError,
     UnidentifiableNodeError,
     UnknownNodeError,
     UnknownNodeExtractionSourceError,
@@ -64,15 +65,20 @@ def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
         raw: A raw scheduler token, e.g. from ``workload.scheduler``.
 
     Returns:
-        The matching `Scheduler` member when `raw` names one; otherwise
-        `Scheduler.UNKNOWN`.
+        The matching `Scheduler` member when `raw` names one (case-insensitive,
+        surrounding whitespace ignored), or `Scheduler.UNKNOWN` when `raw` is
+        empty or None.
+
+    Raises:
+        JobInfoUnknownSchedulerError: If `raw` is non-empty but not a recognized
+            scheduler, e.g. a typo such as "slurmm".
     """
     if not raw:
         return Scheduler.UNKNOWN
     try:
         return Scheduler(raw.strip().lower())
     except ValueError:
-        return Scheduler.UNKNOWN
+        raise JobInfoUnknownSchedulerError(raw) from None
 
 
 def _coerce_optional_int(raw: "str | int | None") -> Optional[int]:
@@ -110,7 +116,6 @@ class JobInfo(NamedTuple):
     # `scheduler` instead.
     type: str
     # Normalized scheduler identity, set via JobInfoBuilder.scheduler(...).
-    # `UNKNOWN` when no scheduler was provided; it is never derived from `type`.
     scheduler: Scheduler
     state: str
     cluster: str
@@ -429,10 +434,7 @@ class JobInfoBuilder:
         return self
 
     def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
-        """Set the scheduler identity (e.g. "slurm", "kueue").
-
-        Optional: when not called, `JobInfo.scheduler` is `Scheduler.UNKNOWN`.
-        It is never derived from `type`.
+        """Set the explicit scheduler identity (e.g. "slurm", "kueue").
         """
         if self._scheduler is not None:
             raise JobInfoDuplicateFieldError("scheduler")

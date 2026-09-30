@@ -14,7 +14,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 import pytest
-from attribution_lib.exceptions import UnprocessedObservationError
+from attribution_lib.exceptions import JobInfoUnknownSchedulerError, UnprocessedObservationError
 
 from app.attributor import WorkloadTypeEnum
 from app.exceptions import (
@@ -464,12 +464,11 @@ class TestSchedulerIdentityTranslation:
         assert job_info.scheduler == ""  # Scheduler.UNKNOWN
         assert job_info.type == "slurm"
 
-    def test_v2_unrecognized_scheduler_normalizes_to_unknown(self):
+    def test_v2_unrecognized_scheduler_is_rejected(self):
         info = make_up_attributor_info("v2", type="slurm", scheduler="not-a-real-scheduler")
 
-        job_info = info.to_lib_jobinfo()
-
-        assert job_info.scheduler == ""  # Scheduler.UNKNOWN
+        with pytest.raises(JobInfoUnknownSchedulerError):
+            info.to_lib_jobinfo()
 
     @pytest.mark.parametrize(
         "workload_type,expected",
