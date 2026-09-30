@@ -180,9 +180,15 @@ def test_built_schema_has_expected_shape():
         "context",
         "namespace",
         "timeout_seconds",
+        "placement_records_enabled",
+        "placement_recorder",
         "event_max_age_seconds",
     }
-
+    assert set(schema["eca"]["_selector"]["kueue"]["placement_recorder"]) == {
+        "endpoint",
+        "timeout_seconds",
+        "auth",
+    }
     assert "log" in schema
     assert schema["log"]["_aliases"] == ("logs",)
     for src in ("applog", "syslog"):
