@@ -496,15 +496,30 @@ def test_wire_carries_scheduler_independently_of_workload_type():
     assert info["workload"]["scheduler"] == "kueue"
 
 
-def test_wire_omits_scheduler_when_context_has_none():
-    """Contexts without a `scheduler` key (e.g. the static adapter today) must
-    not send an explicit `null`/empty scheduler."""
+def test_wire_carries_slurm_scheduler():
+    """Slurm forwards its explicit identity even though `workload.type` also
+    carries "slurm", making the new field present for existing Slurm traffic."""
     ctx = _make_ctx("ctx-7")
-    assert "scheduler" not in ctx
+    ctx["scheduler"] = "slurm"
     pipeline = _make_pipeline(MagicMock(), [])
 
     info = _wire(pipeline._build_attributor_info(ctx))
 
+    assert info["workload"]["type"] == "slurm"
+    assert info["workload"]["scheduler"] == "slurm"
+
+
+def test_wire_omits_connector_only_scheduler_identity():
+    """The static adapter uses `scheduler="static"` for local provenance, not
+    as a service scheduler. Omitting it preserves the type-derived fallback."""
+    ctx = _make_ctx("ctx-7")
+    ctx["workload_type"] = "slurm"
+    ctx["scheduler"] = "static"
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
+    assert info["workload"]["type"] == "slurm"
     assert "scheduler" not in info["workload"]
 
 

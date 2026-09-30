@@ -27,6 +27,8 @@ from attribution_blueprint.connectors.outputs import OutputConnector
 from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
+_SUPPORTED_WORKLOAD_SCHEDULERS = frozenset({"slurm", "kueue"})
+
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
     """Return the IANA timezone key required by Attribution Service v2.
@@ -300,13 +302,13 @@ class AttributionOrchestrator:
             "interest_end_time": ctx["end_time"].isoformat(),
             "nodes": node_to_ranks,
         }
-        # `workload.scheduler` is a new, explicit V2 field (Scheduler-Aware
-        # Language RFC) decoupled from `workload.type`/`workload_type`. The BP
-        # already tracks its own execution-context `scheduler` value for
-        # SQLite labeling (see ExecutionContext.scheduler); forward it here so
-        # the service can key scheduler-aware rendering off it too.
-        if "scheduler" in ctx:
-            workload["scheduler"] = ctx["scheduler"]
+        # ExecutionContext.scheduler is also used for connector provenance
+        # (for example, "static"). Only actual scheduler identities belong on
+        # the service wire; omitting unknown values preserves the service's
+        # migration fallback from workload.type.
+        scheduler = ctx.get("scheduler")
+        if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
+            workload["scheduler"] = scheduler
         if "failed_node" in ctx:
             workload["failed_node"] = ctx["failed_node"].lower()
         if "cancelled_by" in ctx:

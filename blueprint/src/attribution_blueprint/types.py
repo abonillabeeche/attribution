@@ -32,10 +32,10 @@ class ExecutionContext(TypedDict):
     # Wire-format scheduler identity sent to the attribution service as
     # `workload.type`.
     workload_type: NotRequired[str]
-    # BP-internal scheduler identity (the ECA component that discovered this
-    # context: "slurm", "kueue", "static", ...). SQLiteOutput reads this for
-    # the `scheduler_type` column. Also forwarded as `workload.scheduler` on
-    # the V2 wire, decoupled from the legacy `workload_type`.
+    # Connector/scheduler identity ("slurm", "kueue", "static", ...).
+    # SQLiteOutput stores it as `scheduler_type` for connector provenance.
+    # The orchestrator forwards only supported scheduler identities as V2
+    # `workload.scheduler`; connector-only values such as "static" stay local.
     scheduler: NotRequired[str]
     # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
     # it = the Workload's metadata.uid (a new Workload is created per
