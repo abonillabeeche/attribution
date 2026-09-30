@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
@@ -45,12 +44,3 @@ class PlacementStore(PlacementReader, Protocol):
 
 class PlacementResolver(Protocol):
     def placements_for_many(self, queries: list[PlacementQuery]) -> dict[str, list[PodPlacement]]: ...
-
-    def placements_for(
-        self,
-        workload: dict,
-        start_time: datetime,
-        end_time: datetime,
-        *,
-        owner_job_uids: set[str],
-    ) -> list[PodPlacement]: ...

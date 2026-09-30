@@ -17,9 +17,6 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
-    controller_owner,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementQuery, PodPlacement
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
@@ -85,8 +82,12 @@ class PrometheusPlacementResolver:
 
     def placements_for_many(self, queries: list[PlacementQuery]) -> dict[str, list[PodPlacement]]:
         """Collect shared UID batches, then partition placements by Workload."""
+        # Preprocess Workload queries and cache their padded time bounds.
         by_workload: dict[str, dict[str, PodPlacement]] = {}
+        conflicting_uids: dict[str, set[str]] = defaultdict(set)
         by_namespace: dict[str, list[PlacementQuery]] = defaultdict(list)
+        bounds_by_workload_uid: dict[str, tuple[datetime, datetime]] = {}
+        now = datetime.now(timezone.utc)
         for query in queries:
             if query.workload_uid in by_workload:
                 raise ValueError(f"duplicate placement query for Workload UID {query.workload_uid}")
@@ -96,119 +97,115 @@ class PrometheusPlacementResolver:
                 raise ValueError("placement end_time precedes start_time")
             by_workload[query.workload_uid] = {}
             if query.namespace and query.owner_job_uids:
+                query_start = start - timedelta(seconds=self.lookback_padding_seconds)
+                query_end = min(now, end + timedelta(seconds=self.lookback_padding_seconds))
                 by_namespace[query.namespace].append(query)
+                bounds_by_workload_uid[query.workload_uid] = (query_start, query_end)
 
-        now = datetime.now(timezone.utc)
+        # Build Job UID -> workload mapping
+        batches: list[tuple[str, set[str], datetime, datetime, dict[str, set[str]]]] = []
         for namespace, namespace_queries in sorted(by_namespace.items()):
-            all_job_uids = sorted({uid for query in namespace_queries for uid in query.owner_job_uids})
-            workload_uids_by_job_uid: dict[str, set[str]] = defaultdict(set)
+            queries_by_job_uid: dict[str, list[PlacementQuery]] = defaultdict(list)
             for query in namespace_queries:
                 for job_uid in query.owner_job_uids:
-                    workload_uids_by_job_uid[job_uid].add(query.workload_uid)
+                    queries_by_job_uid[job_uid].append(query)
 
-            for batch_index in range(0, len(all_job_uids), self.batch_size):
-                batch = set(all_job_uids[batch_index : batch_index + self.batch_size])
-                batch_queries = [query for query in namespace_queries if batch.intersection(query.owner_job_uids)]
-                query_start = min(
-                    query.start_time - timedelta(seconds=self.lookback_padding_seconds) for query in batch_queries
+            # Group temporally adjacent Workloads so each fixed-size batch
+            # scans the smallest practical Prometheus lookback window.
+            unique_job_uids = sorted(
+                (job_uid for job_uid, uid_queries in queries_by_job_uid.items() if len(uid_queries) == 1),
+                key=lambda job_uid: (*bounds_by_workload_uid[queries_by_job_uid[job_uid][0].workload_uid], job_uid),
+            )
+            for batch_index in range(0, len(unique_job_uids), self.batch_size):
+                batch = set(unique_job_uids[batch_index : batch_index + self.batch_size])
+                batch_queries = [queries_by_job_uid[job_uid][0] for job_uid in batch]
+                query_start = min(bounds_by_workload_uid[query.workload_uid][0] for query in batch_queries)
+                query_end = max(bounds_by_workload_uid[query.workload_uid][1] for query in batch_queries)
+                routes = {
+                    job_uid: {queries_by_job_uid[job_uid][0].workload_uid}
+                    for job_uid in batch
+                }
+                batches.append((namespace, batch, query_start, query_end, routes))
+
+            # A shared Job UID is interval-scoped so a Pod returned for one
+            # Workload window cannot leak into another Workload's result.
+            shared_routes_by_scope: dict[
+                tuple[datetime, datetime],
+                dict[str, set[str]],
+            ] = defaultdict(lambda: defaultdict(set))
+            for query in namespace_queries:
+                bounds = bounds_by_workload_uid[query.workload_uid]
+                for job_uid in query.owner_job_uids:
+                    if len(queries_by_job_uid[job_uid]) > 1:
+                        shared_routes_by_scope[bounds][job_uid].add(query.workload_uid)
+
+            for (query_start, query_end), routes in sorted(shared_routes_by_scope.items()):
+                shared_job_uids = sorted(routes)
+                for batch_index in range(0, len(shared_job_uids), self.batch_size):
+                    batch = set(shared_job_uids[batch_index : batch_index + self.batch_size])
+                    batch_routes = {job_uid: routes[job_uid] for job_uid in batch}
+                    batches.append((namespace, batch, query_start, query_end, batch_routes))
+
+        batch_number = 0
+        for namespace, batch, query_start, query_end, workload_uids_by_job_uid in batches:
+            window_seconds = max(1, int((query_end - query_start).total_seconds()))
+            promql = self._job_uids_query(
+                namespace=namespace,
+                owner_job_uids=batch,
+                window_seconds=window_seconds,
+            )
+            batch_number += 1
+            try:
+                result = self.client.query(
+                    name=f"kueue_pod_placement_batch_{batch_number}",
+                    query=promql,
+                    timestamp=int(query_end.timestamp()),
                 )
-                query_end = min(
-                    now,
-                    max(query.end_time + timedelta(seconds=self.lookback_padding_seconds) for query in batch_queries),
+            except Exception as error:
+                logger.warning(
+                    f"Prometheus placement batch failed for namespace {namespace!r} "
+                    f"and {len(batch)} Job UIDs: {error}"
                 )
-                window_seconds = max(1, int((query_end - query_start).total_seconds()))
-                promql = self._job_uids_query(
-                    namespace=namespace,
-                    owner_job_uids=batch,
-                    window_seconds=window_seconds,
-                )
-                try:
-                    result = self.client.query(
-                        name=f"kueue_pod_placement_batch_{batch_index // self.batch_size + 1}",
-                        query=promql,
-                        timestamp=int(query_end.timestamp()),
-                    )
-                except Exception as error:
-                    logger.warning(
-                        f"Prometheus placement batch failed for namespace {namespace!r} "
-                        f"and {len(batch)} Job UIDs: {error}"
-                    )
+                continue
+
+            # Validate every returned series, then route it only to Workloads
+            # associated with its exact owner Job UID.
+            for series in result:
+                labels = series.get("metric") or {}
+                owner_job_uid = labels.get(self.pod_controller_uid_label)
+                pod_uid = labels.get("uid")
+                pod_name = labels.get("pod")
+                node_name = labels.get("node")
+                if (
+                    labels.get("namespace") != namespace
+                    or owner_job_uid not in batch
+                    or not all((pod_uid, pod_name, node_name))
+                ):
                     continue
-
-                for series in result:
-                    labels = series.get("metric") or {}
-                    owner_job_uid = labels.get(self.pod_controller_uid_label)
-                    pod_uid = labels.get("uid")
-                    pod_name = labels.get("pod")
-                    node_name = labels.get("node")
-                    if (
-                        labels.get("namespace") != namespace
-                        or owner_job_uid not in batch
-                        or not all((pod_uid, pod_name, node_name))
-                    ):
+                placement: PodPlacement = {
+                    "pod_uid": pod_uid,
+                    "pod_name": pod_name,
+                    "node_name": node_name,
+                    "source": "prometheus",
+                }
+                for workload_uid in workload_uids_by_job_uid[owner_job_uid]:
+                    # Resolve conflicting pod placements
+                    if pod_uid in conflicting_uids[workload_uid]:
                         continue
-                    placement: PodPlacement = {
-                        "pod_uid": pod_uid,
-                        "pod_name": pod_name,
-                        "node_name": node_name,
-                        "source": "prometheus",
-                    }
-                    for workload_uid in workload_uids_by_job_uid[owner_job_uid]:
-                        previous = by_workload[workload_uid].setdefault(pod_uid, placement)
-                        if previous != placement:
-                            raise ValueError(f"Prometheus returned conflicting placement for Pod UID {pod_uid}")
-
+                    previous = by_workload[workload_uid].get(pod_uid)
+                    if previous is None:
+                        by_workload[workload_uid][pod_uid] = placement
+                    elif previous != placement:
+                        by_workload[workload_uid].pop(pod_uid)
+                        conflicting_uids[workload_uid].add(pod_uid)
+                        logger.warning(
+                            f"Prometheus returned conflicting placements for Pod UID {pod_uid}; "
+                            f"discarding that Pod's placement"
+                        )
         return {
             workload_uid: [placements[pod_uid] for pod_uid in sorted(placements)]
             for workload_uid, placements in by_workload.items()
         }
-
-    def placements_for(
-        self,
-        workload: dict,
-        start_time: datetime,
-        end_time: datetime,
-        *,
-        owner_job_uids: set[str],
-    ) -> list[PodPlacement]:
-        """Return retained placements for a Job- or JobSet-owned Workload."""
-        owner = controller_owner(workload)
-        if owner is None or owner.get("kind") not in {"Job", "JobSet"}:
-            return []
-
-        metadata = workload.get("metadata") or {}
-        namespace = metadata.get("namespace")
-        if not namespace:
-            return []
-        owner_kind = owner["kind"]
-        if owner_kind == "Job":
-            owner_uid = owner.get("uid")
-            job_uids = {owner_uid} if owner_uid else set()
-        else:
-            job_uids = owner_job_uids
-        if not job_uids:
-            return []
-
-        start = assert_aware(start_time, "placement start_time")
-        end = assert_aware(end_time, "placement end_time")
-        if end < start:
-            raise ValueError("placement end_time precedes start_time")
-        now = datetime.now(timezone.utc)
-        query_end = min(now, end + timedelta(seconds=self.lookback_padding_seconds))
-        query_start = start - timedelta(seconds=self.lookback_padding_seconds)
-        window_seconds = max(1, int((query_end - query_start).total_seconds()))
-
-        query = self._job_uids_query(
-            namespace=namespace,
-            owner_job_uids=job_uids,
-            window_seconds=window_seconds,
-        )
-        result = self.client.query(
-            name=f"kueue_{owner_kind.lower()}_pod_placement",
-            query=query,
-            timestamp=int(query_end.timestamp()),
-        )
-        return self._placements_from_result(result, namespace)
 
     def _job_uids_query(
         self,
@@ -244,31 +241,13 @@ class PrometheusPlacementResolver:
         labels_deduped = f"group by (namespace,pod,uid,{self.pod_controller_uid_label}) ({labels_last})"
         pod_deduped = f"group by (namespace,pod,uid,node) ({pod_last})"
 
-        return f"{labels_deduped} * on(namespace,pod,uid) group_left(node) {pod_deduped}"
+        return (
+            f"{labels_deduped} * on(namespace,pod,uid) "
+            f"group_right({self.pod_controller_uid_label}) {pod_deduped}"
+        )
 
     def _base_matchers(self, namespace: str) -> list[str]:
         matchers = [f"namespace={promql_string(namespace)}"]
         if self.cluster_label is not None and self.cluster is not None:
             matchers.insert(0, f"{self.cluster_label}={promql_string(self.cluster)}")
         return matchers
-
-    @staticmethod
-    def _placements_from_result(result: list[dict], namespace: str) -> list[PodPlacement]:
-        by_uid: dict[str, PodPlacement] = {}
-        for series in result:
-            labels = series.get("metric") or {}
-            pod_uid = labels.get("uid")
-            pod_name = labels.get("pod")
-            node_name = labels.get("node")
-            if labels.get("namespace") != namespace or not all((pod_uid, pod_name, node_name)):
-                continue
-            placement: PodPlacement = {
-                "pod_uid": pod_uid,
-                "pod_name": pod_name,
-                "node_name": node_name,
-                "source": "prometheus",
-            }
-            previous = by_uid.setdefault(pod_uid, placement)
-            if previous != placement:
-                raise ValueError(f"Prometheus returned conflicting placement for Pod UID {pod_uid}")
-        return [by_uid[uid] for uid in sorted(by_uid)]

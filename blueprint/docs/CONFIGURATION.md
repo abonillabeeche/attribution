@@ -323,12 +323,11 @@ Fields:
 must be set together for a shared backend. The source evaluates an instant
 `last_over_time` query over the relevant Workload intervals. Following FACT's
 node-metadata collection pattern, the adapter combines owner Job UIDs from
-every Workload in the run that has one, groups them by namespace, and queries
-them in bounded batches. It then partitions the returned mappings back to each
-Workload by exact Job UID. The query joins `kube_pod_labels` to
-`kube_pod_info` on namespace, Pod name, and Pod UID. For JobSets, the adapter
-first resolves the current child Job UIDs from Kubernetes. Configure
-kube-state-metrics with:
+every Workload in the run that has one, orders unique Job UIDs by padded
+Workload interval, and queries them in namespace-scoped, bounded batches. 
+The query joins `kube_pod_labels` to `kube_pod_info` on namespace, Pod name, 
+and Pod UID. For JobSets, the adapter first resolves the current child Job UIDs 
+from Kubernetes. Configure kube-state-metrics with:
 
 ```text
 --metric-labels-allowlist=pods=[batch.kubernetes.io/controller-uid]

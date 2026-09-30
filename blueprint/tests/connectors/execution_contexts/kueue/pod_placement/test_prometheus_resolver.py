@@ -18,40 +18,6 @@ from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.pro
 )
 
 
-def _job_workload(namespace="team-a", owner_name="train-job", owner_uid="job-uid-1"):
-    return {
-        "metadata": {
-            "namespace": namespace,
-            "ownerReferences": [
-                {
-                    "apiVersion": "batch/v1",
-                    "kind": "Job",
-                    "name": owner_name,
-                    "uid": owner_uid,
-                    "controller": True,
-                }
-            ],
-        },
-    }
-
-
-def _jobset_workload(namespace="team-a", owner_name="train-jobset", owner_uid="jobset-uid-1"):
-    return {
-        "metadata": {
-            "namespace": namespace,
-            "ownerReferences": [
-                {
-                    "apiVersion": "jobset.x-k8s.io/v1alpha2",
-                    "kind": "JobSet",
-                    "name": owner_name,
-                    "uid": owner_uid,
-                    "controller": True,
-                }
-            ],
-        }
-    }
-
-
 def _series(*, namespace, pod, uid, node, controller_uid="job-uid-1"):
     return {
         "metric": {
@@ -124,61 +90,6 @@ class TestConstructorValidation:
             )
 
 
-class TestPlacementsForGuards:
-    def _source(self):
-        return PrometheusPlacementResolver(endpoint="https://prom.example")
-
-    def test_unsupported_owner_kind_returns_empty(self):
-        source = self._source()
-        workload = {
-            "metadata": {"namespace": "team-a"},
-            "spec": {},
-        }
-        workload["metadata"]["ownerReferences"] = [{"kind": "CronJob", "name": "x", "uid": "u", "controller": True}]
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        assert source.placements_for(workload, now, now, owner_job_uids=set()) == []
-
-    def test_no_owner_returns_empty(self):
-        source = self._source()
-        workload = {"metadata": {"namespace": "team-a"}}
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        assert source.placements_for(workload, now, now, owner_job_uids=set()) == []
-
-    def test_missing_namespace_returns_empty(self, mocker):
-        source = self._source()
-        mocker.patch.object(source.client, "query")
-        workload = _job_workload(namespace=None)
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        assert source.placements_for(workload, now, now, owner_job_uids=set()) == []
-        source.client.query.assert_not_called()
-
-    def test_direct_job_without_owner_uid_returns_empty(self, mocker):
-        source = self._source()
-        mocker.patch.object(source.client, "query")
-        workload = _job_workload(owner_uid=None)
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-
-        assert source.placements_for(workload, now, now, owner_job_uids=set()) == []
-        source.client.query.assert_not_called()
-
-    def test_jobset_without_child_job_uids_returns_empty(self, mocker):
-        source = self._source()
-        mocker.patch.object(source.client, "query")
-        workload = _jobset_workload()
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-
-        assert source.placements_for(workload, now, now, owner_job_uids=set()) == []
-        source.client.query.assert_not_called()
-
-    def test_end_before_start_raises(self):
-        source = self._source()
-        workload = _job_workload()
-        start = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 5, 1, 11, 0, tzinfo=timezone.utc)
-        with pytest.raises(ValueError, match="end_time precedes start_time"):
-            source.placements_for(workload, start, end, owner_job_uids=set())
-
-
 class TestUIDQueryConstruction:
     def test_single_job_uid_query_shape(self):
         """G6: last_over_time must wrap each raw metric individually (never
@@ -196,7 +107,7 @@ class TestUIDQueryConstruction:
             'kube_pod_labels{namespace="team-a",'
             'label_batch_kubernetes_io_controller_uid="job-uid-1"}'
             "[3600s])) "
-            "* on(namespace,pod,uid) group_left(node) "
+            "* on(namespace,pod,uid) group_right(label_batch_kubernetes_io_controller_uid) "
             "group by (namespace,pod,uid,node) (last_over_time("
             'kube_pod_info{namespace="team-a",node!=""}'
             "[3600s]))"
@@ -253,7 +164,9 @@ class TestUIDQueryConstruction:
         assert query.count("last_over_time(") == 2
         # The join operator must sit BETWEEN the two last_over_time(...)
         # results, not inside a last_over_time(...) itself.
-        join_index = query.index("* on(namespace,pod,uid) group_left(node)")
+        join_index = query.index(
+            "* on(namespace,pod,uid) group_right(label_batch_kubernetes_io_controller_uid)"
+        )
         first_last_over_time_end = query.index("]))") + len("]))")
         assert join_index >= first_last_over_time_end
         assert not query.startswith("last_over_time((")
@@ -314,7 +227,7 @@ class TestPlacementsForMany:
         result = source.placements_for_many(
             [
                 _placement_query("workload-a", owner_job_uids=("job-a",)),
-                _placement_query("workload-b", owner_job_uids=("job-b",), end_hour=2),
+                _placement_query("workload-b", owner_job_uids=("job-b",)),
             ]
         )
 
@@ -325,6 +238,153 @@ class TestPlacementsForMany:
         ]
         assert result["workload-b"] == [
             {"pod_uid": "pod-uid-b", "pod_name": "pod-b", "node_name": "node-b", "source": "prometheus"}
+        ]
+
+    def test_unique_job_uids_with_different_intervals_stay_batched(self, mocker):
+        source = PrometheusPlacementResolver(
+            endpoint="https://prom.example",
+            lookback_padding_seconds=0,
+        )
+        mock_query = mocker.patch.object(
+            source.client,
+            "query",
+            return_value=[
+                _series(
+                    namespace="team-a",
+                    pod="pod-early",
+                    uid="pod-uid-early",
+                    node="node-a",
+                    controller_uid="job-early",
+                ),
+                _series(
+                    namespace="team-a",
+                    pod="pod-late",
+                    uid="pod-uid-late",
+                    node="node-b",
+                    controller_uid="job-late",
+                ),
+            ],
+        )
+
+        result = source.placements_for_many(
+            [
+                _placement_query(
+                    "workload-early",
+                    owner_job_uids=("job-early",),
+                    start_hour=0,
+                    end_hour=1,
+                ),
+                _placement_query(
+                    "workload-late",
+                    owner_job_uids=("job-late",),
+                    start_hour=2,
+                    end_hour=3,
+                ),
+            ]
+        )
+
+        mock_query.assert_called_once()
+        assert mock_query.call_args.kwargs["timestamp"] == int(
+            datetime(2026, 5, 1, 3, tzinfo=timezone.utc).timestamp()
+        )
+        assert "[10800s]" in mock_query.call_args.kwargs["query"]
+        assert {placement["pod_uid"] for placement in result["workload-early"]} == {"pod-uid-early"}
+        assert {placement["pod_uid"] for placement in result["workload-late"]} == {"pod-uid-late"}
+
+    def test_unique_job_uid_batches_group_adjacent_intervals(self, mocker):
+        source = PrometheusPlacementResolver(
+            endpoint="https://prom.example",
+            lookback_padding_seconds=0,
+            batch_size=2,
+        )
+        mock_query = mocker.patch.object(source.client, "query", return_value=[])
+
+        source.placements_for_many(
+            [
+                _placement_query(
+                    "workload-late-a",
+                    owner_job_uids=("job-a",),
+                    start_hour=10,
+                    end_hour=11,
+                ),
+                _placement_query(
+                    "workload-early-b",
+                    owner_job_uids=("job-b",),
+                    start_hour=0,
+                    end_hour=1,
+                ),
+                _placement_query(
+                    "workload-late-c",
+                    owner_job_uids=("job-c",),
+                    start_hour=12,
+                    end_hour=13,
+                ),
+                _placement_query(
+                    "workload-early-d",
+                    owner_job_uids=("job-d",),
+                    start_hour=2,
+                    end_hour=3,
+                ),
+            ]
+        )
+
+        assert mock_query.call_count == 2
+        assert [call.kwargs["timestamp"] for call in mock_query.call_args_list] == [
+            int(datetime(2026, 5, 1, 3, tzinfo=timezone.utc).timestamp()),
+            int(datetime(2026, 5, 1, 13, tzinfo=timezone.utc).timestamp()),
+        ]
+        assert all("[10800s]" in call.kwargs["query"] for call in mock_query.call_args_list)
+
+    def test_shared_job_uid_does_not_cross_workload_intervals(self, mocker):
+        source = PrometheusPlacementResolver(
+            endpoint="https://prom.example",
+            lookback_padding_seconds=0,
+        )
+        mock_query = mocker.patch.object(
+            source.client,
+            "query",
+            side_effect=[
+                [_series(namespace="team-a", pod="pod-early", uid="pod-uid-early", node="node-a")],
+                [_series(namespace="team-a", pod="pod-late", uid="pod-uid-late", node="node-b")],
+            ],
+        )
+
+        result = source.placements_for_many(
+            [
+                _placement_query("workload-early", start_hour=0, end_hour=1),
+                _placement_query("workload-late", start_hour=2, end_hour=3),
+            ]
+        )
+
+        assert mock_query.call_count == 2
+        assert [call.kwargs["timestamp"] for call in mock_query.call_args_list] == [
+            int(datetime(2026, 5, 1, 1, tzinfo=timezone.utc).timestamp()),
+            int(datetime(2026, 5, 1, 3, tzinfo=timezone.utc).timestamp()),
+        ]
+        assert {placement["pod_uid"] for placement in result["workload-early"]} == {"pod-uid-early"}
+        assert {placement["pod_uid"] for placement in result["workload-late"]} == {"pod-uid-late"}
+
+    def test_conflicting_pod_does_not_discard_valid_placements(self, mocker):
+        source = PrometheusPlacementResolver(endpoint="https://prom.example")
+        mocker.patch.object(
+            source.client,
+            "query",
+            return_value=[
+                _series(namespace="team-a", pod="pod-conflict", uid="pod-uid-1", node="node-a"),
+                _series(namespace="team-a", pod="pod-conflict", uid="pod-uid-1", node="node-b"),
+                _series(namespace="team-a", pod="pod-valid", uid="pod-uid-2", node="node-c"),
+            ],
+        )
+
+        result = source.placements_for_many([_placement_query("workload-a")])
+
+        assert result["workload-a"] == [
+            {
+                "pod_uid": "pod-uid-2",
+                "pod_name": "pod-valid",
+                "node_name": "node-c",
+                "source": "prometheus",
+            }
         ]
 
     def test_job_uids_are_split_into_bounded_batches(self, mocker):
@@ -366,84 +426,3 @@ class TestPlacementsForMany:
 
         with pytest.raises(ValueError, match="duplicate placement query"):
             source.placements_for_many([query, query])
-
-
-class TestPlacementsForDispatch:
-    def test_job_owner_uses_owner_uid(self, mocker):
-        source = PrometheusPlacementResolver(endpoint="https://prom.example")
-        mock_query = mocker.patch.object(
-            source.client,
-            "query",
-            return_value=[_series(namespace="team-a", pod="p1", uid="u1", node="n1")],
-        )
-        workload = _job_workload(namespace="team-a", owner_name="train-job")
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        placements = source.placements_for(workload, now, now, owner_job_uids=set())
-
-        assert placements == [{"pod_uid": "u1", "pod_name": "p1", "node_name": "n1", "source": "prometheus"}]
-        kwargs = mock_query.call_args.kwargs
-        assert kwargs["name"] == "kueue_job_pod_placement"
-        assert 'label_batch_kubernetes_io_controller_uid="job-uid-1"' in kwargs["query"]
-        assert "label_replace" not in kwargs["query"]
-
-    def test_jobset_owner_uses_child_job_uids(self, mocker):
-        source = PrometheusPlacementResolver(endpoint="https://prom.example")
-        mock_query = mocker.patch.object(
-            source.client,
-            "query",
-            return_value=[_series(namespace="team-a", pod="p1", uid="u1", node="n1")],
-        )
-        workload = _jobset_workload(namespace="team-a", owner_name="train-jobset")
-        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        placements = source.placements_for(
-            workload,
-            now,
-            now,
-            owner_job_uids={"child-job-uid-2", "child-job-uid-1"},
-        )
-
-        assert placements == [{"pod_uid": "u1", "pod_name": "p1", "node_name": "n1", "source": "prometheus"}]
-        kwargs = mock_query.call_args.kwargs
-        assert kwargs["name"] == "kueue_jobset_pod_placement"
-        assert (
-            'label_batch_kubernetes_io_controller_uid=~"child-job-uid-1|child-job-uid-2"'
-            in kwargs["query"]
-        )
-        assert "train-jobset" not in kwargs["query"]
-
-
-class TestPlacementsFromResult:
-    def test_multiple_pods_sorted_by_uid(self):
-        result = [
-            _series(namespace="ns", pod="p2", uid="u2", node="n2"),
-            _series(namespace="ns", pod="p1", uid="u1", node="n1"),
-        ]
-        placements = PrometheusPlacementResolver._placements_from_result(result, "ns")
-        assert [p["pod_uid"] for p in placements] == ["u1", "u2"]
-        assert placements[0] == {"pod_uid": "u1", "pod_name": "p1", "node_name": "n1", "source": "prometheus"}
-
-    def test_series_from_other_namespace_dropped(self):
-        result = [_series(namespace="other-ns", pod="p1", uid="u1", node="n1")]
-        assert PrometheusPlacementResolver._placements_from_result(result, "ns") == []
-
-    @pytest.mark.parametrize("missing_label", ["uid", "pod", "node"])
-    def test_series_missing_required_label_dropped(self, missing_label):
-        series = _series(namespace="ns", pod="p1", uid="u1", node="n1")
-        del series["metric"][missing_label]
-        assert PrometheusPlacementResolver._placements_from_result([series], "ns") == []
-
-    def test_duplicate_uid_same_placement_deduped(self):
-        result = [
-            _series(namespace="ns", pod="p1", uid="u1", node="n1"),
-            _series(namespace="ns", pod="p1", uid="u1", node="n1"),
-        ]
-        placements = PrometheusPlacementResolver._placements_from_result(result, "ns")
-        assert len(placements) == 1
-
-    def test_conflicting_placement_for_same_uid_raises(self):
-        result = [
-            _series(namespace="ns", pod="p1", uid="u1", node="n1"),
-            _series(namespace="ns", pod="p1", uid="u1", node="n2"),
-        ]
-        with pytest.raises(ValueError, match="conflicting placement"):
-            PrometheusPlacementResolver._placements_from_result(result, "ns")
