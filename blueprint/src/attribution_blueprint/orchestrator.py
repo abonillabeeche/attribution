@@ -14,13 +14,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
-from nvidia_attribution_client import Scheduler
+from nvidia_attribution_client import AttributorInfoV2, ObservationV2, Scheduler
 
-from attribution_blueprint.connectors.attribution import (
-    AttributionConnector,
-    AttributorInfoV2,
-    ServiceObservation,
-)
+from attribution_blueprint.connectors.attribution import AttributionConnector
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
@@ -181,7 +177,7 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                service_obs = ServiceObservation.model_validate(obs)
+                service_obs = ObservationV2.model_validate(obs)
                 self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
@@ -236,10 +232,10 @@ class AttributionOrchestrator:
             source = obs["context"]["source"]
             source_value = source.value if hasattr(source, "value") else source
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
-            # Bundled connector bodies are JSON-encoded (ENTRY_TIMESERIES); a
+            # Bundled connector bodies are JSON-encoded (`entry_timeseries`); a
             # third-party connector may still send plain text. Preserve a
             # non-JSON body under `body_raw` so the dump round-trips for any
-            # (Source, Format) pair without crashing the per-context loop.
+            # source without crashing the per-context loop.
             raw_body = obs["body"]
             body_field: dict[str, object]
             try:
@@ -249,11 +245,6 @@ class AttributionOrchestrator:
             payload = {
                 "context": {
                     "source": source_value,
-                    "format": (
-                        obs["context"]["format"].value
-                        if hasattr(obs["context"]["format"], "value")
-                        else obs["context"]["format"]
-                    ),
                     "time_interval": {
                         "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
                         "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),

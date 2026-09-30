@@ -18,7 +18,6 @@ from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
     TimeseriesEntry,
@@ -169,7 +168,6 @@ class PromQLMetricsConnector:
                 "context": {
                     "time_interval": {"start": context["start_time"], "end": context["end_time"]},
                     "source": self._source,
-                    "format": Format.ENTRY_TIMESERIES,
                 },
                 "body": json.dumps([_timeseries_entry(sample) for sample in samples]),
             }

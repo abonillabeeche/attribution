@@ -79,22 +79,8 @@ class Source(str, Enum):
     CSP_EVENT = "csp_event"
 
 
-# Wire-format enums. Values mirror the service observation API contract.
-class Format(str, Enum):
-    EMPTY = ""
-    STRING_LIST = "string_list"
-    RAW_LOG = "raw_log"
-    RAW_LOKI_STREAMS = "raw_loki_streams"
-    LOKI_DICT_LIST = "loki_dict_list"
-    CSV_METRIC_RESPONSE = "csv_metric_response"
-    UFMLOG = "ufmlog"
-    PROMETHEUS_METRICS = "prometheus_metrics"
-    CSP_EVENT_LIST = "csp_event_list"
-    ENTRY_TIMESERIES = "entry_timeseries"
-
-
 class TimeInterval(TypedDict):
-    # A None bound is unbounded on that side; the service accepts it only for ENTRY_TIMESERIES.
+    # A None bound is unbounded on that side.
     start: datetime | None
     end: datetime | None
 
@@ -102,7 +88,6 @@ class TimeInterval(TypedDict):
 class ObservationContext(TypedDict):
     time_interval: TimeInterval
     source: Source
-    format: Format
 
 
 class NodeResource(TypedDict):
@@ -119,7 +104,7 @@ ResourceSet = Literal["AllJobResources"] | list[NodeResource | ReplicaResource]
 
 
 class TimeseriesEntry(TypedDict):
-    """One element of an ENTRY_TIMESERIES body. The service rejects any other key."""
+    """One element of an observation body. The service rejects any other key."""
 
     body: str
     # Nanoseconds since the epoch. Omit when the producer has no timestamp for the line.
@@ -130,9 +115,7 @@ class TimeseriesEntry(TypedDict):
 
 class Observation(TypedDict):
     context: ObservationContext
-    # `body` is the connector's already-serialized payload (JSON for
-    # ENTRY_TIMESERIES/LOKI_DICT_LIST/PROMETHEUS_METRICS; raw text for
-    # RAW_LOG). The service-side parser branches on `format` to deserialize.
+    # JSON-encoded list of `TimeseriesEntry`.
     body: str
 
 
@@ -150,7 +133,6 @@ def assert_aware(dt: datetime, field: str) -> datetime:
 
 __all__ = [
     "ExecutionContext",
-    "Format",
     "NodeResource",
     "Observation",
     "ObservationContext",
