@@ -29,16 +29,12 @@ class ExecutionContext(TypedDict):
     # Optional IANA zone used to interpret offsetless evidence timestamps.
     # This preserves regional/DST identity that a numeric UTC offset cannot.
     timezone: NotRequired[str]
-    # Wire-format value sent to the attribution service as `workload.type`.
-    # Constrained by the service's WorkloadTypeEnum ({"", "slurm", "runai"}
-    # today). A connector that has no matching enum member must send "".
+    # Wire-format scheduler identity sent to the attribution service as
+    # `workload.type`.
     workload_type: NotRequired[str]
     # BP-internal scheduler identity (the ECA component that discovered this
     # context: "slurm", "kueue", "static", ...). SQLiteOutput reads this for
-    # the `scheduler_type` column so kueue rows are distinguishable from
-    # other UNDEFINED sources even though kueue sends `workload_type=""`.
-    # Decoupling means BP can label its own rows without coordinating
-    # service-side enum changes.
+    # the `scheduler_type` column independently of the service wire value.
     scheduler: NotRequired[str]
     # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
     # it = the Workload's metadata.uid (a new Workload is created per
@@ -60,6 +56,9 @@ class ExecutionContext(TypedDict):
     cancelled_by: NotRequired[str]
     time_limit: NotRequired[int]
     gpu_count: NotRequired[int]
+    # Per-Pod scheduler placement with source provenance. Kueue populates
+    # this from live Pods and durable PlacementRecords when available.
+    pod_placements: NotRequired[list[dict]]
 
 
 # Wire-format enums. Values mirror the service observation API contract.

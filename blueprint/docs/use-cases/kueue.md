@@ -18,17 +18,23 @@ The blueprint host must have:
 
 - network access to a running Attribution Service
 - `kubectl` access to the target cluster
-- permission to read Kueue Workloads, their Job or JobSet owners, and pods
+- permission to read Kueue Workloads, their Job or JobSet owners, pods, and
+  Kubernetes Events (used only as a best-effort heuristic; see below)
 - permission to run `kubectl logs` for the workload pods
 - network access and credentials for Loki when collecting node syslogs
 
 Run attribution before the owned pods are deleted. Kueue Workload metadata may
 remain after pod garbage collection, but node placement and pod stdout depend
-on the pods still existing.
+on the pods still existing. If pod or node names are missing, the adapter makes
+a best-effort recovery from short-lived Job and Pod Events. This can recover
+identity for node-scoped telemetry, but cannot restore `kubectl logs` for a
+deleted pod. Event recovery is a heuristic, not a guaranteed API contract: it
+parses Kubernetes' human-readable Event messages, which have no versioned
+schema.
 
-The included configuration uses mTLS for Loki. The client certificate and
-private key must exist on the blueprint host and be readable by the account
-running the CLI.
+Loki configuration requires an auth block. The included configuration uses
+mTLS, so its client certificate and private key must exist on the blueprint
+host and be readable by the account running the CLI.
 
 ## Identify the Kueue Workload
 
@@ -92,7 +98,8 @@ must provide `host_name` values that exactly match Kubernetes node names.
 Set `workload.gpus_per_node` to the workload's actual per-node GPU allocation.
 The blueprint assumes one training rank per GPU and uses this value to build the
 rank-to-node mapping sent to the Attribution Service. Omitting it silently uses
-the default of four GPUs per node.
+the default of four GPUs per node. The adapter's separately derived `gpu_count`
+is persisted for reporting; it does not replace `gpus_per_node` in rank mapping.
 
 If node syslogs are unavailable, remove the complete `[log.syslog]`,
 `[log.syslog.loki]`, and `[log.syslog.loki.auth]` sections. Pod-log attribution
@@ -174,6 +181,9 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 Missing Workload names are skipped. If no supplied names resolve, the CLI
 reports `0 execution contexts discovered`.
 
+For time-range discovery with optional node filtering, see
+[the Kueue configuration reference](../CONFIGURATION.md#ecakueue).
+
 ## Interpret the Result
 
 See [Kueue sample output](./kueue-sample-output.md) for complete, annotated
@@ -182,20 +192,30 @@ examples. A successful CLI run and a healthy workload are different concepts:
 - `Attribution complete: 1/1 execution contexts succeeded` means the pipeline
   obtained and wrote a result.
 - `terminal_state=pass`, `sub_domain=none`, and `root_symptom=the process completes` indicate a healthy
-  workload result. With Kueue's current scheduler-state mapping, this requires
-  recognized completion evidence in the collected application log.
+  workload result. This can come from recognized completion evidence in the
+  collected application log or, when no stronger symptoms exist, the
+  service-facing `COMPLETED` state.
 - `terminal_state=fail`, `sub_domain=hardware`, and an XID root symptom indicate an unhealthy workload
   even when the attribution pipeline itself completed successfully.
 
 Kueue derives `FINISHED_SUCCEEDED` from a `Finished=True` condition with reason
-`Succeeded`. The adapter stores this value as the execution context `state`.
-SQLite writes it to `execution_context.status` and preserves it as `state` in
-`raw_scheduler_json`. Scheduler state and the attribution verdict answer
-different questions, so inspect both. The Attribution Service's current
-last-resort rule recognizes exactly `COMPLETED` as a successful state and does
-not translate `FINISHED_SUCCEEDED`. If pod logs contain no recognized
-completion or failure evidence, a successful Kueue state alone can therefore
-fall back to `job failed`.
+`Succeeded`. The adapter normalizes it to the service-facing state `COMPLETED`
+and preserves the original value as `kueue_state` in `raw_scheduler_json`. For
+`FINISHED_FAILED`, the adapter uses the direct Job or JobSet child Job reason
+to normalize the service-facing state to `TIMEOUT` or `FAILED`. Legacy
+`NodeLost` pod status and `DisruptionTarget=True` with
+`DeletionByPodGC` normalize the state to `NODE_FAIL`, even if Kueue remains
+`ADMITTED`. The adapter also normalizes `EVICTED_PREEMPTED` and
+`PREEMPTED` to the service-facing state `PREEMPTED`, and
+`EVICTED_NODEFAILURES` to `NODE_FAIL`. A native `Requeued=True` condition uses
+the existing service state `REQUEUED`. Other eviction reasons (queue
+stopped, admission check failed, pods-ready timeout, deactivated, ...)
+normalize to the generic service state `EVICTED`, which produces
+`Incomplete Info` without stronger evidence. SQLite writes the service-facing state to
+`execution_context.status`. Scheduler state and the attribution verdict answer
+different questions, so inspect both. When no meaningful failure symptoms are
+present, the Attribution Service recognizes `COMPLETED` as successful and
+produces the fallback symptom `the process completes`.
 
 ## Troubleshooting
 
@@ -209,7 +229,13 @@ Workload name requires `eca.kueue.namespace`; an explicit
 
 Confirm that owned pods still exist and that `kubectl logs` is authorized. The
 adapter supports standard Job and JobSet ownership. Pod garbage collection or
-an unsupported owner can leave no pod names for the log connector.
+an unsupported owner can leave no pod names for the log connector. The adapter
+can recover recently deleted pod and node names from Kubernetes Events, but
+`kubectl logs` still returns `NotFound` after the pod object is deleted. If
+neither live pods nor Events contain the mapping, the adapter reports that the
+pod or node list is unavailable. This recovery relies on parsing Event message
+text rather than a structured field, so a future Kubernetes version that
+changes that wording would silently degrade recovery back to unavailable.
 
 ### Loki returns no syslog observations
 
