@@ -130,18 +130,22 @@ class JobInfo(NamedTuple):
     def verify_node(self, node: str) -> str:
         """Check that node is part of this job.
 
+        A fully qualified name also matches its short form in the allocation.
+
         Args:
             node: The node name to verify.
 
         Returns:
-            The normalized node name (lowercase).
+            The normalized node name (lowercase), as the allocation lists it.
 
         Raises:
             UnknownNodeError: If the node is not in the job.
         """
         normalized_node = node.lower()
         if len(self.nodes) > 0 and normalized_node not in self.nodes:
-            raise UnknownNodeError(node)
+            normalized_node = utils.convert_hostname_to_short_format(normalized_node)
+            if normalized_node not in self.nodes:
+                raise UnknownNodeError(node)
         return normalized_node
 
     def rank_exists(self, rank: int) -> bool:
