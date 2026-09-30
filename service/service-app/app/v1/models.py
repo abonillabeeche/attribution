@@ -97,8 +97,8 @@ class AttributorInfoV1(HashableModel):
             timezone=to_zoneinfo(w.job_start_time),
             node_to_ranks=node_to_ranks,
         )
-        # V1 has no `workload.scheduler` wire field (unchanged per the
-        # Scheduler-Aware Language RFC); JobInfoBuilder.build() derives
+        # V1 has no `workload.scheduler` wire field (the V1 wire format is
+        # unchanged); JobInfoBuilder.build() derives
         # JobInfo.scheduler by normalizing `type` when scheduler(...) isn't
         # called, so no explicit call is needed here.
         if w.interest_start_time:

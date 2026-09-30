@@ -443,7 +443,7 @@ class TestV2WorkloadValidation:
 
 
 class TestSchedulerIdentityTranslation:
-    """workload.scheduler -> JobInfo.scheduler (Scheduler-Aware Language RFC).
+    """workload.scheduler -> JobInfo.scheduler.
 
     V2 carries the new explicit field; V1 has no wire change and instead falls
     back to deriving JobInfo.scheduler from workload.type."""

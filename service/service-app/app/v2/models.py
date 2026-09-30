@@ -58,8 +58,8 @@ class AttributorWorkloadInfoV2(HashableModel):
 
     id: str
     type: str
-    # Explicit scheduler identity (e.g. "slurm", "kueue"), decoupled from `type`
-    # per the Scheduler-Aware Language RFC. Optional for migration: requests
+    # Explicit scheduler identity (e.g. "slurm", "kueue"), decoupled from `type`.
+    # Optional for migration: requests
     # without it fall back to deriving scheduler identity from `type` (see
     # JobInfoBuilder.build()); unrecognized values normalize to "" rather than
     # being inserted into any rendered ID.

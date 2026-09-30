@@ -43,14 +43,13 @@ NVRX_TAG = "nvrx"
 
 
 class Scheduler(StrEnum):
-    """Legal values for `JobInfo.scheduler`.
+    """Recognized values for `JobInfo.scheduler`.
 
-    This is the enumerated source of truth for scheduler identity (see the
-    Scheduler-Aware Language RFC); unlike `JobInfo.type`, which is a
-    free-form legacy wire token, every `JobInfo.scheduler` value is one of
-    these members. `UNKNOWN` means "no recognized scheduler identity" --
-    callers must not use it to build a rendered ID and should fall back to
-    Slurm-preserving or generic wording instead.
+    Unlike `JobInfo.type`, which is a free-form legacy wire token, every
+    `JobInfo.scheduler` value is one of these members. `UNKNOWN` means "no
+    recognized scheduler identity": callers must not use it to build a
+    rendered ID and should fall back to generic wording. Existing Slurm
+    wording is unchanged; it only applies when the scheduler is `SLURM`.
     """
 
     UNKNOWN = ""
@@ -66,9 +65,8 @@ def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
             ``workload.type`` value used as a migration-era fallback.
 
     Returns:
-        The matching `Scheduler` member (case-insensitive, whitespace-trimmed)
-        when `raw` names one; otherwise `Scheduler.UNKNOWN`. Empty/absent
-        input also normalizes to `Scheduler.UNKNOWN`.
+        The matching `Scheduler` member when `raw` names one; otherwise
+        `Scheduler.UNKNOWN`.
     """
     if not raw:
         return Scheduler.UNKNOWN
@@ -110,12 +108,11 @@ class JobInfo(NamedTuple):
     # Legacy workload/category token from the wire (e.g. "slurm", "runai", "",
     # "interactive"). Preserved verbatim for compatibility with existing
     # consumers; new code that needs scheduler identity should read
-    # `scheduler` instead. See the Scheduler-Aware Language RFC.
+    # `scheduler` instead.
     type: str
     # Normalized scheduler identity. Set explicitly via
     # JobInfoBuilder.scheduler(...), or derived by falling back to
-    # normalizing `type` when not set. Unlike `type`, this is always a legal
-    # `Scheduler` member -- never an arbitrary string.
+    # normalizing `type` when not set.
     scheduler: Scheduler
     state: str
     cluster: str
@@ -436,13 +433,6 @@ class JobInfoBuilder:
 
     def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
         """Set the explicit scheduler identity (e.g. "slurm", "kueue").
-
-        Optional: when not called, `build()` falls back to normalizing `type`,
-        which keeps existing V1-style callers compatible without any code
-        change. The final value is always normalized through
-        `normalize_scheduler_identity` into a legal `Scheduler` member, so an
-        unrecognized token here still resolves to `Scheduler.UNKNOWN` rather
-        than being threaded through verbatim.
         """
         if self._scheduler is not None:
             raise JobInfoDuplicateFieldError("scheduler")
@@ -538,10 +528,6 @@ class JobInfoBuilder:
 
         node_from_rank: dict[int, str] = {r: n for n, ranks in self._node_to_ranks.items() for r in ranks}
 
-        # Prefer an explicit scheduler(...) call; otherwise fall back to deriving it
-        # from `type` (the pre-RFC wire value). Either way, always normalize into a
-        # legal Scheduler member so an unrecognized token resolves to UNKNOWN
-        # rather than passing through verbatim.
         scheduler = normalize_scheduler_identity(self._scheduler if self._scheduler is not None else self._type)
 
         return JobInfo(
