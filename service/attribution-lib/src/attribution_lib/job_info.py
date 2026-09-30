@@ -61,8 +61,7 @@ def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
     """Normalize a raw scheduler token to a legal `Scheduler` value.
 
     Args:
-        raw: A raw scheduler token, e.g. from ``workload.scheduler`` or a legacy
-            ``workload.type`` value used as a migration-era fallback.
+        raw: A raw scheduler token, e.g. from ``workload.scheduler``.
 
     Returns:
         The matching `Scheduler` member when `raw` names one; otherwise
@@ -110,9 +109,8 @@ class JobInfo(NamedTuple):
     # consumers; new code that needs scheduler identity should read
     # `scheduler` instead.
     type: str
-    # Normalized scheduler identity. Set explicitly via
-    # JobInfoBuilder.scheduler(...), or derived by falling back to
-    # normalizing `type` when not set.
+    # Normalized scheduler identity, set via JobInfoBuilder.scheduler(...).
+    # `UNKNOWN` when no scheduler was provided; it is never derived from `type`.
     scheduler: Scheduler
     state: str
     cluster: str
@@ -277,8 +275,7 @@ class JobInfo(NamedTuple):
                 node_to_ranks=node_to_ranks,
             )
             # This ingestion path is dedicated to Slurm, independent of whatever
-            # `type` happens to carry, so pin the scheduler identity explicitly
-            # rather than relying on the type-derived fallback.
+            # `type` happens to carry, so pin the scheduler identity explicitly.
             .scheduler("slurm")
             .num_gpus(int(slurmdb_job.get("gpus", 0)))
             .srun_cmd(slurmdb_job["srun_cmd"])
@@ -432,7 +429,10 @@ class JobInfoBuilder:
         return self
 
     def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
-        """Set the explicit scheduler identity (e.g. "slurm", "kueue").
+        """Set the scheduler identity (e.g. "slurm", "kueue").
+
+        Optional: when not called, `JobInfo.scheduler` is `Scheduler.UNKNOWN`.
+        It is never derived from `type`.
         """
         if self._scheduler is not None:
             raise JobInfoDuplicateFieldError("scheduler")
@@ -528,7 +528,7 @@ class JobInfoBuilder:
 
         node_from_rank: dict[int, str] = {r: n for n, ranks in self._node_to_ranks.items() for r in ranks}
 
-        scheduler = normalize_scheduler_identity(self._scheduler if self._scheduler is not None else self._type)
+        scheduler = normalize_scheduler_identity(self._scheduler)
 
         return JobInfo(
             id=self._id,

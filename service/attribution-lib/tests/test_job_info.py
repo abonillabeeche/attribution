@@ -353,7 +353,7 @@ def _end_time(timezone):
 
 
 class TestJobInfoBuilderScheduler:
-    """JobInfoBuilder.scheduler(...) and its build()-time fallback."""
+    """JobInfoBuilder.scheduler(...); `scheduler` is never derived from `type`."""
 
     def test_explicit_scheduler_is_normalized(self, timezone):
         builder = _builder(timezone, node_to_ranks={}, type="anything")
@@ -362,17 +362,13 @@ class TestJobInfoBuilderScheduler:
         assert job_info.scheduler is Scheduler.KUEUE
         assert job_info.type == "anything"  # `type` is preserved verbatim regardless
 
-    def test_falls_back_to_normalizing_type_when_unset(self, timezone):
-        builder = _builder(timezone, node_to_ranks={}, type="slurm")
-        job_info = builder.job_end_time(_end_time(timezone)).build()
-
-        assert job_info.scheduler is Scheduler.SLURM
-
-    def test_unrecognized_type_falls_back_to_unknown_scheduler(self, timezone):
-        builder = _builder(timezone, node_to_ranks={}, type="training")
+    @pytest.mark.parametrize("type_", ["slurm", "kueue", "training", ""])
+    def test_unset_scheduler_is_unknown_regardless_of_type(self, timezone, type_):
+        builder = _builder(timezone, node_to_ranks={}, type=type_)
         job_info = builder.job_end_time(_end_time(timezone)).build()
 
         assert job_info.scheduler is Scheduler.UNKNOWN
+        assert job_info.type == type_
 
     def test_scheduler_setter_rejects_duplicate(self, timezone):
         builder = _builder(timezone, node_to_ranks={})
@@ -381,12 +377,13 @@ class TestJobInfoBuilderScheduler:
             builder.scheduler("kueue")
 
     def test_empty_scheduler_call_does_not_count_as_set(self, timezone):
-        """Calling scheduler("") is a no-op, like cancelled_by(""); the type-derived
-        fallback still applies and a later real call is not treated as a duplicate."""
+        """Calling scheduler("") is a no-op, like cancelled_by(""); the scheduler stays
+        unset and a later real call is not treated as a duplicate."""
         builder = _builder(timezone, node_to_ranks={}, type="kueue")
-        job_info = builder.scheduler("").job_end_time(_end_time(timezone)).build()
+        builder.scheduler("")
+        job_info = builder.scheduler("slurm").job_end_time(_end_time(timezone)).build()
 
-        assert job_info.scheduler is Scheduler.KUEUE
+        assert job_info.scheduler is Scheduler.SLURM
 
     def test_from_slurmdb_pins_scheduler_to_slurm(self, timezone):
         slurmdb_job = {

@@ -59,10 +59,8 @@ class AttributorWorkloadInfoV2(HashableModel):
     id: str
     type: str
     # Explicit scheduler identity (e.g. "slurm", "kueue"), decoupled from `type`.
-    # Optional for migration: requests
-    # without it fall back to deriving scheduler identity from `type` (see
-    # JobInfoBuilder.build()); unrecognized values normalize to "" rather than
-    # being inserted into any rendered ID.
+    # Optional: requests without it get `Scheduler.UNKNOWN`; it is never derived
+    # from `type`.
     scheduler: Optional[str] = None
     srun_cmd: Optional[str] = "dummy"
     job_start_time: AwareDatetime

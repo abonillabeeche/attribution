@@ -445,8 +445,8 @@ class TestV2WorkloadValidation:
 class TestSchedulerIdentityTranslation:
     """workload.scheduler -> JobInfo.scheduler.
 
-    V2 carries the new explicit field; V1 has no wire change and instead falls
-    back to deriving JobInfo.scheduler from workload.type."""
+    V2 carries the explicit field and never derives it from `type`; V1 has no
+    wire change, so its conversion maps the legacy `type` to a scheduler."""
 
     def test_v2_explicit_scheduler_is_normalized_onto_job_info(self):
         info = make_up_attributor_info("v2", type="anything", scheduler="KUEUE")
@@ -456,12 +456,13 @@ class TestSchedulerIdentityTranslation:
         assert job_info.scheduler == "kueue"
         assert job_info.type == "anything"  # type is preserved verbatim regardless
 
-    def test_v2_missing_scheduler_falls_back_to_normalizing_type(self):
+    def test_v2_missing_scheduler_is_unknown_even_when_type_names_one(self):
         info = make_up_attributor_info("v2", type="slurm", scheduler=None)
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == "slurm"
+        assert job_info.scheduler == ""  # Scheduler.UNKNOWN
+        assert job_info.type == "slurm"
 
     def test_v2_unrecognized_scheduler_normalizes_to_unknown(self):
         info = make_up_attributor_info("v2", type="slurm", scheduler="not-a-real-scheduler")
@@ -470,12 +471,22 @@ class TestSchedulerIdentityTranslation:
 
         assert job_info.scheduler == ""  # Scheduler.UNKNOWN
 
-    def test_v1_has_no_scheduler_field_and_derives_from_type(self):
-        info = make_up_attributor_info("v1", type=WorkloadTypeEnum.SLURM)
+    @pytest.mark.parametrize(
+        "workload_type,expected",
+        [
+            (WorkloadTypeEnum.SLURM, "slurm"),
+            (WorkloadTypeEnum.KUEUE, "kueue"),
+            (WorkloadTypeEnum.RUNAI, ""),  # no supported scheduler yet
+            (WorkloadTypeEnum.UNDEFINED, ""),
+        ],
+    )
+    def test_v1_derives_scheduler_from_type(self, workload_type, expected):
+        info = make_up_attributor_info("v1", type=workload_type)
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == "slurm"
+        assert job_info.scheduler == expected
+        assert job_info.type == workload_type
         assert not hasattr(info.workload, "scheduler")
 
 
