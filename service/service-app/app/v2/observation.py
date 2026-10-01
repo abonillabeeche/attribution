@@ -12,6 +12,7 @@
 
 from zoneinfo import ZoneInfo
 
+from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
     Format as ObservationFormat,
@@ -78,6 +79,6 @@ class ObservationV2(HashableModel):
         )
     )
 
-    def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation:
+    def to_lib_observation(self, job_info: JobInfo) -> LibObservation:
         """Convert the observation to a lib observation."""
-        return LibObservation(self.context.to_lib_context(timezone), decode_timeseries_entries(self.body))
+        return LibObservation(self.context.to_lib_context(job_info.timezone), decode_timeseries_entries(self.body))
