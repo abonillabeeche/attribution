@@ -21,6 +21,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_confi
 
 from app.exceptions import InvalidObservationBodyError
 
+# One day inside datetime's range so any accepted ts survives `datetime.fromtimestamp(ts, tz)` in every timezone.
 _TS_NS_MIN = int((datetime.min.replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1e9)
 _TS_NS_MAX = int((datetime.max.replace(tzinfo=timezone.utc) - timedelta(days=1)).timestamp() * 1e9)
 
