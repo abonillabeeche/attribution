@@ -14,7 +14,9 @@ from enum import Enum
 from typing import Protocol
 
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+    PlacementQuery,
     PlacementRecord,
+    PodPlacement,
 )
 
 
@@ -38,3 +40,7 @@ class PlacementStore(PlacementReader, Protocol):
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None: ...
 
     def create(self, record: PlacementRecord) -> CreateResult: ...
+
+
+class PlacementResolver(Protocol):
+    def placements_for_many(self, queries: list[PlacementQuery]) -> dict[str, list[PodPlacement]]: ...

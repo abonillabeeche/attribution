@@ -89,10 +89,14 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     pod_selector_for as _pod_selector_for,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+    PlacementQuery,
     PlacementRecord,
     PodPlacement,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import PlacementReader
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
+    PlacementReader,
+    PlacementResolver,
+)
 from attribution_blueprint.types import assert_aware
 
 
@@ -186,8 +190,7 @@ def _earliest_condition_time(conditions: list[dict], cond_type: str) -> datetime
     Used for `start_time` derivation: a workload that was admitted, preempted,
     and re-admitted has two Admitted=True conditions; the original admission
     is what callers expect from `start_time`, so a time-window query covering
-    the first admission interval still matches. (max() would silently shift
-    the window forward to the latest re-admission.)
+    the first admission interval still matches.
     """
     times: list[datetime] = []
     for c in conditions:
@@ -482,10 +485,7 @@ def _service_state(
         return "NODE_FAIL"
     if _has_node_failure_pod(pods, _pod_selector_for(workload)):
         return "NODE_FAIL"
-    # Requeued=True can stay True after re-admission, so a raw condition
-    # check can't tell "still awaiting admission" from "running again".
-    # Gate on kueue_state instead: it already reflects current precedence
-    # (Finished/Admitted/RUNNING/QuotaReserved outrank requeue history).
+    # Requeued=True can stay True after re-admission, so gate on kueue_state instead
     currently_admitted_or_reserved = kueue_state in _CURRENT_ADMISSION_OR_RESERVATION_STATES
     currently_finished = kueue_state.startswith("FINISHED")
     if (
@@ -764,10 +764,6 @@ def _parse_workload(
     if time_limit is not None:
         ctx["time_limit"] = time_limit
 
-    # The owning Job's user is the most reliable username source — Workloads
-    # themselves don't carry one. We accept `username` from any common label
-    # spelling Kubernetes batch tooling stamps; absent the label, the field
-    # is left off (NotRequired).
     labels = meta.get("labels") or {}
     for key in ("user", "username", "kueue.x-k8s.io/user", "app.kubernetes.io/created-by"):
         value = labels.get(key)
@@ -803,6 +799,7 @@ class KueueExecutionContextAdapter:
         placement_records_enabled: bool = False,
         placement_reader: PlacementReader | None = None,
         event_max_age_seconds: int = 3600,
+        prometheus_placement_resolver: PlacementResolver | None = None,
     ):
         self.kubectl_path = kubectl_path
         self.kubeconfig = kubeconfig
@@ -814,6 +811,7 @@ class KueueExecutionContextAdapter:
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
         self.event_max_age_seconds = event_max_age_seconds
+        self.prometheus_placement_resolver = prometheus_placement_resolver
 
     # --- public protocol ---------------------------------------------------
 
@@ -833,17 +831,13 @@ class KueueExecutionContextAdapter:
 
         Returns the same list shape `discover_by_time_range` does. Missing
         workloads are silently skipped — `kubectl get workload <name>` exits
-        non-zero for unknown names and the per-id loop tolerates that, the
-        same way the Slurm adapter tolerates sacct's non-zero exit for
-        unknown ExecutionContext ids.
+        non-zero for unknown names.
         """
         workloads: list[dict] = []
         for ref in ids:
             ns, _, name = ref.partition("/")
             if not name:
-                # Bare name: only meaningful when the adapter is pinned to a
-                # namespace via config. Otherwise reject — `<name>` without a
-                # namespace is ambiguous against multi-tenant clusters.
+                # `<name>` without a namespace is ambiguous against multi-tenant clusters.
                 if not self.namespace:
                     raise ValueError(
                         f"kueue ECA --ids: {ref!r} is missing a namespace; "
@@ -877,12 +871,8 @@ class KueueExecutionContextAdapter:
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
         listing = self._kubectl_list("workloads", namespace=self.namespace or None)
-        # Cheap first pass: parse only the timestamps each workload object
-        # already carries (conditions + creationTimestamp). Skip the
-        # per-workload `kubectl get pods` / `kubectl get job` round-trips
-        # that `_finalize` would otherwise issue for every entry in the
-        # listing. On a long-history cluster this avoids O(N) wasted calls
-        # for workloads we'd discard at the window filter anyway.
+        # parse only the timestamps each workload object
+        # already carries (conditions + creationTimestamp).
         from datetime import timezone
 
         now = datetime.now(tz=timezone.utc)
@@ -904,8 +894,6 @@ class KueueExecutionContextAdapter:
         if not wanted:
             return filtered
         return [c for c in filtered if wanted.intersection(c["nodes"])]
-
-    # --- private kubectl plumbing -----------------------------------------
 
     def _kubectl_base(self) -> list[str]:
         cmd = [self.kubectl_path]
@@ -978,12 +966,6 @@ class KueueExecutionContextAdapter:
         - JobSet owner →
           `jobset.sigs.k8s.io/jobset-name=<jobset.name>` (matches every
           pod across every child Job of every replicatedJob)
-
-        Workloads with no recognised owner (pending Workloads whose Job
-        hasn't been created yet, or custom-resource owners we don't
-        attribute) are skipped — there are no pods to fetch. Kueue's own
-        `kueue.x-k8s.io/job-uid` label is NOT used: it lives on the
-        Workload, not on the pods.
         """
         pods: list[dict] = []
         for wl in workloads:
@@ -1156,6 +1138,44 @@ class KueueExecutionContextAdapter:
         context["nodes"] = sorted(set(context["nodes"]) | {item["node_name"] for item in placements})
         context["pod_names"] = sorted(set(context.get("pod_names") or []) | {item["pod_name"] for item in placements})
 
+    def _merge_prometheus_placements_batched(
+        self,
+        parsed: list[tuple[dict, KueueExecutionContext]],
+        owner_jobs: dict[str, dict],
+    ) -> None:
+        if self.prometheus_placement_resolver is None:
+            return
+
+        queries: list[PlacementQuery] = []
+        contexts_by_workload_uid: dict[str, KueueExecutionContext] = {}
+        for workload, context in parsed:
+            owner_job_uids = _owner_job_uids(workload, owner_jobs)
+            workload_uid = context["workload_uid"]
+            if not owner_job_uids or not workload_uid:
+                continue
+            queries.append(
+                PlacementQuery(
+                    workload_uid=workload_uid,
+                    namespace=context["namespace"],
+                    owner_job_uids=frozenset(owner_job_uids),
+                    start_time=context["start_time"],
+                    end_time=context["end_time"],
+                )
+            )
+            contexts_by_workload_uid[workload_uid] = context
+
+        if not queries:
+            return
+        try:
+            placements_by_workload = self.prometheus_placement_resolver.placements_for_many(queries)
+        except Exception as error:
+            logger.warning(f"batched Prometheus placement query failed: {error}")
+            return
+        for workload_uid, placements in placements_by_workload.items():
+            context = contexts_by_workload_uid.get(workload_uid)
+            if context is not None:
+                self._merge_placements(context, placements)
+
     def _finalize(self, workloads: list[dict]) -> list[KueueExecutionContext]:
         if not workloads:
             return []
@@ -1169,6 +1189,7 @@ class KueueExecutionContextAdapter:
                 live_node_loss_nodes = _live_node_loss_nodes(pods, _pod_selector_for(wl))
                 self._merge_placement_records(ctx, live_node_loss_nodes)
                 parsed.append((wl, ctx))
+        self._merge_prometheus_placements_batched(parsed, owner_jobs)
 
         missing = [
             (workload, ctx)

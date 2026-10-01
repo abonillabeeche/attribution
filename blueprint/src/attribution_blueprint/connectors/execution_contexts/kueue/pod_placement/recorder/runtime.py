@@ -43,10 +43,8 @@ class StaleOwnerReference(RuntimeError):
     """A namespace/name lookup returned an object whose uid doesn't match
     the uid already known from the referencing object's ownerReference.
 
-    Kubernetes names are reusable after deletion; this means the original
-    Job/JobSet was deleted and a different object with the same name now
-    exists. Treated the same as ResolutionPending: retry, since the correct
-    object may become visible, but never trust the mismatched one."""
+    Kubernetes names are reusable after deletion. Treated the same as ResolutionPending: 
+    retry, since the correct object may become visible."""
 
 
 class KubernetesIdentityResolver:
@@ -85,9 +83,6 @@ class KubernetesIdentityResolver:
         job_uid = (job.get("metadata") or {}).get("uid")
         pod_owner_uid = pod_owner.get("uid")
         if not pod_owner_uid or job_uid != pod_owner_uid:
-            # `pod_owner["name"]` is only a lookup key, not an identity: names
-            # are reusable after deletion, so this Job may be a different
-            # object than the one that created the Pod. Never trust it.
             raise StaleOwnerReference(
                 f"Job {namespace}/{pod_owner['name']} uid mismatch "
                 f"(Pod controller ref uid={pod_owner_uid!r}, fetched uid={job_uid!r})"

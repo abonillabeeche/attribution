@@ -32,6 +32,17 @@ class PodPlacement(TypedDict):
 
 
 @dataclass(frozen=True)
+class PlacementQuery:
+    """One Workload's inputs to a shared historical-placement query."""
+
+    workload_uid: str
+    namespace: str
+    owner_job_uids: frozenset[str]
+    start_time: datetime
+    end_time: datetime
+
+
+@dataclass(frozen=True)
 class WorkloadIdentity:
     name: str
     uid: str
