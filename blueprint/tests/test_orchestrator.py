@@ -482,8 +482,9 @@ def test_build_attributor_info_missing_workload_type_is_undefined():
     assert info["workload"]["type"] == ""
 
 
-def test_wire_kueue_workload_type_is_forwarded_without_scheduler_field():
-    """Kueue is explicit on the wire; the internal scheduler field stays private."""
+def test_wire_carries_scheduler_independently_of_workload_type():
+    """`workload.scheduler` is forwarded onto the wire alongside, but decoupled
+    from, `workload.type`."""
     ctx = _make_ctx("ctx-7")
     ctx["workload_type"] = "kueue"
     ctx["scheduler"] = "kueue"
@@ -492,6 +493,33 @@ def test_wire_kueue_workload_type_is_forwarded_without_scheduler_field():
     info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == "kueue"
+    assert info["workload"]["scheduler"] == "kueue"
+
+
+def test_wire_carries_slurm_scheduler():
+    """Slurm forwards its explicit identity even though `workload.type` also
+    carries "slurm", making the new field present for existing Slurm traffic."""
+    ctx = _make_ctx("ctx-7")
+    ctx["scheduler"] = "slurm"
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
+    assert info["workload"]["type"] == "slurm"
+    assert info["workload"]["scheduler"] == "slurm"
+
+
+def test_wire_omits_connector_only_scheduler_identity():
+    """The static adapter uses `scheduler="static"` for local provenance, not
+    as a service scheduler, so it is omitted from the wire."""
+    ctx = _make_ctx("ctx-7")
+    ctx["workload_type"] = "slurm"
+    ctx["scheduler"] = "static"
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
+    assert info["workload"]["type"] == "slurm"
     assert "scheduler" not in info["workload"]
 
 

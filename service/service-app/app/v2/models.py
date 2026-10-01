@@ -33,7 +33,7 @@ from attribution_lib.decision_trace_recorder import (
     Action as LibAction,
     NodeType as LibNodeType,
 )
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
@@ -58,6 +58,8 @@ class AttributorWorkloadInfoV2(HashableModel):
 
     id: str
     type: str
+    # Explicit scheduler identity (e.g. "slurm", "kueue").
+    scheduler: Optional[Scheduler] = None
     srun_cmd: Optional[str] = "dummy"
     job_start_time: AwareDatetime
     timezone: ZoneInfo
@@ -97,6 +99,8 @@ class AttributorInfoV2(HashableModel):
             timezone=w.timezone,
             node_to_ranks=w.nodes,
         )
+        if w.scheduler is not None:
+            builder.scheduler(w.scheduler)
         if w.interest_start_time:
             builder.interest_start_time(w.interest_start_time)
         if w.interest_end_time:

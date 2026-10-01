@@ -68,6 +68,7 @@ __all__ = [
     "RecommendationEnum",
     "ResourcelessSource",
     "RuleParameters",
+    "Scheduler",
     "SingleAttribution",
     "Source",
     "SourcedSymptom",
@@ -144,6 +145,7 @@ from nvidia_attribution_client.models.observation_response_v2 import Observation
 from nvidia_attribution_client.models.recommendation_enum import RecommendationEnum as RecommendationEnum
 from nvidia_attribution_client.models.resourceless_source import ResourcelessSource as ResourcelessSource
 from nvidia_attribution_client.models.rule_parameters import RuleParameters as RuleParameters
+from nvidia_attribution_client.models.scheduler import Scheduler as Scheduler
 from nvidia_attribution_client.models.single_attribution import SingleAttribution as SingleAttribution
 from nvidia_attribution_client.models.source import Source as Source
 from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom as SourcedSymptom
