@@ -34,6 +34,7 @@ from attribution_lib.decision_trace_recorder import (
     NodeType as LibNodeType,
 )
 from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
+from attribution_lib.observation.inbound import Id as ObservationId
 from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
@@ -49,7 +50,6 @@ from app.attributor import (
     AttributorMetadata,
 )
 from app.exceptions import DAG_SHAPE_ERRORS, ResponseModel
-from app.observation import ObservationId
 from app.util import HashableModel
 
 

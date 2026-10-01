@@ -17,7 +17,7 @@ import pytest
 from nvidia_attribution_client import ApiException, AttributorInfoV2
 
 from attribution_blueprint.orchestrator import AttributionOrchestrator
-from attribution_blueprint.types import Format, Source
+from attribution_blueprint.types import Source
 
 
 def _wire(info: AttributorInfoV2) -> dict:
@@ -47,8 +47,6 @@ def _make_obs(source: Source = Source.SYSLOG) -> dict:
     return {
         "context": {
             "source": source,
-            "format": Format.RAW_LOG,
-            "resources": "",
             "time_interval": {"start": "2026-05-01T00:00:00Z", "end": "2026-05-01T01:00:00Z"},
         },
         "body": "line",
@@ -379,8 +377,6 @@ def test_dump_observations_writes_files(tmp_path):
     obs = {
         "context": {
             "source": "syslog",
-            "format": "loki_dict_list",
-            "resources": "AllJobResources",
             "time_interval": {"start": ctx["start_time"], "end": ctx["end_time"]},
         },
         "body": json.dumps([{"timestamp": 1, "node": "n1", "body": "kernel: oops"}]),
@@ -757,8 +753,6 @@ def test_dump_observations_tolerates_non_json_body(tmp_path):
     raw_text_obs = {
         "context": {
             "source": "APPLOG",
-            "format": "RAW_LOG",
-            "resources": "",
             "time_interval": {"start": ctx["start_time"], "end": ctx["end_time"]},
         },
         "body": "line1\nline2 not json\n",
