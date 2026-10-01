@@ -47,7 +47,7 @@ def fake_applog_observation(body: str, version: str = "v1") -> ObservationV1 | O
             format=ObservationFormat.RAW_LOG_LINES,
         )
         return ObservationV1(context=context, body=body)
-    return _fake_v2_observation(ObservationSource.APPLOG, json.dumps([{"body": line} for line in body.split("\n")]))
+    return _fake_v2_observation(ObservationSource.APPLOG, json.dumps([{"body": line} for line in body.splitlines()]))
 
 
 def fake_syslog_observation(body: str, version: str = "v1") -> ObservationV1 | ObservationV2:
@@ -499,6 +499,37 @@ class TestSchedulerIdentityTranslation:
         assert job_info.scheduler == expected
         assert job_info.type == workload_type
         assert not hasattr(info.workload, "scheduler")
+
+
+class TestV2ObservationValidation:
+    """V2 observation contexts reject the V1-only fields and a window whose start follows its end."""
+
+    @pytest.mark.parametrize(
+        "context_update",
+        [
+            {"time_interval": {"start": END.isoformat(), "end": START.isoformat()}},
+            {"format": "entry_timeseries"},
+            {"resources": "AllJobResources"},
+        ],
+        ids=["reversed_bounds", "format", "resources"],
+    )
+    def test_invalid_context_returns_422(self, client, context_update):
+        att_id = post_attributor(client, make_up_attributor_info("v2"))
+        obs = json.loads(fake_applog_observation("line", "v2").model_dump_json())
+        obs["context"].update(context_update)
+
+        response = client.post(f"/v2/attributor/{att_id}/observation", json=obs)
+
+        assert response.status_code == 422
+
+    def test_equal_bounds_are_accepted(self, client):
+        att_id = post_attributor(client, make_up_attributor_info("v2"))
+        obs = fake_applog_observation("line", "v2")
+        obs.context.time_interval = TimeIntervalV2(start=START, end=START)
+
+        response = client.post(f"/v2/attributor/{att_id}/observation", content=obs.model_dump_json())
+
+        assert response.status_code == http.HTTPStatus.CREATED, response.text
 
 
 class TestV1NodeToRanksOverride:
