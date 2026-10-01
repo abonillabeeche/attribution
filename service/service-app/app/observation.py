@@ -10,7 +10,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Annotated, Any, NotRequired, Optional, TypedDict
 from zoneinfo import ZoneInfo
 
 from attribution_lib.observation.inbound import (
@@ -22,7 +22,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval as LibTimeInterval,
 )
 from attribution_lib.resources import AllJobResources, ResourceSet
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, model_validator, with_config
 
 from app.exceptions import InvalidObservationBodyError, UnknownObservationFormatError
 from app.util import HashableModel, TimeInterval
@@ -39,7 +39,7 @@ class ObservationContext(HashableModel):
 
     @model_validator(mode="after")
     def _only_entry_timeseries_may_declare_an_open_interval(self) -> "ObservationContext":
-        # Every other format has the bounds read out from under it during extraction. 
+        # Every other format has the bounds read out from under it during extraction.
         # This validator ensures other formats are silently affected during migration to entry_timeseries.
         if self.format is not ObservationFormat.ENTRY_TIMESERIES and (
             self.time_interval.start is None or self.time_interval.end is None
@@ -76,18 +76,17 @@ _TS_NS_MIN = int((datetime.min.replace(tzinfo=timezone.utc) + timedelta(days=1))
 _TS_NS_MAX = int((datetime.max.replace(tzinfo=timezone.utc) - timedelta(days=1)).timestamp() * 1e9)
 
 
-class TimeseriesEntry(BaseModel):
+@with_config(ConfigDict(extra="forbid"))
+class TimeseriesEntry(TypedDict):
     """One entry of an `entry_timeseries` body."""
 
-    model_config = ConfigDict(extra="forbid")
-
     body: str
-    ts: Optional[int] = Field(default=None, ge=_TS_NS_MIN, le=_TS_NS_MAX)
-    resources: Optional[ResourceSet] = None
+    ts: NotRequired[Optional[Annotated[int, Field(ge=_TS_NS_MIN, le=_TS_NS_MAX)]]]
+    resources: NotRequired[Optional[ResourceSet]]
 
 
-class TimeseriesEntries(RootModel):
-    root: list[TimeseriesEntry]
+_TIMESERIES_ENTRY_DICTS = TypeAdapter(list[TimeseriesEntry])
+_RESOURCE_SET = TypeAdapter(ResourceSet)
 
 
 class Observation(HashableModel):
@@ -121,10 +120,19 @@ class Observation(HashableModel):
                 except ValidationError as e:
                     raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
             case ObservationFormat.ENTRY_TIMESERIES:
+                # Validate straight into plain dicts, then give each the shape a
+                # pydantic model_dump() gives: "ts" and "resources" always present,
+                # "resources" serialized. Building a model per entry and then a dict
+                # from each held two full copies of the entries at once: about seven
+                # times the body for a 2 GiB application log.
                 try:
-                    body = [entry.model_dump() for entry in TimeseriesEntries.model_validate_json(self.body).root]
+                    body = _TIMESERIES_ENTRY_DICTS.validate_json(self.body)
                 except ValidationError as e:
                     raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
+                for entry in body:
+                    entry.setdefault("ts", None)
+                    resources = entry.get("resources")
+                    entry["resources"] = None if resources is None else _RESOURCE_SET.dump_python(resources)
             case _:
                 raise UnknownObservationFormatError.new(context.format.value).to_http_exception()
 

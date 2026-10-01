@@ -302,6 +302,23 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
     ]
 
 
+@pytest.mark.parametrize("ts,decoded", [("123", 123), (2.0, 2), (True, 1)])
+def test_a_ts_the_validator_coerces_decodes_to_an_int(ts, decoded):
+    observation = Observation(
+        context=ObservationContext(
+            time_interval=TimeInterval(start=None, end=None),
+            source=ObservationSource.SYSLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+        ),
+        body=json.dumps([{"body": "x", "ts": ts}]),
+    )
+
+    (line,) = observation.to_lib_observation(ZoneInfo("UTC")).lines
+
+    assert line == {"body": "x", "ts": decoded, "resources": None}
+    assert type(line["ts"]) is int
+
+
 @pytest.mark.parametrize(
     "body,reason",
     [
@@ -309,6 +326,11 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
         ('[{"body": "x", "resources": [{"kind": "planet", "name": "mars"}]}]', "unknown resource kind"),
         ('[{"body": "x", "timestamp": 1744734437830498000}]', "misspelled ts would be silently dropped"),
         ('[{"body": "x", "ts": 1744734437830498000000}]', "timestamp out of datetime range"),
+        ('[{"body": "x", "ts": -1744734437830498000000}]', "timestamp below datetime range"),
+        ('[{"body": "x", "ts": 2.5}]', "fractional timestamp"),
+        ('[{"ts": 1744734437830498000}]', "missing body"),
+        ('[{"body": 5}]', "non-string body"),
+        ('{"body": "x"}', "an entry outside a list"),
     ],
 )
 def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
@@ -331,4 +353,3 @@ def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
 
     assert response.status_code == 400, reason
     assert response.json()["model_type"] == "InvalidObservationBodyError", reason
-
