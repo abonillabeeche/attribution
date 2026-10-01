@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 from attribution_lib.exceptions import UnprocessedObservationError
 
+from app.attributor import WorkloadTypeEnum
 from app.exceptions import (
     DuplicateAttributorError,
     DuplicateObservationError,
@@ -428,6 +429,16 @@ class TestV2WorkloadValidation:
         response = client.post("/v2/attributor", content=json.dumps(info_dict))
         self._assert_validation_error_shape(response)
 
+    @pytest.mark.parametrize("scheduler", ["slurmm", "kueue-v1", "KUEUE", "runai"])
+    def test_unrecognized_scheduler_returns_422(self, client, scheduler):
+        """`workload.scheduler` is an enum on the wire, so typos are rejected instead of
+        silently becoming UNKNOWN."""
+        info_dict = json.loads(make_up_attributor_info("v2").model_dump_json())
+        info_dict["workload"]["scheduler"] = scheduler
+
+        response = client.post("/v2/attributor", content=json.dumps(info_dict))
+        self._assert_validation_error_shape(response)
+
     def test_empty_nodes_dict_is_accepted_as_never_ran(self, client):
         """Mirroring the lib, empty `nodes` mapping is a valid workload representing a job that
         never received an allocation."""
@@ -439,6 +450,47 @@ class TestV2WorkloadValidation:
         info = make_up_attributor_info("v2", nodes={"node0": [0, 1], "node1": [2]})
         response = client.post("/v2/attributor", content=info.model_dump_json())
         self._assert_validation_error_shape(response)
+
+
+class TestSchedulerIdentityTranslation:
+    """workload.scheduler -> JobInfo.scheduler.
+
+    V2 carries the explicit field and never derives it from `type`; V1 has no
+    wire change, so its conversion maps the legacy `type` to a scheduler."""
+
+    def test_v2_explicit_scheduler_is_set_on_job_info(self):
+        info = make_up_attributor_info("v2", type="anything", scheduler="kueue")
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == "kueue"
+        assert job_info.type == "anything"  # type is preserved verbatim regardless
+
+    def test_v2_missing_scheduler_is_unknown_even_when_type_names_one(self):
+        info = make_up_attributor_info("v2", type="slurm", scheduler=None)
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == ""  # Scheduler.UNKNOWN
+        assert job_info.type == "slurm"
+
+    @pytest.mark.parametrize(
+        "workload_type,expected",
+        [
+            (WorkloadTypeEnum.SLURM, "slurm"),
+            (WorkloadTypeEnum.KUEUE, "kueue"),
+            (WorkloadTypeEnum.RUNAI, ""),  # no supported scheduler yet
+            (WorkloadTypeEnum.UNDEFINED, ""),
+        ],
+    )
+    def test_v1_derives_scheduler_from_type(self, workload_type, expected):
+        info = make_up_attributor_info("v1", type=workload_type)
+
+        job_info = info.to_lib_jobinfo()
+
+        assert job_info.scheduler == expected
+        assert job_info.type == workload_type
+        assert not hasattr(info.workload, "scheduler")
 
 
 class TestV1NodeToRanksOverride:
