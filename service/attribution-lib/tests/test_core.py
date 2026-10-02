@@ -1497,6 +1497,14 @@ class TestPLROutcomeIsolation:
         assert outcome_result.value().root_cause_symptom == ""
 
 
+def test_xid_38_maps_to_fail_infrasw(source_set_factory):
+    """XID-38 (FECS watchdog timeout, a driver firmware error) maps to 'Fail InfraSW'."""
+    symptoms = SymptomSet()
+    symptoms.add(source_set_factory("XID-38-FECS_ERR_WATCHDOG_TIMEOUT"))
+
+    assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
+
+
 class TestCancelledByUserOutcome:
     """Tests for 'Cancelled by user' symptom mapping to 'Cancelled by User' outcome.
 
