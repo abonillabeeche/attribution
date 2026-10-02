@@ -73,7 +73,7 @@ def obs_ctx():
         ),
         resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.APPLOG,
-        format=ObsFormat.RAW_LOKI_STREAMS,
+        format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
         id=Id(999),
     )

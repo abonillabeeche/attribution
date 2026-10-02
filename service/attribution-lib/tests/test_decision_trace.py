@@ -44,7 +44,9 @@ T2 = datetime(2025, 6, 15, 10, 0, 5, tzinfo=TZ)
 TIME_INTERVAL = TimeInterval(T1, T2)
 
 
-def _make_obs_context(source: ObservationSource, fmt: ObservationFormat) -> ObservationContext:
+def _make_obs_context(
+    source: ObservationSource, fmt: ObservationFormat = ObservationFormat.ENTRY_TIMESERIES
+) -> ObservationContext:
     return ObservationContext(
         time_interval=TIME_INTERVAL,
         resources=AllJobResources,
@@ -62,7 +64,7 @@ def _make_source(
     line_num: int = 100,
     datum: str = "test evidence",
 ) -> Source:
-    ctx = _make_obs_context(obs_source, ObservationFormat.LOKI_DICT_LIST)
+    ctx = _make_obs_context(obs_source)
     return Source(
         source_context=ctx,
         line_num=line_num,
@@ -265,7 +267,7 @@ class TestBuildSymptomDetails:
 
     def test_source_with_none_timestamp(self):
         """Source with None timestamp serializes correctly."""
-        ctx = _make_obs_context(ObservationSource.SYSLOG, ObservationFormat.LOKI_DICT_LIST)
+        ctx = _make_obs_context(ObservationSource.SYSLOG)
         src = Source(ctx, None, "evidence", None, AllJobResources, "rule")
         att_res = _make_attribution_result({"node-001": {"XID-48": [src]}})
 

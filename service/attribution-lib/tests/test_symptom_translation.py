@@ -43,7 +43,7 @@ def _make_source_for_node(node_name: str) -> Source:
         time_interval=TimeInterval(start=now, end=now),
         resources=AllJobResources,
         source=ObservationSource.APPLOG,
-        format=ObservationFormat.RAW_LOG_LINES,
+        format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
     )
     return Source(

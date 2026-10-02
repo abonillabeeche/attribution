@@ -57,7 +57,6 @@ def sys_tst_bldr(attribution_test_builder):
 
     Simplifies syslog tests by providing sensible defaults:
     - source: SYSLOG (always)
-    - format: RAW_LOKI_STREAMS (default)
     """
 
     def _build(job_info, data, *, stream_id=None, events_to_add=None):
@@ -65,7 +64,6 @@ def sys_tst_bldr(attribution_test_builder):
             job_info=job_info,
             data=data,
             source=ObservationSource.SYSLOG,
-            format=ObservationFormat.RAW_LOKI_STREAMS,
             check_fn=process_check,
             stream_id=stream_id,
             events_to_add=events_to_add,
@@ -319,7 +317,7 @@ def gen_mfu(jobinfo, tflops_start, obs_data):
         time = jobinfo.job_start_time
     else:
         time = jobinfo.job_end_time
-    obase = obs_data(jobinfo, [], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+    obase = obs_data(jobinfo, [], ObservationSource.APPLOG)
     src = Source(
         source_context=obase.context,
         line_num=None,
@@ -340,7 +338,7 @@ def syslog_jobinfo(timezone, syslog_jobinfo_builder):
 class TestNodes:
     @pytest.fixture
     def raw_result(self, request, sys_tst_bldr, syslog_jobinfo):
-        filename = TEST_LOG_ROOT / "test-raw-loki.json"
+        filename = TEST_LOG_ROOT / "syslog_otlp_entries.json"
         return sys_tst_bldr(syslog_jobinfo, filename, stream_id=request.node.name)
 
     def test_raw(self, raw_result):
@@ -350,7 +348,7 @@ class TestNodes:
 
     @pytest.fixture
     def plain_result(self, request, sys_tst_bldr, syslog_jobinfo):
-        filename = TEST_LOG_ROOT / "syslog_plain_loki.json"
+        filename = TEST_LOG_ROOT / "syslog_plain_entries.json"
         return sys_tst_bldr(syslog_jobinfo, filename, stream_id=request.node.name)
 
     def test_plain(self, plain_result):
@@ -964,7 +962,6 @@ def test_node_filtering_logging(simple_job_factory, sys_tst_bldr):
             body="Nov 15 10:32:00 job-node-002 kernel: System is powering down",
             node="job-node-002",
             timestamp_ns=1700005200000000000,
-            severity="info",
         ),
     ]
 
@@ -1008,23 +1005,8 @@ def test_node_filtering_logging_extraction_failure(simple_job_factory, sys_tst_b
         nodes=["valid-node"],
     )
 
-    # Create malformed syslog data that will naturally cause UnidentifiableNodeError
-    # Note: We can't use make_syslog_entry here because we need malformed data with empty attributes
-    test_syslog_data = [
-        {
-            "stream": {
-                "detected_level": "ERROR",
-                "job": "test-job",
-                "service_name": "syslog",
-            },
-            "values": [
-                [
-                    "1700005000000000000",
-                    '{"body":"Malformed log line without proper hostname","severity":"error","attributes":{}}',
-                ]
-            ],
-        }
-    ]
+    # No declared node and none in the body, so the entry is dropped as unidentifiable.
+    test_syslog_data = [{"ts": 1700005000000000000, "body": "Malformed log line without proper hostname"}]
 
     # Mock only the node filtering logger to capture debug calls, but let natural flow cause UnidentifiableNodeError
     with patch("attribution_lib.logline_filtering.logger.logger") as mock_logger:

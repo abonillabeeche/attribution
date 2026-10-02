@@ -37,6 +37,7 @@ from test_support.helpers import (
     AttributionTestResult,
     UnknownAttr,
     create_simple_job_info,
+    line_entries,
     make_applog_entry,
     make_node_to_ranks,
     match_bad,
@@ -54,20 +55,21 @@ TEST_LOG_ROOT = Path(__file__).parents[4] / "tests" / "app_logs"
 def app_tst_bldr(attribution_test_builder):
     def _build(
         job_info,
-        data,
+        lines=(),
         *,
-        format=ObservationFormat.RAW_LOG_LINES,
+        entries=None,
         stream_id=None,
         insert_tflops_line=False,
     ):
         return attribution_test_builder(
             job_info=job_info,
-            data=data,
+            data=entries if entries is not None else line_entries(lines),
             source=ObservationSource.APPLOG,
-            format=format,
             check_fn=process_check,
             stream_id=stream_id,
             insert_tflops_line=insert_tflops_line,
+            # Fixture lines are dated independently of the job, so the window stays open.
+            time_interval=TimeInterval(None, None),
         )
 
     return _build
@@ -122,7 +124,7 @@ class TestCheckResults:
     def checkresults_result(self, event_manager_class, big_jobinfo, obs_file):
         filename = TEST_LOG_ROOT / "test-model_12345678_date_25-01-01_time_00-00-00_sparsified.log"
         event_stream = event_manager_class.create_stream("12345678")
-        observation_source = obs_file(big_jobinfo, filename, ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+        observation_source = obs_file(big_jobinfo, filename, ObservationSource.APPLOG)
         event_stream.register_observation_context(observation_source.context)
         process_check(
             event_stream=event_stream,
@@ -175,13 +177,11 @@ class TestFiltering:
             make_applog_entry(
                 body="Nov 15 10:30:00 job-node-001 Starting training process",
                 timestamp_ns=1700005000000000000,
-                severity="info",
                 hostname="job-node-001",
             ),
             make_applog_entry(
                 body="Nov 15 10:31:00 other-node-999 torch.OutOfMemoryError: CUDA out of memory",
                 timestamp_ns=1700005100000000000,
-                severity="error",
                 hostname="other-node-999",
             ),
         ]
@@ -196,7 +196,7 @@ class TestFiltering:
 
         # Mock the logger to capture debug calls
         with patch("attribution_lib.logline_filtering.logger.logger") as mock_logger:
-            _ = app_tst_bldr(job_info, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+            _ = app_tst_bldr(job_info, entries=test_applog_data)
 
             # Check if any debug logging was called for node filtering
             # Note: applog has complex state machine, so we check if logging occurred
@@ -220,23 +220,10 @@ class TestFiltering:
             nodes=["test-node"],
         )
 
-        # Create mock entry that will trigger UnknownResourceError
-        # Note: Using raw format here because we need malformed data
-        test_applog_data = [
-            {
-                "stream": {"hostname": "unknown-node"},  # Node not in job
-                "values": [
-                    [
-                        "1700005000000000000",
-                        "Nov 15 10:30:00 unknown-node Test log message",
-                    ]
-                ],
-            }
-        ]
+        # No declared node and none parseable from the body, which triggers UnknownResourceError
+        test_applog_data = [{"ts": 1700005000000000000, "body": "Nov 15 10:30:00 unknown-node Test log message"}]
 
-        observation_source = obs_data(
-            job_info, test_applog_data, ObservationSource.APPLOG, ObservationFormat.RAW_LOKI_STREAMS
-        )
+        observation_source = obs_data(job_info, test_applog_data, ObservationSource.APPLOG)
         event_stream = event_manager.create_stream("test_state_machine_loggin_failure_protection")
         event_stream.register_observation_context(observation_source.context)
         # Mock logging to track calls first, then test exception handling
@@ -286,18 +273,16 @@ class TestIgnoredHostnamePatterns:
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer scanner-001<37046>",
                 timestamp_ns=1700005000000000000,
-                severity="warn",
                 hostname="test-node",
             ),
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer compute-node-003<37046>",
                 timestamp_ns=1700005100000000000,
-                severity="warn",
                 hostname="test-node",
             ),
         ]
 
-        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        result = app_tst_bldr(closed_peer_job, entries=test_applog_data)
         node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
 
         assert "scanner-001" not in node_attr.attributions
@@ -312,12 +297,11 @@ class TestIgnoredHostnamePatterns:
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer scanner-001.example.com<37046>",
                 timestamp_ns=1700005000000000000,
-                severity="warn",
                 hostname="test-node",
             ),
         ]
 
-        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        result = app_tst_bldr(closed_peer_job, entries=test_applog_data)
         node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
         assert "scanner-001" not in node_attr.attributions
         assert "scanner-001.example.com" not in node_attr.attributions
@@ -330,18 +314,16 @@ class TestIgnoredHostnamePatterns:
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer 192.0.2.1<37046>",
                 timestamp_ns=1700005000000000000,
-                severity="warn",
                 hostname="test-node",
             ),
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer compute-node-003<37046>",
                 timestamp_ns=1700005100000000000,
-                severity="warn",
                 hostname="test-node",
             ),
         ]
 
-        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        result = app_tst_bldr(closed_peer_job, entries=test_applog_data)
         node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
 
         assert "192.0.2.1" not in node_attr.attributions
@@ -356,82 +338,14 @@ class TestIgnoredHostnamePatterns:
             make_applog_entry(
                 body="NCCL WARN Net : Connection closed by remote peer 192.0.2.1<37046>",
                 timestamp_ns=1700005000000000000,
-                severity="warn",
                 hostname="test-node",
             ),
         ]
 
-        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        result = app_tst_bldr(closed_peer_job, entries=test_applog_data)
         node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
         assert "192.0.2.1" in node_attr.attributions
         assert "Connection closed" in node_attr.attributions["192.0.2.1"].attributions
-
-
-class TestRawLokiIllFormed:
-    @pytest.fixture(scope="class")
-    def job_info(self, timezone, big_jobinfo_builder):
-        return big_jobinfo_builder(True)
-
-    @pytest.fixture(scope="class")
-    def the_json(self):
-        return json.loads("""[
-    {
-      "stream": {
-        "cluster": "test-cluster-cs-001",
-        "p_cluster": "test-cluster-cs-001-v3",
-        "service_name": "test-cluster-cs-001"
-      },
-      "values": [
-        [
-          "1766087271661001504",
-          "0:   virtual_pipeline_model_parallel_size ............ None"
-        ],
-        [
-          "1766087271661003704",
-          "0:   vision_backbone_type ............................ vit"
-        ],
-        [
-          "1766087271661005384",
-          "33"
-        ]]
-        }]""")
-
-    @pytest.fixture(scope="class")
-    def observation(self, the_json, timezone, job_info):
-        # Create observation context
-        time_interval = TimeInterval(job_info.job_start_time, job_info.job_end_time)
-        resources = AllJobResources  # You may need to populate this with actual resources
-        context = InboundContext(
-            time_interval=time_interval,
-            resources=resources,
-            source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOKI_STREAMS,
-            timezone=timezone,
-        )
-
-        # Create observation from lines with json body
-        observation = Observation.from_inbound(context=context, lines=the_json)
-        return EntrySourceBase.from_observation(observation)
-
-    def test_for_proper_unpack(self, observation, job_info):
-        expected = [
-            (
-                1766087271661001504 * 1e-9,
-                "0:   virtual_pipeline_model_parallel_size ............ None",
-                job_info.nodes[0],
-            ),
-            (
-                1766087271661003704 * 1e-9,
-                "0:   vision_backbone_type ............................ vit",
-                job_info.nodes[0],
-            ),
-            (1766087271661005384 * 1e-9, "33", job_info.nodes[int(33 / 8)]),
-        ]
-
-        for exp, entry in zip(expected, observation, strict=True):
-            assert datetime.fromtimestamp(exp[0], tz=observation.context.timezone) == entry.time()
-            assert exp[1] == entry.body()
-            assert exp[2] == entry.node(job_info)
 
 
 class TestNcclWatchdogAccumulator:
@@ -719,7 +633,7 @@ class TestApplogRules:
     ):
         big_jobinfo = big_jobinfo_builder(False)
         event_stream = event_stream(symptom)
-        obs = obs_data(big_jobinfo, [line], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+        obs = obs_data(big_jobinfo, line_entries([line]), ObservationSource.APPLOG)
         event_stream.register_observation_context(obs.context)
         process_check(
             event_stream=event_stream,
@@ -1257,7 +1171,7 @@ class TestApplogRules:
     )
     def test_rule(self, line, attr, nodes, symptom, rule, big_jobinfo, obs_data, event_stream, request):
         event_stream = event_stream(symptom)
-        obs = obs_data(big_jobinfo, [line], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+        obs = obs_data(big_jobinfo, line_entries([line]), ObservationSource.APPLOG)
         event_stream.register_observation_context(obs.context)
         process_check(
             event_stream=event_stream,
@@ -1384,7 +1298,7 @@ class TestApplogRules:
     def test_applog_to_symptom_rule(self, line, symptom, rule, big_jobinfo_builder, obs_data, event_stream, request):
         event_stream = event_stream(symptom)
         big_jobinfo = big_jobinfo_builder(True)
-        obs = obs_data(big_jobinfo, [f"0: {line}"], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+        obs = obs_data(big_jobinfo, line_entries([f"0: {line}"]), ObservationSource.APPLOG)
         event_stream.register_observation_context(obs.context)
         process_check(
             event_stream=event_stream,
@@ -1416,7 +1330,7 @@ class TestApplogRules:
     ):
         event_stream = event_stream(symptom)
         big_jobinfo = big_jobinfo_builder(False)
-        obs = obs_data(big_jobinfo, [f"0: {line}"], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+        obs = obs_data(big_jobinfo, line_entries([f"0: {line}"]), ObservationSource.APPLOG)
         event_stream.register_observation_context(obs.context)
         process_check(
             event_stream=event_stream,
@@ -1461,9 +1375,8 @@ class TestApplogRules:
 
         result = attribution_test_builder(
             job_info=job_info,
-            data=log_lines,
+            data=line_entries(log_lines),
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOG_LINES,
             check_fn=process_check,
         )
 
@@ -1503,9 +1416,8 @@ class TestApplogRules:
 
         result = attribution_test_builder(
             job_info=job_info,
-            data=log_lines,
+            data=line_entries(log_lines),
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOG_LINES,
             check_fn=process_check,
         )
 
@@ -1542,9 +1454,8 @@ class TestApplogRules:
 
         result = attribution_test_builder(
             job_info=job_info,
-            data=log_lines,
+            data=line_entries(log_lines),
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOG_LINES,
             check_fn=process_check,
         )
 
@@ -1591,9 +1502,8 @@ class TestApplogRules:
 
         result = attribution_test_builder(
             job_info=job_info,
-            data=log_lines,
+            data=line_entries(log_lines),
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOG_LINES,
             check_fn=process_check,
         )
 

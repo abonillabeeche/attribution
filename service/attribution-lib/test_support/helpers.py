@@ -10,7 +10,7 @@
 
 """Minimal helper utilities for attribution tests."""
 
-import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -27,6 +27,7 @@ from attribution_lib.observation import (
 )
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
+    Format as ObservationFormat,
     TimeInterval,
 )
 from attribution_lib.observation.processing import EntrySourceBase
@@ -103,7 +104,7 @@ def create_simple_job_info(
     return builder.build()
 
 
-def observation_base(jobinfo, timezone, source, format, data, *, time_interval=None):
+def observation_base(jobinfo, timezone, source, data, *, format=ObservationFormat.ENTRY_TIMESERIES, time_interval=None):
     if time_interval is None:
         time_interval = TimeInterval(jobinfo.job_start_time, jobinfo.job_end_time)
     context = InboundContext(
@@ -151,52 +152,18 @@ def match_interesting(node_attr, node, symptom, rule, allow_bad=False):
         assert not sources.has_bad()
 
 
-def make_syslog_entry(body: str, node: str, timestamp_ns: int | float, severity: str = "error") -> dict:
-    payload = json.dumps({"body": body, "severity": severity, "attributes": {"hostname": node}})
-    return {
-        "stream": {
-            "detected_level": severity.upper(),
-            "job": "test-job",
-            "service_name": "syslog",
-        },
-        "values": [
-            [
-                str(int(timestamp_ns)),
-                payload,
-            ],
-        ],
-    }
+def line_entries(lines: Iterable[str]) -> list[dict]:
+    """`entry_timeseries` entries declaring neither `ts` nor `resources`, so both are parsed from the body."""
+    return [{"body": line} for line in lines]
 
 
-def make_applog_entry(
-    body: str,
-    timestamp_ns: int | float,
-    severity: str = "info",
-    hostname: Optional[str] = None,
-    node: Optional[str] = None,
-) -> dict:
-    if hostname is None:
-        hostname = node
+def make_syslog_entry(body: str, node: str, timestamp_ns: int | float) -> dict:
+    return {"ts": int(timestamp_ns), "resources": [{"kind": "node", "hostname": node}], "body": body}
 
-    attributes = {}
-    if hostname:
-        attributes["hostname"] = hostname
 
-    attrs_json = json.dumps(attributes) if attributes else "{}"
-
-    return {
-        "stream": {
-            "detected_level": severity.upper(),
-            "job": "test-job",
-            "service_name": "applog",
-        },
-        "values": [
-            [
-                str(int(timestamp_ns)),
-                f'{{"body":"{body}","severity":"{severity}","attributes":{attrs_json}}}',
-            ],
-        ],
-    }
+def make_applog_entry(body: str, timestamp_ns: int | float, hostname: Optional[str] = None) -> dict:
+    resources = [{"kind": "node", "hostname": hostname}] if hostname else None
+    return {"ts": int(timestamp_ns), "resources": resources, "body": body}
 
 
 class UnknownAttr(Exception):

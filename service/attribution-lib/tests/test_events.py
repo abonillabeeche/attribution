@@ -524,7 +524,7 @@ class TestEnumPopulation:
             assert source_id[0] > 0, f"Source '{source}' ID should be positive"
 
         # Test a few known format values
-        for format_val in ["raw_loki_streams", "loki_dict_list", "prometheus_metrics"]:
+        for format_val in ["string_list", "entry_timeseries"]:
             format_id = mgr._conn.execute("SELECT id FROM obs_formats WHERE name=?", [format_val]).fetchone()
             assert format_id is not None, f"Format '{format_val}' should have an ID"
             assert format_id[0] > 0, f"Format '{format_val}' ID should be positive"
@@ -543,11 +543,11 @@ class TestEnumPopulation:
         assert syslog_str == "syslog", "Should retrieve 'syslog' string from ID"
 
         # Test obs_formats lookup helper
-        loki_id = mgr._obs_formats.get_id("loki_dict_list")
-        assert loki_id is not None, "Should find pre-populated 'loki_dict_list'"
+        format_id = mgr._obs_formats.get_id("entry_timeseries")
+        assert format_id is not None, "Should find pre-populated 'entry_timeseries'"
 
-        loki_str = mgr._obs_formats.get_str(loki_id)
-        assert loki_str == "loki_dict_list", "Should retrieve 'loki_dict_list' string from ID"
+        format_str = mgr._obs_formats.get_str(format_id)
+        assert format_str == "entry_timeseries", "Should retrieve 'entry_timeseries' string from ID"
 
         mgr.close()
 
@@ -612,7 +612,7 @@ class TestEventRule:
             time_interval=TimeInterval(datetime.now() - timedelta(minutes=15), datetime.now()),
             resources=resources,
             source=ObsSource.APPLOG,
-            format=ObsFormat.RAW_LOKI_STREAMS,
+            format=ObsFormat.ENTRY_TIMESERIES,
             timezone=ZoneInfo("UTC"),
             id=Id(54321),
         )
@@ -684,7 +684,7 @@ class TestTimestampAndTimezoneFlow:
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
             resources=resources,
             source=ObsSource.SYSLOG,
-            format=ObsFormat.RAW_LOKI_STREAMS,
+            format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,
             id=Id(1),
         )
@@ -761,7 +761,7 @@ class TestTimestampAndTimezoneFlow:
                 time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
                 resources=resources,
                 source=ObsSource.SYSLOG,
-                format=ObsFormat.RAW_LOKI_STREAMS,
+                format=ObsFormat.ENTRY_TIMESERIES,
                 timezone=tz,
                 id=obs_id,
             )
@@ -814,7 +814,7 @@ class TestTimestampAndTimezoneFlow:
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
             resources=resources,
             source=ObsSource.SYSLOG,
-            format=ObsFormat.RAW_LOKI_STREAMS,
+            format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,
             id=Id(1),
         )
