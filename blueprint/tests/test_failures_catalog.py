@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -106,3 +107,57 @@ def test_catalog_entry_count_matches_loaded_catalog_size() -> None:
 def test_catalog_yaml_has_no_duplicate_keys_within_an_entry() -> None:
     """A dropped `- id:` marker folds an entry into its neighbour, which YAML accepts silently."""
     yaml.load(CATALOG_PATH.read_text(encoding="utf-8"), Loader=_StrictLoader)
+
+
+def test_xid_38_remediation_stays_undeclared_pending_review() -> None:
+    """Do not automate the unresolved XID 38 ignore-versus-reset decision."""
+    entry = next(entry for entry in _catalog_entries() if entry["id"] == "xid-38")
+    assert "recommended_action" not in entry
+    action = entry["personas"]["tenant_sre"]["action"]
+    assert "Retry on a fresh allocation" in action
+    assert "avoid that node" in action
+
+
+def test_xid_79_resets_gpu_before_escalating() -> None:
+    """Keep the XID 79 sequence and tenant guidance aligned with the RFC."""
+    entry = next(entry for entry in _catalog_entries() if entry["id"] == "xid-79")
+    assert entry["recommended_action"] == {
+        "operational_state": "drain",
+        "remediation_actions": ["reset_gpu", "service_required"],
+    }
+    action = entry["personas"]["tenant_sre"]["action"]
+    assert "nvidia-smi --gpu-reset" in action
+    assert "restart the affected node's operating system" not in action
+
+
+def test_xid_95_resets_gpu_without_changing_xid_94() -> None:
+    """Follow the public XID catalog: RESET_GPU for XID 95, RESTART_APP for XID 94."""
+    entries = {entry["id"]: entry for entry in _catalog_entries()}
+    assert entries["xid-95"]["recommended_action"] == {
+        "operational_state": "drain",
+        "remediation_actions": ["reset_gpu"],
+    }
+    assert entries["xid-94"]["recommended_action"]["remediation_actions"] == ["restart_app", "service_required"]
+    assert "recommended_action" not in entries["xid-94-95"]
+    action = entries["xid-95"]["personas"]["tenant_sre"]["action"]
+    assert "nvidia-smi --gpu-reset" in action
+    assert "restart the affected node's operating system" not in action
+    xid_pattern = next(signal["pattern"] for signal in entries["xid-95"]["signals"] if signal["kind"] == "xid")
+    assert re.search(xid_pattern, "NVRM: Xid (PCI:0000:01:00): 95, uncontained error") is not None
+    assert re.search(xid_pattern, "NVRM: Xid (PCI:0000:01:00): 94, contained error") is None
+
+
+def test_nvlink5_declarations_follow_the_public_decode_table() -> None:
+    """Declare only XIDs whose every error status has the same action; the rest depend on the decode."""
+    entries = {entry["id"]: entry for entry in _catalog_entries()}
+    for entry_id in ("workflow-nvlink5-err", "nvlink5-errors", "xid-144", "xid-145", "xid-146", "xid-149"):
+        assert "recommended_action" not in entries[entry_id], entry_id
+    for entry_id in ("xid-147", "xid-148"):
+        assert entries[entry_id]["recommended_action"] == {"operational_state": "ready"}, entry_id
+    assert entries["xid-150"]["recommended_action"] == {
+        "operational_state": "drain",
+        "remediation_actions": ["reset_gpu", "service_required"],
+    }
+    link_down = next(signal["pattern"] for signal in entries["link-down-nvlink"]["signals"] if signal["kind"] == "xid")
+    assert re.search(link_down, "74") is not None
+    assert all(re.search(link_down, str(xid)) is None for xid in range(144, 151))
