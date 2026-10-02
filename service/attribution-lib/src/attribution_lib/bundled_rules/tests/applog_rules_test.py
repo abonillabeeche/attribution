@@ -18,29 +18,31 @@ from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
     Source as ObservationSource,
+    TimeInterval,
 )
 from loguru import logger
-from test_support.helpers import make_applog_entry, make_node_to_ranks
+from test_support.helpers import line_entries, make_applog_entry, make_node_to_ranks
 
 
 @pytest.fixture
 def app_tst_bldr(attribution_test_builder):
     def _build(
         job_info,
-        data,
+        lines=(),
         *,
-        format=ObservationFormat.RAW_LOG_LINES,
+        entries=None,
         stream_id=None,
         insert_tflops_line=False,
     ):
         return attribution_test_builder(
             job_info=job_info,
-            data=data,
+            data=entries if entries is not None else line_entries(lines),
             source=ObservationSource.APPLOG,
-            format=format,
             check_fn=process_check,
             stream_id=stream_id,
             insert_tflops_line=insert_tflops_line,
+            # Fixture lines are dated independently of the job, so the window stays open.
+            time_interval=TimeInterval(None, None),
         )
 
     return _build
@@ -323,11 +325,10 @@ def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
             body="Nov 15 10:30:00 host-9ad02e1b Gracefully skipping multicast initialization",
             hostname=big_jobinfo.nodes[0],
             timestamp_ns=1700005000000000000,
-            severity="info",
         )
     ]
 
     with patch.object(logger, "info") as mock_info:
-        app_tst_bldr(big_jobinfo, test_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        app_tst_bldr(big_jobinfo, entries=test_data)
 
     mock_info.assert_any_call("Applog marker detected: Gracefully skipping multicast initialization")

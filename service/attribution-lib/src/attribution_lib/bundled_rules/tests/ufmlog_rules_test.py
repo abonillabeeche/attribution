@@ -95,8 +95,7 @@ def host_to_switch_link_down_log_entries():
             "0200000000000003_7]: Link went down: "
             "(Computer:host-c8e09d93 (0200000000000002)) "
             "0200000000000001:1 - (Switch:SW1.1-DH1:7) 0200000000000003:7",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750268847276617503,
+            "ts": 1750268847276617503,
         },
         {
             "body": " 2025-06-18 17:47:58.779 [13406663] [329] WARNING Site [TEST1-FAB1] "
@@ -105,8 +104,7 @@ def host_to_switch_link_down_log_entries():
             "(Computer:host-f77b60a9 (0200000000000004)) "
             "0200000000000004:1 - (Switch:SW2.1-DH2:28) 0200000000000005:28, "
             "cable S/N: TESTSN00000001",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750268879256741095,
+            "ts": 1750268879256741095,
         },
     ]
 
@@ -121,8 +119,7 @@ def host_to_switch_fatal_link_down_log_entries():
             "0200000000000003_7]: Link went down: "
             "(Computer:host-c8e09d93 (0200000000000002)) "
             "0200000000000001:1 - (Switch:SW1.1-DH1:7) 0200000000000003:7",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750269060000000000,  # 2025-06-18 17:51:00 - 60 seconds before job_end_time (17:52:00)
+            "ts": 1750269060000000000,  # 2025-06-18 17:51:00 - 60 seconds before job_end_time (17:52:00)
         },
         {
             "body": " 2025-06-18 17:51:30.000 [13406663] [329] WARNING Site [TEST1-FAB1] "
@@ -131,8 +128,7 @@ def host_to_switch_fatal_link_down_log_entries():
             "(Computer:host-f77b60a9 (0200000000000004)) "
             "0200000000000004:1 - (Switch:SW2.1-DH2:28) 0200000000000005:28, "
             "cable S/N: TESTSN00000001",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750269090000000000,  # 2025-06-18 17:51:30 - 30 seconds before job_end_time (17:52:00)
+            "ts": 1750269090000000000,  # 2025-06-18 17:51:30 - 30 seconds before job_end_time (17:52:00)
         },
     ]
 
@@ -143,8 +139,7 @@ def switch_to_host_link_down_log_entries():
     return [
         {
             "body": " 2025-06-18 17:47:58.779 [13289852] [329] WARNING Site [TEST1-FAB1] [Fabric_Topology] Link [Source 0200000000000006_23  TO Dest: 0200000000000007_1]: Link went down: (Switch:SW3.1-DH3:1/12/1) 0200000000000006:23 - (Computer:host-59805cc2 (0200000000000008)) 0200000000000007:1, cable S/N: TESTSN00000002",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750268847276617503,
+            "ts": 1750268847276617503,
         },
     ]
 
@@ -157,15 +152,13 @@ def node_down_log_entries():
             "body": "2025-06-18 17:47:26.839 [13273115] [331] WARNING Site [TEST1-FAB1] "
             "[Fabric_Topology] Site [default(1234) / NA / NA / NA]: "
             "Site configuration changes: 0200000000000002 (host-c8e09d93) node is Down",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750268847276617503,
+            "ts": 1750268847276617503,
         },
         {
             "body": "2025-06-18 17:47:58.779 [13273116] [331] WARNING Site [TEST1-FAB1] "
             "[Fabric_Topology] Site [default(1234) / NA / NA / NA]: "
             "Site configuration changes: 0200000000000004 (host-f77b60a9) node is Down",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750268879256741095,
+            "ts": 1750268879256741095,
         },
     ]
 
@@ -178,15 +171,13 @@ def node_down_fatal_log_entries():
             "body": "2025-06-18 17:51:00.000 [13273115] [331] WARNING Site [TEST1-FAB1] "
             "[Fabric_Topology] Site [default(1234) / NA / NA / NA]: "
             "Site configuration changes: 0200000000000002 (host-c8e09d93) node is Down",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750269060000000000,  # 2025-06-18 17:51:00 - 60 seconds before job_end_time (17:52:00)
+            "ts": 1750269060000000000,  # 2025-06-18 17:51:00 - 60 seconds before job_end_time (17:52:00)
         },
         {
             "body": "2025-06-18 17:51:30.000 [13273116] [331] WARNING Site [TEST1-FAB1] "
             "[Fabric_Topology] Site [default(1234) / NA / NA / NA]: "
             "Site configuration changes: 0200000000000004 (host-f77b60a9) node is Down",
-            "node": "test-fab1-ufm01",
-            "timestamp": 1750269090000000000,  # 2025-06-18 17:51:30 - 30 seconds before job_end_time (17:52:00)
+            "ts": 1750269090000000000,  # 2025-06-18 17:51:30 - 30 seconds before job_end_time (17:52:00)
         },
     ]
 
@@ -197,8 +188,7 @@ def test_host_to_switch_link_down_attribution(host_to_switch_link_down_log_entri
         job_info,
         host_to_switch_link_down_log_entries,
         ObservationSource.UFMLOG,
-        ObservationFormat.UFMLOG,
-        process_check,
+        check_fn=process_check,
     )
     observation_source = result.observation_source
     nodes = result.get_node_attributions()
@@ -223,7 +213,7 @@ def test_host_to_switch_link_down_attribution(host_to_switch_link_down_log_entri
     source = next(iter(source_set))
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
     assert source.line_num == 1
@@ -245,7 +235,7 @@ def test_host_to_switch_link_down_attribution(host_to_switch_link_down_log_entri
     # Verify the source context is properly set (not None)
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
 
@@ -262,8 +252,7 @@ def test_switch_to_host_link_down_attribution(switch_to_host_link_down_log_entri
         job_info,
         switch_to_host_link_down_log_entries,
         ObservationSource.UFMLOG,
-        ObservationFormat.UFMLOG,
-        process_check,
+        check_fn=process_check,
     )
     observation_source = result.observation_source
     nodes = result.get_node_attributions()
@@ -282,7 +271,7 @@ def test_switch_to_host_link_down_attribution(switch_to_host_link_down_log_entri
     source = next(iter(source_set._bad))
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
     assert source.line_num == 1
@@ -297,8 +286,7 @@ def test_non_matching_host_to_switch_link_down_attribution(
         job_info_2,
         host_to_switch_link_down_log_entries,
         ObservationSource.UFMLOG,
-        ObservationFormat.UFMLOG,
-        process_check,
+        check_fn=process_check,
     )
     nodes = result.get_node_attributions()
 
@@ -315,8 +303,7 @@ def test_host_to_switch_fatal_link_down_attribution(
         job_info,
         host_to_switch_fatal_link_down_log_entries,
         ObservationSource.UFMLOG,
-        ObservationFormat.UFMLOG,
-        process_check,
+        check_fn=process_check,
     )
     observation_source = result.observation_source
     nodes = result.get_node_attributions()
@@ -345,7 +332,7 @@ def test_host_to_switch_fatal_link_down_attribution(
     source = next(iter(source_set))
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
     assert source.line_num == 1
@@ -369,7 +356,7 @@ def test_host_to_switch_fatal_link_down_attribution(
     # Verify the source context is properly set (not None)
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
 
@@ -383,9 +370,7 @@ def test_host_to_switch_fatal_link_down_attribution(
 
 def test_node_down_attribution(node_down_log_entries, job_info, attribution_test_builder):
     """Test parsing of node down log entries"""
-    result = attribution_test_builder(
-        job_info, node_down_log_entries, ObservationSource.UFMLOG, ObservationFormat.UFMLOG, process_check
-    )
+    result = attribution_test_builder(job_info, node_down_log_entries, ObservationSource.UFMLOG, check_fn=process_check)
     observation_source = result.observation_source
     nodes = result.get_node_attributions()
     # Verify results
@@ -408,7 +393,7 @@ def test_node_down_attribution(node_down_log_entries, job_info, attribution_test
     source = next(iter(source_set._interesting))
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
     assert source.line_num == 1
@@ -429,7 +414,7 @@ def test_node_down_attribution(node_down_log_entries, job_info, attribution_test
     # Verify the source context is properly set (not None)
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
 
@@ -444,7 +429,7 @@ def test_node_down_attribution(node_down_log_entries, job_info, attribution_test
 def test_non_matching_node_down_attribution(node_down_log_entries, job_info_2, attribution_test_builder):
     """Test parsing of node down log entries outside job time boundaries"""
     result = attribution_test_builder(
-        job_info_2, node_down_log_entries, ObservationSource.UFMLOG, ObservationFormat.UFMLOG, process_check
+        job_info_2, node_down_log_entries, ObservationSource.UFMLOG, check_fn=process_check
     )
     nodes = result.get_node_attributions()
 
@@ -456,7 +441,10 @@ def test_non_matching_node_down_attribution(node_down_log_entries, job_info_2, a
 def test_node_down_fatal_attribution(node_down_fatal_log_entries, job_info, attribution_test_builder):
     """Test parsing of node down log entries near job end time"""
     result = attribution_test_builder(
-        job_info, node_down_fatal_log_entries, ObservationSource.UFMLOG, ObservationFormat.UFMLOG, process_check
+        job_info,
+        node_down_fatal_log_entries,
+        ObservationSource.UFMLOG,
+        check_fn=process_check,
     )
     observation_source = result.observation_source
     nodes = result.get_node_attributions()
@@ -483,7 +471,7 @@ def test_node_down_fatal_attribution(node_down_fatal_log_entries, job_info, attr
     source = next(iter(source_set._interesting))
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
     assert source.line_num == 1
@@ -506,7 +494,7 @@ def test_node_down_fatal_attribution(node_down_fatal_log_entries, job_info, attr
     # Verify the source context is properly set (not None)
     assert source.source_context is not None
     assert source.source_context.source == ObservationSource.UFMLOG
-    assert source.source_context.format == ObservationFormat.UFMLOG
+    assert source.source_context.format == ObservationFormat.ENTRY_TIMESERIES
     assert source.source_context.timezone == observation_source.context.timezone
     assert source.source_context.time_interval == observation_source.context.time_interval
 

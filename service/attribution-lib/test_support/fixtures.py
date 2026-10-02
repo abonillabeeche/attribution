@@ -20,7 +20,6 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "attribution_lib" / "bundled_rules"))
 
 import pytest
-import zstd
 
 import attribution_lib
 import attribution_lib.core as core
@@ -37,6 +36,7 @@ from attribution_lib.resources.resource_set import AllJobResources
 from test_support.helpers import (
     AttributionTestResult,
     create_simple_job_info,
+    line_entries,
     make_tflops_line,
     observation_base,
 )
@@ -66,31 +66,35 @@ def time_interval(timezone):
 
 @pytest.fixture(scope="class")
 def obs_file(timezone):
-    def _build_observation(jobinfo, filename, source, format, *, time_interval=None):
-        match format:
-            case ObservationFormat.LOKI_DICT_LIST:
-                data = json.loads(zstd.decompress(Path(filename).read_bytes()))
-            case ObservationFormat.RAW_LOKI_STREAMS:
-                data = json.loads(Path(filename).read_bytes())
-            case _:
-                with open(filename, "r") as fp:
-                    data = fp.readlines()
-
-        return observation_base(jobinfo, timezone, source, format, data, time_interval=time_interval)
+    def _build_observation(jobinfo, filename, source, *, time_interval=None):
+        path = Path(filename)
+        if path.suffix == ".json":
+            data = json.loads(path.read_bytes())
+        else:
+            data = line_entries(path.read_text().splitlines(keepends=True))
+        return observation_base(jobinfo, timezone, source, data, time_interval=time_interval)
 
     return _build_observation
 
 
 @pytest.fixture(scope="class")
 def obs_data(timezone):
-    def _build_observation(jobinfo, data, source, format, *, insert_tflops_line=True, time_interval=None):
+    def _build_observation(
+        jobinfo,
+        data,
+        source,
+        format=ObservationFormat.ENTRY_TIMESERIES,
+        *,
+        insert_tflops_line=True,
+        time_interval=None,
+    ):
         if source == ObservationSource.APPLOG and jobinfo.last_tflops_time is not None and insert_tflops_line:
             tflops_line = make_tflops_line(jobinfo.last_tflops_time)
             if jobinfo.last_tflops_time == jobinfo.job_start_time:
-                data = [tflops_line] + data
+                data = line_entries([tflops_line]) + data
             elif jobinfo.last_tflops_time == jobinfo.job_end_time:
-                data = data + [tflops_line]
-        return observation_base(jobinfo, timezone, source, format, data, time_interval=time_interval)
+                data = data + line_entries([tflops_line])
+        return observation_base(jobinfo, timezone, source, data, format=format, time_interval=time_interval)
 
     return _build_observation
 
@@ -146,7 +150,7 @@ def simple_job_factory(timezone):
 @pytest.fixture
 def inbound_context(time_interval, job_resources, timezone):
     return InboundContext(
-        time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, timezone
+        time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone
     )
 
 
@@ -163,14 +167,29 @@ def dummy_ctx(full_context):
 @pytest.fixture
 def attribution_test_builder(event_manager, obs_data, obs_file, timezone):
     def _build(
-        job_info, data, source, format, check_fn=None, events_to_add=None, stream_id=None, insert_tflops_line=True
+        job_info,
+        data,
+        source,
+        format=ObservationFormat.ENTRY_TIMESERIES,
+        check_fn=None,
+        events_to_add=None,
+        stream_id=None,
+        insert_tflops_line=True,
+        time_interval=None,
     ):
         stream_id = stream_id or f"test_{hash(str(data))}"
         event_stream = event_manager.create_stream(stream_id)
         if isinstance(data, (str, Path)):
-            observation_source = obs_file(job_info, data, source, format)
+            observation_source = obs_file(job_info, data, source, time_interval=time_interval)
         else:
-            observation_source = obs_data(job_info, data, source, format, insert_tflops_line=insert_tflops_line)
+            observation_source = obs_data(
+                job_info,
+                data,
+                source,
+                format=format,
+                insert_tflops_line=insert_tflops_line,
+                time_interval=time_interval,
+            )
         event_stream.register_observation_context(observation_source.context)
         if events_to_add:
             for event in events_to_add:

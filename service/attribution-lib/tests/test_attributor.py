@@ -47,7 +47,7 @@ from attribution_lib.resources.node import Node as NodeResource
 from attribution_lib.resources.resource_set import AllJobResources, ResourceSetClass
 from attribution_lib.rule_types.definitions import EventTriple, ExtractorRule, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
-from test_support.helpers import make_node_to_ranks, make_syslog_entry
+from test_support.helpers import line_entries, make_node_to_ranks, make_syslog_entry
 
 # APPLOG registers "error" as an include-keyword.
 APPLOG_INCLUDE_TERM = "error"
@@ -83,7 +83,11 @@ def job_info():
 
 
 def make_inbound_observation(
-    source: ObservationSource, fmt: ObservationFormat, *, lines: list[str], pre_filtered: bool = False
+    source: ObservationSource,
+    fmt: ObservationFormat = ObservationFormat.ENTRY_TIMESERIES,
+    *,
+    lines: list[str],
+    pre_filtered: bool = False,
 ):
     timezone = ZoneInfo("America/Los_Angeles")
     time_interval = TimeInterval(
@@ -98,10 +102,10 @@ def make_inbound_observation(
         timezone=timezone,
         pre_filtered=pre_filtered,
     )
-    return InboundObservation(context, lines)
+    return InboundObservation(context, line_entries(lines) if fmt is ObservationFormat.ENTRY_TIMESERIES else lines)
 
 
-def make_observation(source: ObservationSource, fmt: ObservationFormat):
+def make_observation(source: ObservationSource, fmt: ObservationFormat = ObservationFormat.ENTRY_TIMESERIES):
     return Observation.from_inbound_observation(make_inbound_observation(source, fmt, lines=DEFAULT_LINES))
 
 
@@ -177,7 +181,7 @@ def test_initiated_reboot_log_produces_infra_sw_with_raw_evidence(request, event
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
         resources=AllJobResources,
         source=ObservationSource.SYSLOG,
-        format=ObservationFormat.RAW_LOKI_STREAMS,
+        format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,
     )
     observation = InboundObservation(
@@ -229,80 +233,23 @@ def test_source_format_job_keywords_mismatch(request, event_manager, job_info):
             _ = ConsumedObservation.new(event_stream, job_info, observation)
 
 
-def test_source_format_applog_mismatch(request, event_manager, job_info):
+@pytest.mark.parametrize(
+    "source",
+    [
+        ObservationSource.APPLOG,
+        ObservationSource.SYSLOG,
+        ObservationSource.HEALTH_CHECK,
+        ObservationSource.UFMLOG,
+        ObservationSource.NODE_METRICS,
+        ObservationSource.NVLINK_METRICS,
+        ObservationSource.CSP_EVENT,
+    ],
+)
+def test_source_format_entry_timeseries_sources_reject_string_list(request, event_manager, job_info, source):
     event_stream = event_manager.create_stream(request.node.name)
-    bad_formats = frozenset(ObservationFormat) - frozenset(
-        [
-            ObservationFormat.UNDEFINED,
-            ObservationFormat.RAW_LOG_LINES,
-            ObservationFormat.LOKI_DICT_LIST,
-            ObservationFormat.RAW_LOKI_STREAMS,
-            ObservationFormat.ENTRY_TIMESERIES,
-        ]
-    )
-
-    for fmt in bad_formats:
-        observation = make_observation(ObservationSource.APPLOG, fmt)
-        with pytest.raises(MismatchedSourceAndFormatError):
-            _ = ConsumedObservation.new(event_stream, job_info, observation)
-
-
-def test_source_format_syslog_mismatch(request, event_manager, job_info):
-    event_stream = event_manager.create_stream(request.node.name)
-    bad_formats = frozenset(ObservationFormat) - frozenset(
-        [
-            ObservationFormat.UNDEFINED,
-            ObservationFormat.LOKI_DICT_LIST,
-            ObservationFormat.RAW_LOKI_STREAMS,
-            ObservationFormat.ENTRY_TIMESERIES,
-        ]
-    )
-
-    for fmt in bad_formats:
-        observation = make_observation(ObservationSource.SYSLOG, fmt)
-        with pytest.raises(MismatchedSourceAndFormatError):
-            _ = ConsumedObservation.new(event_stream, job_info, observation)
-
-
-def test_source_format_health_check_mismatch(request, event_manager, job_info):
-    event_stream = event_manager.create_stream(request.node.name)
-    bad_formats = frozenset(ObservationFormat) - frozenset(
-        [
-            ObservationFormat.UNDEFINED,
-            ObservationFormat.LOKI_DICT_LIST,
-            ObservationFormat.RAW_LOKI_STREAMS,
-            ObservationFormat.ENTRY_TIMESERIES,
-        ]
-    )
-
-    for fmt in bad_formats:
-        observation = make_observation(ObservationSource.HEALTH_CHECK, fmt)
-        with pytest.raises(MismatchedSourceAndFormatError):
-            _ = ConsumedObservation.new(event_stream, job_info, observation)
-
-
-def test_source_format_metrics_mismatch(request, event_manager, job_info):
-    event_stream = event_manager.create_stream(request.node.name)
-    bad_formats = frozenset(ObservationFormat) - frozenset(
-        [ObservationFormat.UNDEFINED, ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]
-    )
-
-    for fmt in bad_formats:
-        observation = make_observation(ObservationSource.NODE_METRICS, fmt)
-        with pytest.raises(MismatchedSourceAndFormatError):
-            _ = ConsumedObservation.new(event_stream, job_info, observation)
-
-
-def test_source_format_csp_event_mismatch(request, event_manager, job_info):
-    event_stream = event_manager.create_stream(request.node.name)
-    bad_formats = frozenset(ObservationFormat) - frozenset(
-        [ObservationFormat.UNDEFINED, ObservationFormat.CSP_EVENT_LIST, ObservationFormat.ENTRY_TIMESERIES]
-    )
-
-    for fmt in bad_formats:
-        observation = make_observation(ObservationSource.CSP_EVENT, fmt)
-        with pytest.raises(MismatchedSourceAndFormatError):
-            _ = ConsumedObservation.new(event_stream, job_info, observation)
+    observation = make_observation(source, fmt=ObservationFormat.STRING_LIST)
+    with pytest.raises(MismatchedSourceAndFormatError):
+        _ = ConsumedObservation.new(event_stream, job_info, observation)
 
 
 def test_unhandled_sources(request, event_manager, job_info):
@@ -321,7 +268,7 @@ def test_unhandled_sources(request, event_manager, job_info):
         ]
     )
     for source in unhandled_sources:
-        observation = make_observation(source, ObservationFormat.RAW_LOG_LINES)
+        observation = make_observation(source)
         with pytest.raises(UnhandledObservationSourceError):
             _ = ConsumedObservation.new(event_stream, job_info, observation)
 
@@ -329,7 +276,7 @@ def test_unhandled_sources(request, event_manager, job_info):
 def test_ingest_stores_fingerprints(request, event_manager, job_info):
     event_stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(event_stream, job_info)
-    obs = make_inbound_observation(ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=DEFAULT_LINES)
+    obs = make_inbound_observation(ObservationSource.APPLOG, lines=DEFAULT_LINES)
     attributor.ingest(obs)
     assert "applog" in attributor._source_fingerprints
     assert attributor._source_fingerprints["applog"].count == 3
@@ -338,7 +285,9 @@ def test_ingest_stores_fingerprints(request, event_manager, job_info):
 def test_ingest_skips_fingerprint_for_keywords(request, event_manager, job_info):
     event_stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(event_stream, job_info)
-    obs = make_inbound_observation(ObservationSource.JOB_KEYWORDS, ObservationFormat.STRING_LIST, lines=DEFAULT_LINES)
+    obs = make_inbound_observation(
+        ObservationSource.JOB_KEYWORDS, fmt=ObservationFormat.STRING_LIST, lines=DEFAULT_LINES
+    )
     attributor.ingest(obs)
     assert attributor._source_fingerprints == {}
 
@@ -349,7 +298,7 @@ def test_attribute_preingested(request, event_manager, job_info):
     attributor.ingest(
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     )
@@ -365,7 +314,6 @@ def test_attribute_applog_prefilter_keywords(request, event_manager, job_info):
     attributor = Attributor.new(event_stream, job_info)
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=[
             "Traceback (most recent call last):",
             '  File "/workspace/train.py", line 42, in train',
@@ -387,15 +335,13 @@ def test_attribute_preingested_interleave(request, event_manager, job_info):
     attributor.ingest(
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     )
     result1 = attributor.attribute(backend)
 
-    attributor.ingest(
-        make_inbound_observation(ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=DEFAULT_LINES)
-    )
+    attributor.ingest(make_inbound_observation(ObservationSource.APPLOG, lines=DEFAULT_LINES))
     result2 = attributor.attribute(backend)
 
     assert result1 is not None
@@ -411,7 +357,7 @@ def test_attribute_preingested_consistent(request, event_manager, job_info):
     attributor.ingest(
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     )
@@ -429,13 +375,11 @@ def test_attribute_preingested_mutation_safe(request, event_manager, job_info):
     attributor.ingest(
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     )
-    attributor.ingest(
-        make_inbound_observation(ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=DEFAULT_LINES)
-    )
+    attributor.ingest(make_inbound_observation(ObservationSource.APPLOG, lines=DEFAULT_LINES))
     event_stream.flush()
 
     count_before = event_manager._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
@@ -456,7 +400,7 @@ def test_attribute_preingested_skips_save_when_unchanged(request, event_manager,
     attributor.ingest(
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     )
@@ -480,7 +424,7 @@ def test_attribute_batch(request, event_manager, job_info):
     observations = [
         make_inbound_observation(
             ObservationSource.JOB_KEYWORDS,
-            ObservationFormat.STRING_LIST,
+            fmt=ObservationFormat.STRING_LIST,
             lines=DEFAULT_LINES,
         )
     ]
@@ -502,7 +446,6 @@ def test_attribute_batch_applog_prefilter_keywords(request, event_manager, job_i
     backend = MemoryCheckpointBackend()
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
     )
 
@@ -523,9 +466,7 @@ def test_attribute_batch_recomputes_incompatible_snapshot(request, event_manager
         monkeypatch: Replaces only the backend's snapshot storage read.
     """
     backend = MemoryCheckpointBackend()
-    observation = make_inbound_observation(
-        ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=PYTHON_TRACEBACK_LINES
-    )
+    observation = make_inbound_observation(ObservationSource.APPLOG, lines=PYTHON_TRACEBACK_LINES)
     cold = Attributor.new(event_manager.create_stream(request.node.name), job_info)
     cold.ingest_batch([observation], backend)
     cold_result = cold.attribute(backend)
@@ -557,7 +498,6 @@ def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_m
     backend = MemoryCheckpointBackend()
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
     )
     first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
@@ -581,7 +521,6 @@ def test_attribute_batch_reextracts_when_prefilter_directive_changes(request, ev
     backend = MemoryCheckpointBackend()
     unfiltered_observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
         pre_filtered=False,
     )
@@ -591,7 +530,6 @@ def test_attribute_batch_reextracts_when_prefilter_directive_changes(request, ev
 
     prefiltered_observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
         pre_filtered=True,
     )
@@ -613,7 +551,6 @@ def test_saved_fingerprint_includes_extraction_context(request, event_manager, j
     """
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
     )
     baseline_backend = MemoryCheckpointBackend()
@@ -641,7 +578,7 @@ def test_saved_fingerprint_includes_extraction_context(request, event_manager, j
     for index, changed_context in enumerate(context_variants):
         backend = MemoryCheckpointBackend()
         attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_{index}"), job_info)
-        attributor.ingest(InboundObservation(changed_context, PYTHON_TRACEBACK_LINES))
+        attributor.ingest(InboundObservation(changed_context, observation.lines))
         attributor.attribute(backend)
         metadata = backend.load_metadata(cache_key)
         assert metadata is not None
@@ -652,10 +589,7 @@ def test_batch_fingerprint_tracks_job_end_for_undated_timeseries_entries(request
     """Undated applog entries take their year from job end, so a later job end must not hit the cache."""
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.ENTRY_TIMESERIES,
-        lines=[
-            {"body": f"[E1231 23:57:09.800744155 ProcessGroupNCCL.cpp:1923] {line}"} for line in PYTHON_TRACEBACK_LINES
-        ],
+        lines=[f"[E1231 23:57:09.800744155 ProcessGroupNCCL.cpp:1923] {line}" for line in PYTHON_TRACEBACK_LINES],
     )
     backend = MemoryCheckpointBackend()
     Attributor.new(event_manager.create_stream(request.node.name), job_info).ingest_batch([observation], backend)
@@ -684,7 +618,6 @@ def test_attribute_batch_restores_prefilter_keywords_saved_by_ingest(request, ev
     backend = MemoryCheckpointBackend()
     observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
     )
     direct_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
@@ -709,7 +642,6 @@ def test_attribute_batch_retains_prefilter_keywords_during_incremental_extractio
     backend = MemoryCheckpointBackend()
     initial_observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=PYTHON_TRACEBACK_LINES,
     )
     first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
@@ -717,7 +649,6 @@ def test_attribute_batch_retains_prefilter_keywords_during_incremental_extractio
 
     appended_observation = make_inbound_observation(
         ObservationSource.APPLOG,
-        ObservationFormat.RAW_LOG_LINES,
         lines=[*PYTHON_TRACEBACK_LINES, "training shutdown complete"],
     )
     incremental_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_incremental"), job_info)
@@ -748,7 +679,7 @@ def test_incremental_xid140_replaces_poisoned_gsp_and_retains_evidence(request, 
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
         resources=AllJobResources,
         source=ObservationSource.SYSLOG,
-        format=ObservationFormat.RAW_LOKI_STREAMS,
+        format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,
     )
     base_ns = int((job_info.job_start_time + timedelta(minutes=1)).timestamp() * 1e9)
@@ -865,9 +796,7 @@ def prefilter_env():
 
 
 def _applog_observation(line, *, pre_filtered):
-    return make_inbound_observation(
-        ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, pre_filtered=pre_filtered, lines=[line]
-    )
+    return make_inbound_observation(ObservationSource.APPLOG, pre_filtered=pre_filtered, lines=[line])
 
 
 def _count_events_after_applog_ingest(event_manager, job_info, line, *, pre_filtered):

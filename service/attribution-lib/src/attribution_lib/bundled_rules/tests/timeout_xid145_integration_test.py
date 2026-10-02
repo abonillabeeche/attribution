@@ -14,7 +14,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources import AllJobResources
-from test_support.helpers import make_applog_entry, make_syslog_entry
+from test_support.helpers import line_entries, make_applog_entry, make_syslog_entry
 
 
 def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
@@ -46,7 +46,7 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
             time_interval=interval,
             resources=AllJobResources,
             source=ObservationSource.SYSLOG,
-            format=ObservationFormat.RAW_LOKI_STREAMS,
+            format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
         ),
         lines=[
@@ -64,7 +64,7 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
             time_interval=interval,
             resources=AllJobResources,
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOKI_STREAMS,
+            format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
         ),
         lines=[
@@ -118,7 +118,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
             time_interval=interval,
             resources=AllJobResources,
             source=ObservationSource.SYSLOG,
-            format=ObservationFormat.RAW_LOKI_STREAMS,
+            format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
         ),
         lines=[
@@ -159,16 +159,16 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
             time_interval=interval,
             resources=AllJobResources,
             source=ObservationSource.APPLOG,
-            format=ObservationFormat.RAW_LOG_LINES,
+            format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
         ),
-        lines=[
-            (
+        lines=line_entries(
+            [
                 "0: [Jan 01 03:59:47.858661 9012 slurmstepd 0x000000001234] error: "
                 "*** STEP 424242.0 ON test-node-alpha CANCELLED AT "
                 "2025-01-01T03:59:47 DUE TO TIME LIMIT ***"
-            )
-        ],
+            ]
+        ),
     )
 
     stream = event_manager.create_stream(request.node.name)

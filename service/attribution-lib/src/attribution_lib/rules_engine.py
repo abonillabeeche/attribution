@@ -12,7 +12,7 @@ import glob
 import hashlib
 import importlib.util
 import sys
-from collections.abc import Callable, Generator, Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -32,7 +32,6 @@ from attribution_lib.exceptions import (
 from attribution_lib.job_info import JobInfo
 from attribution_lib.logline_filtering import log_ignored_node_line, log_ignored_time_line
 from attribution_lib.observation.inbound import (
-    Format as ObservationFormat,
     Source as ObservationSource,
 )
 from attribution_lib.observation.processing import BodyFallbacks, EntryProtocol, EntrySourceBase
@@ -434,12 +433,6 @@ class _LoadSnapshot:
 class SourceProcessingConfig:
     """Per-source-type configuration for process_observation_source."""
 
-    time_start: Optional[Callable[[JobInfo], Optional[datetime]]] = None
-    time_end: Optional[Callable[[JobInfo], Optional[datetime]]] = None
-    """Legacy formats only: `entry_timeseries` filters on the producer-declared `context.time_interval` instead.
-
-    TODO: drop both once every source accepts only `entry_timeseries`.
-    """
     body_fallbacks: BodyFallbacks = BodyFallbacks()
     """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
     fallback_unknown_nodes: bool = False
@@ -556,14 +549,9 @@ def process_observation_source(
     """
     source_type = observation_source.context.source
     config = SOURCE_CONFIGS.get(source_type)
-    if observation_source.context.format is ObservationFormat.ENTRY_TIMESERIES:
-        # The declared interval is what the producer meant to cover, so the per-source window in
-        # SOURCE_CONFIGS does not apply. A null bound is unbounded on that side.
-        time_start = observation_source.context.time_interval.start
-        time_end = observation_source.context.time_interval.end
-    else:
-        time_start = config.time_start(job_info) if config and config.time_start else None
-        time_end = config.time_end(job_info) if config and config.time_end else None
+    # The producer declares the window it meant to cover; a null bound is unbounded on that side.
+    time_start = observation_source.context.time_interval.start
+    time_end = observation_source.context.time_interval.end
     fallback_unknown_nodes = config.fallback_unknown_nodes if config else False
     require_timestamp = config.body_fallbacks.require_timestamp if config else False
 

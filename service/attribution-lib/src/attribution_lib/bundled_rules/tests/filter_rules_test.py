@@ -85,7 +85,7 @@ def obs_ctx():
         ),
         resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.APPLOG,
-        format=ObsFormat.RAW_LOKI_STREAMS,
+        format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
         id=Id(999),
     )
@@ -908,7 +908,7 @@ def test_fm_node_failure_retains_per_gpu_evidence(stream, obs_ctx):
         ),
         resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.SYSLOG,
-        format=ObsFormat.RAW_LOKI_STREAMS,
+        format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
         id=Id(777),
     )

@@ -10,7 +10,6 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Optional
@@ -49,14 +48,6 @@ from attribution_lib.symptoms import (
 )
 from attribution_lib.symptoms.registry_generation import registry_from_declarations
 
-
-def _epilog_time_start(job_info: JobInfo):
-    time_start = job_info.interest_start_time
-    if job_info.last_tflops_time and job_info.last_tflops_time > time_start:
-        time_start = job_info.last_tflops_time
-    return time_start
-
-
 # Register source-type processing configs
 register_source_config(
     ObservationSource.APPLOG,
@@ -68,8 +59,6 @@ register_source_config(
 register_source_config(
     ObservationSource.HEALTH_CHECK,
     SourceProcessingConfig(
-        time_start=_epilog_time_start,
-        time_end=lambda ji: ji.interest_end_time + timedelta(minutes=10),
         # A line declaring no node is read for one and dropped if that fails.
         # An explicit timestamp is expected, else the entry is dropped.
         body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
@@ -78,8 +67,6 @@ register_source_config(
 register_source_config(
     ObservationSource.SYSLOG,
     SourceProcessingConfig(
-        time_start=lambda ji: ji.interest_start_time,
-        time_end=lambda ji: ji.interest_end_time,
         # A line declaring no node is read for one and dropped if that fails.
         # An explicit timestamp is expected, else the entry is dropped.
         body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
@@ -89,8 +76,6 @@ register_source_config(
 register_source_config(
     ObservationSource.UFMLOG,
     SourceProcessingConfig(
-        time_start=lambda ji: ji.job_start_time,
-        time_end=lambda ji: ji.job_end_time,
         # The job node is named inside the line; the producer's own node is the fabric manager host.
         # Therefore, attempt to parse the node, but drop it if it's not found.
         body_fallbacks=BodyFallbacks(parse_node=True, require_node=True),
@@ -100,8 +85,6 @@ register_source_config(
 register_source_config(
     ObservationSource.NODE_METRICS,
     SourceProcessingConfig(
-        time_start=lambda ji: ji.job_start_time,
-        time_end=lambda ji: ji.job_end_time,
         # A sample is about one node; one that names none must not count against the whole job.
         body_fallbacks=BodyFallbacks(require_node=True),
         requires_job_nodes=True,
@@ -110,8 +93,6 @@ register_source_config(
 register_source_config(
     ObservationSource.NVLINK_METRICS,
     SourceProcessingConfig(
-        time_start=lambda ji: ji.interest_start_time,
-        time_end=lambda ji: ji.interest_end_time,
         # Same as node_metrics: a sample naming no node must not count against the whole job.
         body_fallbacks=BodyFallbacks(require_node=True),
         requires_job_nodes=True,
@@ -120,7 +101,6 @@ register_source_config(
 register_source_config(
     ObservationSource.CSP_EVENT,
     SourceProcessingConfig(
-        time_start=lambda ji: ji.job_start_time,
         # An event is about one host at one moment; the body names neither, so an entry
         # declaring no node or no timestamp is dropped rather than parsed.
         body_fallbacks=BodyFallbacks(require_node=True, require_timestamp=True),

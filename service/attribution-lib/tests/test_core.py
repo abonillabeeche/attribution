@@ -28,7 +28,7 @@ from attribution_lib.core import (
 from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Id
-from attribution_lib.observation.processing import RawLineEntry
+from attribution_lib.observation.processing import _extract_timestamp_from_log_line
 from attribution_lib.outcome import calculate_outcome
 from attribution_lib.resources import AllJobResources
 from attribution_lib.resources.resource_set import ResourceSet
@@ -1198,7 +1198,7 @@ class TestGetEarliestWatchdogSource:
         NumelIn=12845056, NumelOut=616562688, Timeout(ms)=600000) ran for 600098 milliseconds
         before timing out.
 
-        This test also verifies RawLineEntry.time() correctly parses PyTorch log format.
+        This test also verifies the body timestamp parsing handles the PyTorch log format.
         """
 
         # Log lines in PyTorch format
@@ -1206,22 +1206,15 @@ class TestGetEarliestWatchdogSource:
         datum_earliest = "1024: [rank1024]:[E1214 06:57:30.128361329 ProcessGroupNCCL.cpp:655] [Rank 18] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=59590, OpType=COALESCED, NumelIn=12845056, NumelOut=616562688, Timeout(ms)=600000) ran for 600098 milliseconds before timing out."
         datum_latest = "3072: [rank3072]:[E1214 06:59:00.128361329 ProcessGroupNCCL.cpp:655] [Rank 54] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=59610, OpType=COALESCED, NumelIn=12845056, NumelOut=616562688, Timeout(ms)=600000) ran for 600098 milliseconds before timing out."
 
-        # Create context with timezone for RawLineEntry
         context = ObservationContext(**vars(dummy_inbound), id=Id(12345))
 
-        # Extract timestamps using RawLineEntry.time() - tests the actual production code path
-        entry_middle = RawLineEntry(context=context, pos=1, line=datum_middle)
-        entry_earliest = RawLineEntry(context=context, pos=2, line=datum_earliest)
-        entry_latest = RawLineEntry(context=context, pos=3, line=datum_latest)
+        time_middle = _extract_timestamp_from_log_line(datum_middle, context.timezone)
+        time_earliest = _extract_timestamp_from_log_line(datum_earliest, context.timezone)
+        time_latest = _extract_timestamp_from_log_line(datum_latest, context.timezone)
 
-        time_middle = entry_middle.time()
-        time_earliest = entry_earliest.time()
-        time_latest = entry_latest.time()
-
-        # Verify timestamps were extracted correctly by RawLineEntry.time()
-        assert time_middle is not None, "RawLineEntry.time() failed to extract timestamp from middle log line"
-        assert time_earliest is not None, "RawLineEntry.time() failed to extract timestamp from earliest log line"
-        assert time_latest is not None, "RawLineEntry.time() failed to extract timestamp from latest log line"
+        assert time_middle is not None
+        assert time_earliest is not None
+        assert time_latest is not None
 
         # Create 3 watchdog sources with extracted timestamps
         src_middle = Source(
@@ -1280,13 +1273,10 @@ class TestGetEarliestWatchdogSource:
 
         datum = "2148: [rank2148]:[E1214 06:58:25.128361329 ProcessGroupNCCL.cpp:655] [Rank 36] Watchdog caught collective operation timeout"
 
-        # Create context with timezone for RawLineEntry
         context = ObservationContext(**vars(dummy_inbound), id=Id(12345))
 
-        # Extract timestamp using RawLineEntry.time()
-        entry = RawLineEntry(context=context, pos=1, line=datum)
-        extracted_time = entry.time()
-        assert extracted_time is not None, "RawLineEntry.time() failed to extract timestamp from log line"
+        extracted_time = _extract_timestamp_from_log_line(datum, context.timezone)
+        assert extracted_time is not None
 
         src = Source(
             source_context=context,

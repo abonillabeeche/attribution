@@ -226,7 +226,7 @@ class TestSnapshotRoundTrip:
         mgr = EventManager(rules_engine=historical_engine)
 
         new_source = ObsSource.CSP_EVENT.value
-        new_format = ObsFormat.CSP_EVENT_LIST.value
+        new_format = ObsFormat.ENTRY_TIMESERIES.value
         mgr.export_snapshot(tmp_path / "snap")
         mgr.close()
 

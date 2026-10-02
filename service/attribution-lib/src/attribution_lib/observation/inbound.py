@@ -27,47 +27,38 @@ Id = NewType("Id", int)
 class Source(str, Enum):
     """The classes of observations that can be ingested.
 
+    `job_keywords` takes the `string_list` format; every other implemented source takes `entry_timeseries`.
+    See `Format` for how each source reads its entries.
+
     - `slurm_info`
 
         Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.
 
     - `job_keywords`
 
-        Formats: `[string_list]`
-
         Keywords extracted from preprocessing some logs.
 
     - `applog`
-
-        Formats: `[raw_log, loki_dict_list, raw_loki_streams]`. Timestamps should in in nanoseconds, entries must have rank-like prefixes.
 
         Application's stdout/stderr.
 
     - `syslog`
 
-        Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in nanoseconds.
-        Host-specifiers required.
-
-        Data from dmesg/syslog
+        Data from dmesg/syslog.
 
     - `health_check`
 
-        Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in milliseconds for
-        `loki_dict_list`, nanoseconds otherwise. Host-specifiers required.
-
         Data from health checks.
 
-    - `node_metrics`
+    - `ufmlog`
 
-       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and
-       nanoseconds for `entry_timeseries`, entries must have node information.
+        Fabric manager events.
+
+    - `node_metrics`
 
        Prometheus metrics data for node attribution.
 
     - `nvlink_metrics`
-
-       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and
-       nanoseconds for `entry_timeseries`, entries must have node information.
 
        Prometheus metrics data for nvlink attribution.
 
@@ -84,9 +75,6 @@ class Source(str, Enum):
        Not implemented.
 
     - `csp_event`
-
-       Formats: `[csp_event_list, entry_timeseries]`. Timestamps should be in seconds for
-       `csp_event_list`, nanoseconds otherwise.
 
        CSP event events indicating infrastructure-level host failures,
        repairs, or maintenance actions reported by the cloud service provider.
@@ -109,17 +97,11 @@ class Source(str, Enum):
 
 
 class Format(str, Enum):
-    r"""Specifies the types of formats the 'lines' in an observation can be in.
+    r"""Specifies the format the 'lines' in an observation are in.
 
-    Not all sources can be specified in each format; see above for clarification.
+    `job_keywords` takes `string_list`; every other implemented source takes `entry_timeseries`.
 
-    Furthermore, some sources expect slightly different fields in formats.
-
-    In particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional. `entry_timeseries` is the exception: it parses the prefix only out of an entry that declares no `resources`, and a body timestamp only when `ts` is null (see below).
-
-    For `syslog` and `health_check`, the rank-like prefix is not expected, and `host-specifier` fields are mandatory.
-
-    Rank-like prefixes are match the following regex: "^\[rank\s*:?\s*(?P<rank>\d+)\]" or have an integer followed by a colon at the start of the line.
+    Rank-like prefixes match the following regex: "^\[rank\s*:?\s*(?P<rank>\d+)\]" or have an integer followed by a colon at the start of the line.
 
     Examples:
 
@@ -133,124 +115,6 @@ class Format(str, Enum):
         Raw text
 
         Lines of text separated by newlines. No hosts associations.
-
-    - `raw_log`:
-
-        Raw text
-
-        entries separated by newlines. Rank-like prefix expected for applog.
-
-    - `raw_loki_streams`:
-
-        JSON-based
-
-        Top-Level Structure:
-        - An array of objects, each with:
-          - `stream`: If host-spcifier needed, *Required*. If present, must contain the `node_name` field (string); which is the host-specifier. All other fields in stream are permitted but ignored.
-          - `values`: *Required*. An array of entries.
-
-        Details:
-        - `stream` Object. *Required* if host-specifier:
-          - Required Field:
-            - `node_name` (string): Identifies the node that generated the logs. Host specifier.
-            - Other fields: Any other fields within stream are permitted but ignored.
-        - `values` Array:
-          - Each entry is a 2-element array:
-            - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).
-            - Entry (string): the main content. Should have rank-line prefix for applog.
-        - Other fields:
-          - Any other fields at any level are permitted but ignored.
-
-        Example (`syslog` source):
-        ```json
-        [
-          {
-            "stream": {
-              "node_name": "host-a1b2c3d4"
-            },
-            "values": [
-              [
-                "1744734437830498000",
-                "Apr 24 12:04:06 host-a1b2c3d4 kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]"
-              ]
-            ]
-          }
-        ]
-        ```
-
-    - `loki_dict_list`:
-
-        JSON-based.
-
-        Top-Level Structure:
-        -  An array of objects, each with:
-            - `values`: Required. An array of entries.
-
-        Details:
-        - `values` Array:
-          Each entry is a 2-element array:
-          - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).
-          - Content (string): A JSON-encoded object with at least the following fields:
-            - `body` (string): entry (required; rank-like prefix expected for APPLOG.)
-            - `hostname` (string): The source hostname (required if host-specified needed.)
-        - Other fields:
-          - The `stream` object is optional and, if present, is ignored.
-          - Any other fields in the log message JSON are permitted but ignored.
-
-        Example (`syslog` source)
-        ```json
-        [
-          {
-            "values": [
-              [
-                "1744734421212766000",
-                "{\"body\":\"Some log message\",\"hostname\":\"server-01\"}"
-              ]
-            ]
-          }
-        ]
-        ```
-
-    - `csv_metric_response`:
-
-      Not implemented presently.
-
-    - `prometheus_metrics`:
-
-      JSON-based.
-
-      Top-Level Structure:
-      - An array of objects, each representing a metric data point.
-
-      Details:
-      - Each object must contain:
-        - `timestamp` (int): Unix timestamp in seconds
-        - `value` (Union[int, float, string]): Metric value (initially as string, converted later)
-        - `metric` (string): Metric name (e.g., "node_infiniband_link_downed_total")
-        - `labels` (dict): Prometheus labels including node and device information
-        - `node` (string): Node identifier (required, extracted from net_host_name label)
-        - `component` (string, optional): Component/device identifier (e.g., "mlx5_0", "mlx5_1")
-        - `cluster` (string, optional): Cluster identifier (e.g., "cluster-e5f6g7h8", extracted from s_cluster label)
-
-      Example:
-      ```json
-      [
-        {
-          "timestamp": 1753898040,
-          "value": "1",
-          "metric": "node_infiniband_link_downed_total",
-          "labels": {
-            "net_host_name": "host-i9j0k1l2",
-            "s_cluster": "cluster-e5f6g7h8",
-            "device": "mlx5_0",
-            "instance": "host-i9j0k1l2:9100"
-          },
-          "node": "host-i9j0k1l2",
-          "component": "mlx5_0",
-          "cluster": "cluster-e5f6g7h8"
-        }
-      ]
-      ```
 
     - `entry_timeseries`:
 
@@ -273,9 +137,9 @@ class Format(str, Enum):
           no node. Node may be parsed from body and/or dropped if none given for some sources.
       - Any other key in an entry is rejected.
 
-      Unlike every other format, entries here are only time-filtered by the observation context's
-      `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on
-      that side, so an interval of two nulls disables time filtering for the observation entirely.
+      Entries are time-filtered only by the observation context's `time_interval`. That interval is the
+      producer's declared intent: a null bound means unbounded on that side, so an interval of two nulls
+      disables time filtering for the observation entirely.
 
       Key Source Behavior:
 
@@ -327,13 +191,6 @@ class Format(str, Enum):
 
     UNDEFINED = ""
     STRING_LIST = "string_list"
-    RAW_LOG_LINES = "raw_log"
-    RAW_LOKI_STREAMS = "raw_loki_streams"
-    LOKI_DICT_LIST = "loki_dict_list"
-    CSV_METRIC_RESPONSE = "csv_metric_response"
-    UFMLOG = "ufmlog"
-    PROMETHEUS_METRICS = "prometheus_metrics"
-    CSP_EVENT_LIST = "csp_event_list"
     ENTRY_TIMESERIES = "entry_timeseries"
 
 
@@ -352,73 +209,11 @@ class TimeInterval(NamedTuple):
         )
 
 
-TimestampNsFieldStr: TypeAlias = str
 TimestampNsField: TypeAlias = int
-TimestampMsField: TypeAlias = int
 
 RawLogLine: TypeAlias = str
 
 NodeStr: TypeAlias = str
-
-
-class LokiAppEntry(TypedDict):
-    timestamp: TimestampNsFieldStr
-    body: RawLogLine
-    line: NotRequired[str]
-    node: NotRequired[NodeStr]
-    replica: NotRequired[str]
-
-
-LokiAppEntrySeries: TypeAlias = list[LokiAppEntry]
-
-
-class LokiSyslogEntry(TypedDict):
-    timestamp: TimestampNsField
-    node: NodeStr
-    body: RawLogLine
-
-
-LokiSyslogEntrySeries: TypeAlias = list[LokiSyslogEntry]
-
-
-class LokiHealthCheckEntry(TypedDict):
-    timestamp: TimestampMsField
-    node: NodeStr
-    body: RawLogLine
-
-
-LokiHealthCheckEntrySeries: TypeAlias = list[LokiHealthCheckEntry]
-
-MetricEntry: TypeAlias = str
-
-MetricEntrySeries: TypeAlias = list[MetricEntry]
-
-# Prometheus metric entry type
-PrometheusMetricEntry: TypeAlias = dict[str, Any]
-PrometheusMetricEntrySeries: TypeAlias = list[PrometheusMetricEntry]
-
-
-class CspEventSourceEvent(TypedDict):
-    source: str
-    event_id: str
-    event_created_at: str
-    event_region: str
-    hostname: str
-    fault_id: str
-    fault_component: NotRequired[str]
-
-
-class CspEventEntry(TypedDict):
-    hostname: NodeStr
-    termination_timestamp_s: float
-    category: str
-    reason: str
-    status: str
-    version: int
-    source_event: NotRequired[CspEventSourceEvent]
-
-
-CspEventEntrySeries: TypeAlias = list[CspEventEntry]
 
 StringList: TypeAlias = list[str]
 
