@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional, Protocol, TypeAlias
-from zoneinfo import ZoneInfo
 
 import attribution_lib
 from attribution_lib.attributor import Attributor
@@ -206,7 +205,7 @@ class AttributorInput(Protocol):
 class ObservationInput(Protocol):
     """Contract every versioned wire ``Observation`` satisfies."""
 
-    def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation: ...
+    def to_lib_observation(self, job_info: JobInfo) -> LibObservation: ...
 
 
 class AttributorWrapper:
@@ -235,7 +234,6 @@ class AttributorWrapper:
         self.attributor = Attributor.new(event_stream, job_info)
         self._event_manager = event_manager
         self._checkpoint_backend = MemoryCheckpointBackend()
-        self._timezone = job_info.timezone
         self.parameters = info.parameters
         self.lock = threading.Lock()
         self.last_access_time = datetime.now()
@@ -255,7 +253,7 @@ class AttributorWrapper:
                 raise UnknownAttributorIdError.new(self.id).to_http_exception()
             try:
                 logger.debug(f"Ingesting observation for attributor {self.id}")
-                _id = self.attributor.ingest(observation.to_lib_observation(self._timezone))
+                _id = self.attributor.ingest(observation.to_lib_observation(self.attributor.job_info))
                 self.last_access_time = datetime.now()
                 logger.debug(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {_id}")
             except LibDuplicateObservationError as e:

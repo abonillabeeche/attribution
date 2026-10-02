@@ -11,7 +11,7 @@
 # TODO: parametrize these tests across v1/v2
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -229,7 +229,7 @@ def test_prefiltered_flag_flows_through_to_lib_observation():
     context = _string_list_context(is_prefiltered=True)
     observation = ObservationV1(context=context, body="first\nsecond")
 
-    lib_observation = observation.to_lib_observation(ZoneInfo("UTC"))
+    lib_observation = observation.to_lib_observation(make_up_attributor_info().to_lib_jobinfo())
 
     assert lib_observation.context.pre_filtered is True
 
@@ -251,7 +251,7 @@ def test_request_body_with_is_prefiltered_true_reaches_lib_context():
 
     observation = ObservationV1.model_validate_json(body)
 
-    assert observation.to_lib_observation(ZoneInfo("UTC")).context.pre_filtered is True
+    assert observation.to_lib_observation(make_up_attributor_info().to_lib_jobinfo()).context.pre_filtered is True
 
 
 def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
@@ -275,7 +275,7 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
         body=json.dumps(entries),
     )
 
-    lines = observation.to_lib_observation(ZoneInfo("UTC")).lines
+    lines = observation.to_lib_observation(make_up_attributor_info().to_lib_jobinfo()).lines
 
     assert lines[0] == {
         "body": "first",
@@ -307,7 +307,7 @@ def test_a_ts_the_validator_coerces_decodes_to_an_int(ts, decoded):
         body=json.dumps([{"body": "x", "ts": ts}]),
     )
 
-    (line,) = observation.to_lib_observation(ZoneInfo("UTC")).lines
+    (line,) = observation.to_lib_observation(make_up_attributor_info().to_lib_jobinfo()).lines
 
     assert line == {"body": "x", "ts": decoded, "resources": None}
     assert type(line["ts"]) is int
