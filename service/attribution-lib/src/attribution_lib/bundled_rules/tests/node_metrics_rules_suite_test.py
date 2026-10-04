@@ -32,7 +32,7 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval,
 )
-from attribution_lib.observation.processing import EntrySourceBase
+from attribution_lib.observation.processing import EntrySourceBase, render_metric_body
 from attribution_lib.resources.resource_set import AllJobResources
 from attribution_lib.rules_engine import RuleLoader
 
@@ -103,13 +103,13 @@ def placeholder_jobinfo(simple_job_factory):
 
 @pytest.fixture
 def node_metrics_context(attributor_jobinfo, timezone):
-    """Observation context for NODE_METRICS with PROMETHEUS_METRICS format."""
+    """Observation context for NODE_METRICS."""
     time_interval = TimeInterval(attributor_jobinfo.job_start_time, attributor_jobinfo.job_end_time)
     return InboundContext(
         time_interval=time_interval,
         resources=AllJobResources,
         source=ObservationSource.NODE_METRICS,
-        format=ObservationFormat.PROMETHEUS_METRICS,
+        format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=timezone,
     )
 
@@ -117,15 +117,20 @@ def node_metrics_context(attributor_jobinfo, timezone):
 @pytest.fixture
 def sample_prometheus_metrics():
     """Sample prometheus metrics data for testing."""
+    metric = {
+        "timestamp": 1744734450,
+        "value": "1",
+        "metric": "node_infiniband_link_downed_total",
+        "labels": {"net_host_name": "test-node-001", "s_cluster": "test-cluster", "device": "mlx5_0"},
+        "node": "test-node-001",
+        "component": "mlx5_0",
+        "cluster": "test-cluster",
+    }
     return [
         {
-            "timestamp": 1744734450,
-            "value": "1",
-            "metric": "node_infiniband_link_downed_total",
-            "labels": {"net_host_name": "test-node-001", "s_cluster": "test-cluster", "device": "mlx5_0"},
-            "node": "test-node-001",
-            "component": "mlx5_0",
-            "cluster": "test-cluster",
+            "ts": 1744734450 * 10**9,
+            "resources": [{"kind": "node", "hostname": "test-node-001"}],
+            "body": render_metric_body(metric),
         }
     ]
 
@@ -226,14 +231,14 @@ class TestAttributorIntegration:
                 pass
 
     def test_node_metrics_format_validation(self, request, event_manager, attributor_jobinfo, node_metrics_context):
-        """Test that NODE_METRICS case validates PROMETHEUS_METRICS format"""
+        """Test that NODE_METRICS case validates its format"""
         event_stream = event_manager.create_stream(request.node.name)
         # Create context with wrong format
         wrong_format_context = InboundContext(
             time_interval=TimeInterval(attributor_jobinfo.job_start_time, attributor_jobinfo.job_end_time),
             resources=AllJobResources,
             source=ObservationSource.NODE_METRICS,
-            format=ObservationFormat.RAW_LOG_LINES,  # Wrong format
+            format=ObservationFormat.STRING_LIST,  # Wrong format
             timezone=node_metrics_context.timezone,
         )
 
@@ -264,104 +269,3 @@ class TestNodeMetricsProcessCheck:
             job_info=placeholder_jobinfo,
             rules_engine=attribution_lib.get_rules_engine(),
         )
-
-
-# class TestUpMetricLogic:
-#     """Test the 'up' metric logic for NS network connection lost attribution"""
-
-#     def test_up_metric_value_zero_attributes_connection_lost(self, node_metrics_jobinfo, event_stream, manager):
-#         """Test that 'up' metric with value 0 attributes 'NS network connection lost' as failure"""
-#         from attribution_lib.attr_types import JobNodeAttributions
-#         from attribution_lib.node_metrics import check
-#         from attribution_lib.observation.processing import PrometheusMetricsEntrySource
-
-#         # Create metric data with 'up' metric value 0 (connection lost)
-#         metric_data = [
-#             {
-#                 "timestamp": 1744734450,  # Within job time range
-#                 "value": "0",  # Connection lost
-#                 "metric": "up",
-#                 "labels": {"net_host_name": "test-node-001", "s_cluster": "test_cluster"},
-#                 "node": "test-node-001",
-#             }
-#         ]
-
-#         # Create observation context
-#         time_interval = TimeInterval(node_metrics_jobinfo.job_start_time, node_metrics_jobinfo.job_end_time)
-#         context = InboundContext(
-#             time_interval=time_interval,
-#             resources=AllJobResources,
-#             source=ObservationSource.NODE_METRICS,
-#             format=ObservationFormat.PROMETHEUS_METRICS,
-#             timezone=ZoneInfo("UTC"),
-#         )
-
-#         # Create observation and entry source
-#         observation = Observation.from_inbound(context=context, lines=metric_data)
-#         entry_source = PrometheusMetricsEntrySource(observation)
-
-#         # Run the check function
-#         check(
-#             event_stream=event_stream,
-#             observation_source=entry_source,
-#             job_info=node_metrics_jobinfo,
-#         )
-
-#         # Extract attributions from event stream
-#         nodes = JobNodeAttributions.from_event_stream(event_stream, node_metrics_jobinfo)
-
-#         # Verify that the node was attributed with "NS network connection lost" as bad
-#         assert "test-node-001" in nodes.attributions
-#         assert "NS network connection lost" in nodes.attributions["test-node-001"].attributions
-
-#         # Verify it's a bad attribution (failure type)
-#         symptom_sources = nodes.attributions["test-node-001"].attributions["NS network connection lost"]
-#         assert symptom_sources.has_bad(), "Expected 'NS network connection lost' to be attributed as bad"
-
-#     def test_up_metric_value_one_no_attribution(self, node_metrics_jobinfo, event_stream, manager):
-#         """Test that 'up' metric with value 1 (connection up) does not attribute anything"""
-#         from attribution_lib.attr_types import JobNodeAttributions
-#         from attribution_lib.node_metrics import check
-#         from attribution_lib.observation.processing import PrometheusMetricsEntrySource
-
-#         # Create metric data with 'up' metric value 1 (connection up)
-#         metric_data = [
-#             {
-#                 "timestamp": 1744734450,  # Within job time range
-#                 "value": "1",  # Connection up
-#                 "metric": "up",
-#                 "labels": {"net_host_name": "test-node-001", "s_cluster": "test_cluster"},
-#                 "node": "test-node-001",
-#             }
-#         ]
-
-#         # Create observation context
-#         time_interval = TimeInterval(node_metrics_jobinfo.job_start_time, node_metrics_jobinfo.job_end_time)
-#         context = InboundContext(
-#             time_interval=time_interval,
-#             resources=AllJobResources,
-#             source=ObservationSource.NODE_METRICS,
-#             format=ObservationFormat.PROMETHEUS_METRICS,
-#             timezone=ZoneInfo("UTC"),
-#         )
-
-#         # Create observation and entry source
-#         observation = Observation.from_inbound(context=context, lines=metric_data)
-#         entry_source = PrometheusMetricsEntrySource(observation)
-
-#         # Run the check function
-#         check(
-#             event_stream=event_stream,
-#             observation_source=entry_source,
-#             job_info=node_metrics_jobinfo,
-#         )
-
-#         # Extract attributions from event stream
-#         nodes = JobNodeAttributions.from_event_stream(event_stream, node_metrics_jobinfo)
-
-#         # Verify that no attribution was made (value 1 means connection is up, so no failure)
-#         # The node might be in the attributions dict but should not have "NS network connection lost"
-#         if "test-node-001" in nodes.attributions:
-#             assert "NS network connection lost" not in nodes.attributions["test-node-001"].attributions, (
-#                 "Expected no 'NS network connection lost' attribution when up=1"
-#             )

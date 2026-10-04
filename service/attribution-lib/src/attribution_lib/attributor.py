@@ -480,39 +480,16 @@ def _validate_source_format(context: ObservationContext) -> None:
         case ObservationSource.JOB_KEYWORDS:
             if context.format is not ObservationFormat.STRING_LIST:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.APPLOG:
-            if context.format not in [
-                ObservationFormat.RAW_LOG_LINES,
-                ObservationFormat.LOKI_DICT_LIST,
-                ObservationFormat.RAW_LOKI_STREAMS,
-                ObservationFormat.ENTRY_TIMESERIES,
-            ]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.SYSLOG:
-            if context.format not in [
-                ObservationFormat.LOKI_DICT_LIST,
-                ObservationFormat.RAW_LOKI_STREAMS,
-                ObservationFormat.ENTRY_TIMESERIES,
-            ]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.HEALTH_CHECK:
-            if context.format not in [
-                ObservationFormat.LOKI_DICT_LIST,
-                ObservationFormat.RAW_LOKI_STREAMS,
-                ObservationFormat.ENTRY_TIMESERIES,
-            ]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.UFMLOG:
-            if context.format not in [ObservationFormat.UFMLOG, ObservationFormat.ENTRY_TIMESERIES]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.NODE_METRICS:
-            if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.NVLINK_METRICS:
-            if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
-                raise MismatchedSourceAndFormatError(context.source, context.format)
-        case ObservationSource.CSP_EVENT:
-            if context.format not in [ObservationFormat.CSP_EVENT_LIST, ObservationFormat.ENTRY_TIMESERIES]:
+        case (
+            ObservationSource.APPLOG
+            | ObservationSource.SYSLOG
+            | ObservationSource.HEALTH_CHECK
+            | ObservationSource.UFMLOG
+            | ObservationSource.NODE_METRICS
+            | ObservationSource.NVLINK_METRICS
+            | ObservationSource.CSP_EVENT
+        ):
+            if context.format is not ObservationFormat.ENTRY_TIMESERIES:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case (
             ObservationSource.IB_METRICS

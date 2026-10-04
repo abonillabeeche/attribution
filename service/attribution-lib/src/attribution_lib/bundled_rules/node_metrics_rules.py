@@ -12,7 +12,7 @@
 Node metrics rules ported from attribution_lib/node_metrics.py check().
 
 Threshold-based attribution on Prometheus metrics.  Each rule matches the
-metric name inside the ``MetricEntry.body()`` text and captures the numeric
+metric name inside the ``render_metric_body`` text and captures the numeric
 value for threshold comparison in the processor.
 """
 

@@ -809,7 +809,7 @@ outcome_symptom(
 outcome_symptom(
     "XID-38-",
     family=_xid_member(38),
-    outcome="Fail MultiCategory",
+    outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM,
     doc="xid-38",
 )

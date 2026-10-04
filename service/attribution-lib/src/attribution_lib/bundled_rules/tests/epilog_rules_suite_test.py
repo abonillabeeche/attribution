@@ -26,29 +26,16 @@ class TestCheckResults:
         # Create job info with limited node list
         job_info = simple_job_factory(nodes=["job-node-001", "job-node-002"])
 
-        # Create test epilog data with mixed nodes
+        # Create test epilog data with mixed nodes; the node is parsed from the body
         test_epilog_data = [
             {
-                "stream": {"hostname": "job-node-001"},  # Valid node - should be processed
-                "values": [
-                    [
-                        "1700005000000000000",
-                        "Nov 15 10:30:00 job-node-001 epilog_12345: Job completed successfully",
-                    ]
-                ],
+                "ts": 1700005000000000000,
+                "body": "Nov 15 10:30:00 job-node-001 epilog_12345: Job completed successfully",
             },
-            {
-                "stream": {"hostname": "other-node-999"},  # Invalid node - should be ignored and logged
-                "values": [
-                    [
-                        "1700005100000000000",
-                        "Nov 15 10:31:00 other-node-999 epilog_12345: Some epilog error",
-                    ]
-                ],
-            },
+            {"ts": 1700005100000000000, "body": "Nov 15 10:31:00 other-node-999 epilog_12345: Some epilog error"},
         ]
 
-        obs = obs_data(job_info, test_epilog_data, ObservationSource.HEALTH_CHECK, ObservationFormat.RAW_LOKI_STREAMS)
+        obs = obs_data(job_info, test_epilog_data, ObservationSource.HEALTH_CHECK)
 
         event_stream = event_manager.create_stream("test_node_filtering_logging")
 
@@ -75,39 +62,19 @@ class TestCheckResults:
             )
             assert debug_logged, "Expected debug log for node filtering"
 
-    def test_time_filtering_logging(self, simple_job_factory, event_manager, obs_data, timezone):
+    def test_time_filtering_logging(self, simple_job_factory, event_manager, obs_data):
         """Test that epilog time filtering is logged correctly."""
         # Create job info
         job_info = simple_job_factory(
             nodes=["test-node"],
         )
 
-        # Create observation context - use wider time range to allow out-of-bounds entries
-        time_interval = TimeInterval(
-            datetime.fromtimestamp(1699990000, tz=timezone),  # Earlier start
-            datetime.fromtimestamp(1700020000, tz=timezone),  # Later end
-        )
-
-        # Test data with times outside job boundaries
+        # Entries outside the declared interval, which defaults to the job's
         test_epilog_data = [
-            {
-                "stream": {"hostname": "test-node"},
-                "values": [
-                    ["1699995000000000000", "Nov 14 22:00:00 test-node epilog_12345: Before job start"],  # Before job
-                    [
-                        "1700015000000000000",
-                        "Nov 15 14:00:00 test-node epilog_12345: After job end + 10min buffer",
-                    ],  # After job + buffer
-                ],
-            }
+            {"ts": 1699995000000000000, "body": "Nov 14 22:00:00 test-node epilog_12345: Before job start"},
+            {"ts": 1700015000000000000, "body": "Nov 15 14:00:00 test-node epilog_12345: After job end"},
         ]
-        observation_source = obs_data(
-            job_info,
-            test_epilog_data,
-            ObservationSource.HEALTH_CHECK,
-            ObservationFormat.RAW_LOKI_STREAMS,
-            time_interval=time_interval,
-        )
+        observation_source = obs_data(job_info, test_epilog_data, ObservationSource.HEALTH_CHECK)
 
         event_stream = event_manager.create_stream("time_filtering_logging")
 
@@ -142,22 +109,17 @@ class TestCheckResults:
         # - epilog_99999: callable (wrong job id)
         test_epilog_data = [
             {
-                "stream": {"detected_level": "INFO", "job": "test-job"},
-                "values": [
-                    [
-                        "1700005000000000000",
-                        '{"body":"Nov 15 10:30:00 test-node This is a prolog issue","attributes":{"hostname":"test-node"}}',
-                    ],
-                    [
-                        "1700005100000000000",
-                        '{"body":"Nov 15 10:31:00 test-node This is an epilog_99999 unrelated issue","attributes":{"hostname":"test-node"}}',
-                    ],
-                ],
-            }
+                "ts": 1700005000000000000,
+                "resources": [{"kind": "node", "hostname": "test-node"}],
+                "body": "Nov 15 10:30:00 test-node This is a prolog issue",
+            },
+            {
+                "ts": 1700005100000000000,
+                "resources": [{"kind": "node", "hostname": "test-node"}],
+                "body": "Nov 15 10:31:00 test-node This is an epilog_99999 unrelated issue",
+            },
         ]
-        observation_source = obs_data(
-            job_info, test_epilog_data, ObservationSource.HEALTH_CHECK, ObservationFormat.RAW_LOKI_STREAMS
-        )
+        observation_source = obs_data(job_info, test_epilog_data, ObservationSource.HEALTH_CHECK)
         event_stream = event_manager.create_stream("content_filtering")
 
         process_check(

@@ -10,23 +10,27 @@
 
 """V1 observation wire model. Accepts every legacy `Format`; kept as-is for existing V1 consumers."""
 
-import json
-from typing import Any
 from zoneinfo import ZoneInfo
 
+from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
-    Format as ObservationFormat,
+    Format as LibFormat,
     Observation as LibObservation,
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
 from attribution_lib.resources import AllJobResources
-from pydantic import BaseModel, RootModel, ValidationError, model_validator
+from pydantic import model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
-from app.exceptions import InvalidObservationBodyError, UnknownObservationFormatError
+from app.exceptions import UnknownObservationFormatError
 from app.util import HashableModel, TimeInterval
+from app.v1.legacy_formats import (
+    Format as ObservationFormat,
+    legacy_window,
+    to_entry_timeseries,
+)
 
 
 class ObservationContextV1(HashableModel):
@@ -50,27 +54,21 @@ class ObservationContextV1(HashableModel):
 
     def to_lib_context(self, timezone: ZoneInfo) -> InboundContext:
         """Convert the observation context to a lib context."""
-        return InboundContext(
+        return self._lib_context(
             LibTimeInterval(start=self.time_interval.start, end=self.time_interval.end),
+            LibFormat(self.format.value),
+            timezone,
+        )
+
+    def _lib_context(self, time_interval: LibTimeInterval, format: LibFormat, timezone: ZoneInfo) -> InboundContext:
+        return InboundContext(
+            time_interval,
             AllJobResources,
             self.source,
-            self.format,
+            format,
             timezone,
             pre_filtered=self.is_prefiltered,
         )
-
-
-class RawLokiStreamPair(RootModel):
-    root: tuple[str, str]
-
-
-class RawLokiStream(BaseModel):
-    stream: dict[str, Any]
-    values: list[RawLokiStreamPair]
-
-
-class RawLokiStreams(RootModel):
-    root: list[RawLokiStream]
 
 
 class ObservationV1(HashableModel):
@@ -79,33 +77,19 @@ class ObservationV1(HashableModel):
     context: ObservationContextV1
     body: str
 
-    def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation:
-        """Convert the observation to a lib observation."""
-        context = self.context.to_lib_context(timezone)
-        body: str | list[Any] | dict[str, Any]
+    def to_lib_observation(self, job_info: JobInfo) -> LibObservation:
+        """Convert the observation to a lib observation, decoding a legacy body into `entry_timeseries`."""
+        context = self.context
         match context.format:
-            case ObservationFormat.STRING_LIST:
-                body = self.body.split("\n")
-            case ObservationFormat.RAW_LOG_LINES | ObservationFormat.CSV_METRIC_RESPONSE:
-                body = self.body.split("\n")
-            case (
-                ObservationFormat.LOKI_DICT_LIST
-                | ObservationFormat.UFMLOG
-                | ObservationFormat.PROMETHEUS_METRICS
-                | ObservationFormat.CSP_EVENT_LIST
-            ):
-                try:
-                    body = json.loads(self.body)
-                except json.JSONDecodeError as e:
-                    raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
-            case ObservationFormat.RAW_LOKI_STREAMS:
-                try:
-                    body = RawLokiStreams.model_validate_json(self.body).model_dump()
-                except ValidationError as e:
-                    raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
-            case ObservationFormat.ENTRY_TIMESERIES:
-                body = decode_timeseries_entries(self.body)
-            case _:
+            case ObservationFormat.UNDEFINED:
                 raise UnknownObservationFormatError.new(context.format.value).to_http_exception()
-
-        return LibObservation(context, body)
+            case ObservationFormat.STRING_LIST:
+                return LibObservation(context.to_lib_context(job_info.timezone), self.body.split("\n"))
+            case ObservationFormat.ENTRY_TIMESERIES:
+                return LibObservation(context.to_lib_context(job_info.timezone), decode_timeseries_entries(self.body))
+            case _:
+                entries = to_entry_timeseries(context.source, context.format, self.body, job_info)
+                lib_context = context._lib_context(
+                    legacy_window(context.source, job_info), LibFormat.ENTRY_TIMESERIES, job_info.timezone
+                )
+                return LibObservation(lib_context, entries)

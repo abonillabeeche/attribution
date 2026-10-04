@@ -17,13 +17,14 @@ import pytest
 from attribution_lib.core import process_check
 from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation.inbound import (
-    Format as ObservationFormat,
     Source as ObservationSource,
+    TimeInterval,
 )
 from attribution_lib.observation.processing import render_metric_body
 from attribution_lib.resources.resource_set import AllJobResources
 from attribution_lib.sources import Source
 from test_support.helpers import (
+    line_entries,
     make_node_to_ranks,
     make_syslog_entry,
     match_bad,
@@ -69,38 +70,31 @@ def _run_node_metrics_case(case_data: RuleDataCase, attribution_test_builder, si
     timestamp = case_data.case.get("timestamp", 1744734450)
     metric = _make_node_metric(case_data.case["metric"], case_data.case["value"], timestamp, node, component)
 
-    # Under entry_timeseries the producer renders the body and stamps nanoseconds; the rules must
-    # read the same verdict off either wire form.
-    wire_forms = [
-        (ObservationFormat.PROMETHEUS_METRICS, metric),
-        (
-            ObservationFormat.ENTRY_TIMESERIES,
-            {
-                "ts": timestamp * 1_000_000_000,
-                "resources": [{"kind": "node", "hostname": node}],
-                "body": render_metric_body(metric),
-            },
-        ),
-    ]
-    for format, wire in wire_forms:
-        result = attribution_test_builder(
-            job_info=job_info,
-            data=[wire],
-            source=ObservationSource.NODE_METRICS,
-            format=format,
-            check_fn=process_check,
-        )
-        node_attr = result.get_node_attributions()
+    result = attribution_test_builder(
+        job_info=job_info,
+        data=[_metric_entry(metric)],
+        source=ObservationSource.NODE_METRICS,
+        check_fn=process_check,
+    )
+    node_attr = result.get_node_attributions()
 
-        match case_data.case["expect"]:
-            case "bad":
-                match_bad(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-            case "interesting":
-                match_interesting(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-            case "no_match":
-                assert node not in node_attr.attributions or not node_attr.attributions[node].attributions._data
-            case other:
-                raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+    match case_data.case["expect"]:
+        case "bad":
+            match_bad(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+        case "interesting":
+            match_interesting(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+        case "no_match":
+            assert node not in node_attr.attributions or not node_attr.attributions[node].attributions._data
+        case other:
+            raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+
+
+def _metric_entry(metric: dict) -> dict:
+    return {
+        "ts": metric["timestamp"] * 1_000_000_000,
+        "resources": [{"kind": "node", "hostname": metric["node"]}],
+        "body": render_metric_body(metric),
+    }
 
 
 def _make_nvlink_metric(metric: str, value: float, timestamp: int, node: str, component: str, cluster: str) -> dict:
@@ -131,9 +125,8 @@ def _run_nvlink_metrics_case(case_data: RuleDataCase, attribution_test_builder, 
 
     result = attribution_test_builder(
         job_info=job_info,
-        data=[metric],
+        data=[_metric_entry(metric)],
         source=ObservationSource.NVLINK_METRICS,
-        format=ObservationFormat.PROMETHEUS_METRICS,
         check_fn=process_check,
     )
     node_attr = result.get_node_attributions()
@@ -175,26 +168,9 @@ def _build_syslog_jobinfo(timezone, *, tflops_start: bool, multi_gpu: bool = Tru
     )
 
 
-def _syslog_wire_forms(lines: list[tuple[str, str, int]], severity: str = "error"):
-    """The same syslog lines as the legacy Loki stream shape and as entry_timeseries.
-
-    The rules must read the same verdict off either wire form, so each case runs once per form.
-    """
-    return [
-        (
-            ObservationFormat.RAW_LOKI_STREAMS,
-            [make_syslog_entry(body, node, ts, severity=severity) for body, node, ts in lines],
-        ),
-        (
-            ObservationFormat.ENTRY_TIMESERIES,
-            [{"ts": ts, "resources": [{"kind": "node", "hostname": node}], "body": body} for body, node, ts in lines],
-        ),
-    ]
-
-
 def _make_mfu_event(job_info, tflops_start: bool, obs_data):
     time = job_info.job_start_time if tflops_start else job_info.job_end_time
-    obase = obs_data(job_info, [], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+    obase = obs_data(job_info, [], ObservationSource.APPLOG)
     src = Source(
         source_context=obase.context,
         line_num=None,
@@ -207,7 +183,7 @@ def _make_mfu_event(job_info, tflops_start: bool, obs_data):
 
 
 def _make_syslog_aux_event(job_info, event_spec: dict, obs_data):
-    obase = obs_data(job_info, [], ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES)
+    obase = obs_data(job_info, [], ObservationSource.APPLOG)
     event_type = event_spec["event_type"]
     line_num = event_spec.get("line_num", 10)
     datum = event_spec.get("datum", "<pseudo event>")
@@ -262,7 +238,6 @@ def _make_syslog_aux_event(job_info, event_spec: dict, obs_data):
 
 def _run_syslog_single_line_mfu_case(case_data: RuleDataCase, attribution_test_builder, obs_data, timezone):
     tflops_start = case_data.case.get("tflops_start", True)
-    severity = case_data.case.get("severity", "error")
     job_info = _build_syslog_jobinfo(
         timezone, tflops_start=tflops_start, multi_gpu=case_data.case.get("multi_gpu", True)
     )
@@ -274,41 +249,39 @@ def _run_syslog_single_line_mfu_case(case_data: RuleDataCase, attribution_test_b
     lines = [(case_data.case["line"], node, int(timestamp_s * 1e9))]
     expected_node = case_data.case.get("expected_node", node)
 
-    for format, wire in _syslog_wire_forms(lines, severity=severity):
-        events_to_add = []
-        if case_data.case.get("inject_mfu", True):
-            events_to_add.append(_make_mfu_event(job_info, tflops_start, obs_data))
+    wire = [make_syslog_entry(body, node, ts) for body, node, ts in lines]
+    events_to_add = []
+    if case_data.case.get("inject_mfu", True):
+        events_to_add.append(_make_mfu_event(job_info, tflops_start, obs_data))
 
-        result = attribution_test_builder(
-            job_info=job_info,
-            data=wire,
-            source=ObservationSource.SYSLOG,
-            format=format,
-            check_fn=process_check,
-            events_to_add=events_to_add,
-            stream_id=f"{case_data.description}:{format.value}",
-        )
-        node_attr = result.get_node_attributions()
+    result = attribution_test_builder(
+        job_info=job_info,
+        data=wire,
+        source=ObservationSource.SYSLOG,
+        check_fn=process_check,
+        events_to_add=events_to_add,
+        stream_id=case_data.description,
+    )
+    node_attr = result.get_node_attributions()
 
-        match case_data.case["expect"]:
-            case "bad":
-                match_bad(node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-            case "interesting":
-                match_interesting(
-                    node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"]
-                )
-            case "no_match":
-                assert (
-                    expected_node not in node_attr.attributions
-                    or not node_attr.attributions[expected_node].attributions._data
-                )
-            case other:
-                raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+    match case_data.case["expect"]:
+        case "bad":
+            match_bad(node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+        case "interesting":
+            match_interesting(
+                node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"]
+            )
+        case "no_match":
+            assert (
+                expected_node not in node_attr.attributions
+                or not node_attr.attributions[expected_node].attributions._data
+            )
+        case other:
+            raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
 
 
 def _run_syslog_single_line_events_case(case_data: RuleDataCase, attribution_test_builder, obs_data, timezone):
     tflops_start = case_data.case.get("tflops_start", True)
-    severity = case_data.case.get("severity", "error")
     job_info = _build_syslog_jobinfo(
         timezone, tflops_start=tflops_start, multi_gpu=case_data.case.get("multi_gpu", True)
     )
@@ -316,72 +289,69 @@ def _run_syslog_single_line_events_case(case_data: RuleDataCase, attribution_tes
     timestamp_s = case_data.case.get("timestamp_s", job_info.job_start_time.timestamp())
     lines = [(case_data.case["line"], node, int(timestamp_s * 1e9))]
 
-    for format, wire in _syslog_wire_forms(lines, severity=severity):
-        events_to_add = [_make_syslog_aux_event(job_info, spec, obs_data) for spec in case_data.case.get("events", [])]
-        result = attribution_test_builder(
-            job_info=job_info,
-            data=wire,
-            source=ObservationSource.SYSLOG,
-            format=format,
-            check_fn=process_check,
-            events_to_add=events_to_add,
-            stream_id=f"{case_data.description}:{format.value}",
+    wire = [make_syslog_entry(body, node, ts) for body, node, ts in lines]
+    events_to_add = [_make_syslog_aux_event(job_info, spec, obs_data) for spec in case_data.case.get("events", [])]
+    result = attribution_test_builder(
+        job_info=job_info,
+        data=wire,
+        source=ObservationSource.SYSLOG,
+        check_fn=process_check,
+        events_to_add=events_to_add,
+        stream_id=case_data.description,
+    )
+    # Ordered event-stream parity assertion: assert the exact (event_type, rule)
+    # sequence emitted, in emission order, so a reordered try_all is caught. This
+    # MUST run before get_node_attributions(), which consumes the raw bad-node event.
+    expected_events = case_data.case.get("expected_events")
+    if expected_events is not None:
+        # Filter to this case's source line (unique per case) within this observation.
+        # The bad-node and the tracking event share source_datum but land in different phase
+        # contexts, so source_datum -- not context_id -- is the reliable per-case discriminator.
+        rows = result.event_stream.query_raw(
+            "SELECT t.name, r.name, e.payload FROM events e "
+            "LEFT JOIN event_types t ON e.event_type = t.id "
+            "LEFT JOIN rules r ON e.source_rule = r.id "
+            "WHERE e.source_datum = ? AND e.obs_context_id = ? "
+            "ORDER BY e.id",
+            [case_data.case["line"], result.observation_source.context.id],
         )
-        # Ordered event-stream parity assertion: assert the exact (event_type, rule)
-        # sequence emitted, in emission order, so a reordered try_all is caught. This
-        # MUST run before get_node_attributions(), which consumes the raw bad-node event.
-        expected_events = case_data.case.get("expected_events")
-        if expected_events is not None:
-            # Filter to this case's source line (unique per case) within this wire form's observation.
-            # The bad-node and the tracking event share source_datum but land in different phase
-            # contexts, so source_datum -- not context_id -- is the reliable per-case discriminator.
-            rows = result.event_stream.query_raw(
-                "SELECT t.name, r.name, e.payload FROM events e "
-                "LEFT JOIN event_types t ON e.event_type = t.id "
-                "LEFT JOIN rules r ON e.source_rule = r.id "
-                "WHERE e.source_datum = ? AND e.obs_context_id = ? "
-                "ORDER BY e.id",
-                [case_data.case["line"], result.observation_source.context.id],
+        actual = [(event_type, rule) for event_type, rule, _ in rows]
+        expected = [(ev["event_type"], ev["rule"]) for ev in expected_events]
+        assert actual == expected, f"event order mismatch in {case_data.path}: {actual!r} != {expected!r}"
+        for i, (ev_spec, (_, _, payload_raw)) in enumerate(zip(expected_events, rows)):
+            if expected_pl := ev_spec.get("payload"):
+                actual_pl = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+                for key, val in expected_pl.items():
+                    assert actual_pl.get(key) == val, (
+                        f"payload[{key!r}] mismatch in {case_data.path} event {i}: "
+                        f"expected {val!r}, got {actual_pl.get(key)!r}"
+                    )
+        return
+
+    node_attr = result.get_node_attributions()
+    expected_node = case_data.case.get("expected_node", node)
+
+    if (expectations := case_data.case.get("expectations")) is not None:
+        for expectation in expectations:
+            node = expectation.get("expected_node", expected_node)
+            match expectation["expect"]:
+                case "bad":
+                    match_bad(node_attr, node, expectation["expected_symptom"], expectation["expected_rule"])
+                case "interesting":
+                    match_interesting(node_attr, node, expectation["expected_symptom"], expectation["expected_rule"])
+                case other:
+                    raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+        return
+
+    match case_data.case["expect"]:
+        case "bad":
+            match_bad(node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+        case "interesting":
+            match_interesting(
+                node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"]
             )
-            actual = [(event_type, rule) for event_type, rule, _ in rows]
-            expected = [(ev["event_type"], ev["rule"]) for ev in expected_events]
-            assert actual == expected, f"event order mismatch in {case_data.path}: {actual!r} != {expected!r}"
-            for i, (ev_spec, (_, _, payload_raw)) in enumerate(zip(expected_events, rows)):
-                if expected_pl := ev_spec.get("payload"):
-                    actual_pl = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
-                    for key, val in expected_pl.items():
-                        assert actual_pl.get(key) == val, (
-                            f"payload[{key!r}] mismatch in {case_data.path} event {i}: "
-                            f"expected {val!r}, got {actual_pl.get(key)!r}"
-                        )
-            continue
-
-        node_attr = result.get_node_attributions()
-        expected_node = case_data.case.get("expected_node", node)
-
-        if (expectations := case_data.case.get("expectations")) is not None:
-            for expectation in expectations:
-                node = expectation.get("expected_node", expected_node)
-                match expectation["expect"]:
-                    case "bad":
-                        match_bad(node_attr, node, expectation["expected_symptom"], expectation["expected_rule"])
-                    case "interesting":
-                        match_interesting(
-                            node_attr, node, expectation["expected_symptom"], expectation["expected_rule"]
-                        )
-                    case other:
-                        raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
-            continue
-
-        match case_data.case["expect"]:
-            case "bad":
-                match_bad(node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-            case "interesting":
-                match_interesting(
-                    node_attr, expected_node, case_data.case["expected_symptom"], case_data.case["expected_rule"]
-                )
-            case other:
-                raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+        case other:
+            raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
 
 
 def _run_syslog_fm_gpu_series_case(case_data: RuleDataCase, attribution_test_builder, timezone):
@@ -400,28 +370,27 @@ def _run_syslog_fm_gpu_series_case(case_data: RuleDataCase, attribution_test_bui
         for offset, gpu_guid in enumerate(case_data.case["gpu_guids"])
     ]
 
-    for format, wire in _syslog_wire_forms(lines):
-        result = attribution_test_builder(
-            job_info=job_info,
-            data=wire,
-            source=ObservationSource.SYSLOG,
-            format=format,
-            check_fn=process_check,
-            stream_id=f"{case_data.description}:{format.value}",
-        )
-        node_attr = result.get_node_attributions()
+    wire = [make_syslog_entry(body, node, ts) for body, node, ts in lines]
+    result = attribution_test_builder(
+        job_info=job_info,
+        data=wire,
+        source=ObservationSource.SYSLOG,
+        check_fn=process_check,
+        stream_id=case_data.description,
+    )
+    node_attr = result.get_node_attributions()
 
-        for expectation in case_data.case["expectations"]:
-            symptom = expectation["symptom"]
-            rule = expectation["rule"]
-            match expectation["expect"]:
-                case "bad":
-                    match_bad(node_attr, node, symptom, rule)
-                case "absent":
-                    if node in node_attr.attributions:
-                        assert symptom not in node_attr.attributions[node].attributions
-                case other:
-                    raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+    for expectation in case_data.case["expectations"]:
+        symptom = expectation["symptom"]
+        rule = expectation["rule"]
+        match expectation["expect"]:
+            case "bad":
+                match_bad(node_attr, node, symptom, rule)
+            case "absent":
+                if node in node_attr.attributions:
+                    assert symptom not in node_attr.attributions[node].attributions
+            case other:
+                raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
 
 
 def _build_applog_jobinfo(timezone, *, tflops_start: bool, variant: str = "default"):
@@ -469,11 +438,12 @@ def _run_applog_single_line_case(case_data: RuleDataCase, attribution_test_build
 
     result = attribution_test_builder(
         job_info=job_info,
-        data=[case_data.case["line"]],
+        data=line_entries([case_data.case["line"]]),
         source=ObservationSource.APPLOG,
-        format=ObservationFormat.RAW_LOG_LINES,
         check_fn=process_check,
         stream_id=case_data.description,
+        # Case lines are dated independently of the job, so the window stays open.
+        time_interval=TimeInterval(None, None),
     )
 
     expected_events = case_data.case.get("expected_events")
@@ -522,11 +492,12 @@ def _run_applog_bad_peers_case(case_data: RuleDataCase, attribution_test_builder
 
     result = attribution_test_builder(
         job_info=job_info,
-        data=[case_data.case["line"]],
+        data=line_entries([case_data.case["line"]]),
         source=ObservationSource.APPLOG,
-        format=ObservationFormat.RAW_LOG_LINES,
         check_fn=process_check,
         stream_id=case_data.description,
+        # Case lines are dated independently of the job, so the window stays open.
+        time_interval=TimeInterval(None, None),
     )
     node_attr = result.get_node_attributions()
     expected_nodes = case_data.case["expected_nodes"]
