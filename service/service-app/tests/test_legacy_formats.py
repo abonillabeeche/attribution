@@ -24,7 +24,7 @@ from tests.conftest import make_up_attributor_info
 
 JOB_START = datetime(2025, 4, 15, 10, 0, tzinfo=timezone.utc)
 JOB_END = datetime(2025, 4, 15, 11, 0, tzinfo=timezone.utc)
-# Later than the job end, so a year-less timestamp proves it took its year from the job, not from here.
+# A year after the job end, so a year-less timestamp proves it took its year from here, not from the job.
 DECLARED_END = datetime(2026, 1, 10, tzinfo=timezone.utc)
 TS_NS = 1744734437830498765
 # The legacy float-seconds conversion rounded to the nearest microsecond.
@@ -51,7 +51,7 @@ def _interest_window(ji):
             ObservationFormat.RAW_LOG_LINES,
             "[E1231 23:57:09.5 ProcessGroupNCCL.cpp:1923] 3: watchdog timeout\nno timestamp",
             [
-                {"body": "[E1231 23:57:09.5 ProcessGroupNCCL.cpp:1923] 3: watchdog timeout", "ts": 1735689429 * 10**9},
+                {"body": "[E1231 23:57:09.5 ProcessGroupNCCL.cpp:1923] 3: watchdog timeout", "ts": 1767225429 * 10**9},
                 {"body": "no timestamp", "ts": None},
             ],
             lambda ji: (None, None),

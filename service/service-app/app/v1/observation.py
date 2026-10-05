@@ -100,7 +100,9 @@ class ObservationV1(HashableModel):
             case ObservationFormat.ENTRY_TIMESERIES:
                 return LibObservation(context.to_lib_context(job_info.timezone), decode_timeseries_entries(self.body))
             case _:
-                entries = to_entry_timeseries(context.source, context.format, self.body, job_info)
+                entries = to_entry_timeseries(
+                    context.source, context.format, self.body, job_info, context.time_interval.end
+                )
                 lib_context = context._lib_context(
                     legacy_window(context.source, job_info), LibFormat.ENTRY_TIMESERIES, job_info.timezone
                 )
