@@ -121,7 +121,14 @@ def test_run_to_react_omits_invalid_bad_pairs(tmp_path, collectors):
     assert r["errorPairs"] == ""
 
 
-def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path):
+def _empty_catalog(monkeypatch):
+    from attribution_blueprint.webui import diagnose
+
+    monkeypatch.setattr(diagnose, "_load_catalog", lambda: {})
+
+
+def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path, monkeypatch):
+    _empty_catalog(monkeypatch)
     run = _seed_one(tmp_path, catalog_id="xid-79")
     r = bootstrap.run_to_react(run)
     assert r["diagnose"]["hasPersona"] is False
@@ -147,7 +154,8 @@ def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
     assert r["operatorDiagnose"]["title"] == "GpuFell"
 
 
-def test_run_to_react_parses_unsquashfs_timestamp_with_empty_catalog(tmp_path):
+def test_run_to_react_parses_unsquashfs_timestamp_with_empty_catalog(tmp_path, monkeypatch):
+    _empty_catalog(monkeypatch)
     run = _seed_one(
         tmp_path,
         symptom="unsquashfs: write failed (system path)",
