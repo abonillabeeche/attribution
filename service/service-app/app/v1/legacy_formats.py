@@ -441,11 +441,11 @@ def _loki_resources(node: Optional[str], replica: Optional[str] = None) -> Optio
     return resources or None
 
 
-def _raw_log_entries(lines: list[str], job_info: JobInfo) -> list[dict[str, Any]]:
+def _raw_log_entries(lines: list[str], job_info: JobInfo, declared_end: Optional[datetime]) -> list[dict[str, Any]]:
     entries = []
     for line in lines:
-        # Year-less timestamps take their year from the job end, as the library's `raw_log` path did.
-        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_end_time=job_info.job_end_time)
+        # Year-less timestamps take their year from the declared interval end, as the library's `raw_log` path did.
+        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_end_time=declared_end)
         entries.append(_entry(line, _datetime_ns(moment) if moment is not None else None))
     return entries
 
@@ -508,14 +508,17 @@ def _decode_json(format: Format, body: str) -> Any:
         raise InvalidObservationBodyError.new(format.value).to_http_exception() from e
 
 
-def to_entry_timeseries(source: Source, format: Format, body: str, job_info: JobInfo) -> list[dict[str, Any]]:
+def to_entry_timeseries(
+    source: Source, format: Format, body: str, job_info: JobInfo, declared_end: Optional[datetime]
+) -> list[dict[str, Any]]:
     """Decode a legacy body into the `entry_timeseries` entries the library receives.
 
     Args:
         source: The declared observation source.
         format: The legacy format `body` is in; not `string_list`, `entry_timeseries` or `undefined`.
         body: The body as posted.
-        job_info: The job the observation belongs to; year-less `raw_log` timestamps take their year from its end.
+        job_info: The job the observation belongs to.
+        declared_end: The declared `time_interval.end`; year-less `raw_log` timestamps take their year from it.
 
     Returns:
         The entries; empty for a source the library rejects regardless of format.
@@ -535,7 +538,7 @@ def to_entry_timeseries(source: Source, format: Format, body: str, job_info: Job
 
     match format:
         case Format.RAW_LOG_LINES:
-            return _raw_log_entries(decoded, job_info)
+            return _raw_log_entries(decoded, job_info, declared_end)
         case Format.LOKI_DICT_LIST:
             return _loki_dict_entries(source, decoded)
         case Format.RAW_LOKI_STREAMS:
