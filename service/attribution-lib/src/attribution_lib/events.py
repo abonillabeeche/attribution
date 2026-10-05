@@ -914,7 +914,11 @@ class EventManager:
     # version-1 snapshot's ids for those tables are arbitrary and have no
     # relationship to _stable_id(name), so importing one under version-2 code
     # would silently mix unrelated ids -- reject it instead.
-    _SNAPSHOT_SCHEMA_VERSION = 2
+    # 2 -> 3: legacy observation formats were removed from `Format`. A
+    # version-2 `obs_formats` table can carry a retired name that the overlay
+    # restore keeps and `Format(obs_format_str)` in event_helpers.py then
+    # rejects, so treat such snapshots as a cache miss.
+    _SNAPSHOT_SCHEMA_VERSION = 3
     _SCHEMA_VERSION_FILE = "schema_version"
 
     # All DuckDB tables in dependency-safe import order.
