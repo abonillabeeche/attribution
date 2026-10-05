@@ -13,10 +13,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, NamedTuple, NewType, NotRequired, Optional, TypeAlias, TypedDict, TypeVar, cast
+from typing import Any, Generic, NewType, NotRequired, Optional, TypeAlias, TypedDict, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from attribution_lib.exceptions import (
+    InvalidTimeIntervalError,
     UnknownObservationSourceError,
 )
 from attribution_lib.resources import ResourceSet
@@ -194,12 +195,22 @@ class Format(str, Enum):
     ENTRY_TIMESERIES = "entry_timeseries"
 
 
-class TimeInterval(NamedTuple):
-    """The window a producer declares an observation covers; a null bound is unbounded on that side."""
+@dataclass(frozen=True)
+class TimeInterval:
+    """The window a producer declares an observation covers; a null bound is unbounded on that side.
+
+    Raises:
+        InvalidTimeIntervalError: If both bounds are set and `start` is later than `end`.
+    """
 
     start: Optional[datetime]
     end: Optional[datetime]
 
+    def __post_init__(self) -> None:
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise InvalidTimeIntervalError(self)
+
+    # isoformat keeps the UTC offset in the hash, unlike datetime.__hash__.
     def __hash__(self) -> int:
         return hash(
             (
