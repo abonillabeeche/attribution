@@ -175,7 +175,8 @@ def test_legacy_body_converts_to_entry_timeseries_over_the_source_window(
 
     assert lib_observation.lines == [{"resources": None} | entry for entry in expected_entries]
     assert lib_observation.context.format is LibFormat.ENTRY_TIMESERIES
-    assert tuple(lib_observation.context.time_interval) == expected_window(job_info)
+    lib_window = lib_observation.context.time_interval
+    assert (lib_window.start, lib_window.end) == expected_window(job_info)
 
 
 class TestExtractBodyAndNode:

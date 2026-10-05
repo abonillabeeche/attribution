@@ -52,6 +52,18 @@ class ObservationContextV1(HashableModel):
             raise ValueError(f"a null time_interval bound is only accepted for {ObservationFormat.ENTRY_TIMESERIES}")
         return self
 
+    @model_validator(mode="after")
+    def _start_must_not_follow_end(self) -> "ObservationContextV1":
+        # Legacy formats are re-windowed by `legacy_window` and never use the declared interval.
+        if (
+            self.format in (ObservationFormat.ENTRY_TIMESERIES, ObservationFormat.STRING_LIST)
+            and self.time_interval.start is not None
+            and self.time_interval.end is not None
+            and self.time_interval.start > self.time_interval.end
+        ):
+            raise ValueError("time_interval.start must not be later than time_interval.end")
+        return self
+
     def to_lib_context(self, timezone: ZoneInfo) -> InboundContext:
         """Convert the observation context to a lib context."""
         return self._lib_context(
