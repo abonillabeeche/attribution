@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from attribution_lib.exceptions import (
+    InvalidTimeIntervalError,
     UnknownObservationFormatError,
     UnknownObservationSourceError,
     UnknownResourceError,
@@ -132,6 +133,15 @@ class TestTimeInterval:
     def test_hash(self, time_interval):
         interval2 = TimeInterval(time_interval.start, time_interval.end)
         assert hash(time_interval) == hash(interval2)
+
+    def test_start_after_end_rejected(self, time_interval):
+        with pytest.raises(InvalidTimeIntervalError):
+            TimeInterval(time_interval.end, time_interval.start)
+
+    def test_equal_or_null_bounds_accepted(self, time_interval):
+        TimeInterval(time_interval.start, time_interval.start)
+        TimeInterval(None, time_interval.end)
+        TimeInterval(time_interval.start, None)
 
 
 class TestInboundContext:

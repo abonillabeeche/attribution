@@ -241,6 +241,36 @@ class TestEndpoints:
         assert response.status_code == 422
 
     @pytest.mark.parametrize(
+        ("source", "format", "body"),
+        [
+            (ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, json.dumps([{"body": "line"}])),
+            (ObservationSource.JOB_KEYWORDS, ObservationFormat.STRING_LIST, "line"),
+        ],
+    )
+    def test_post_observation_inverted_declared_interval_rejected(self, client, source, format, body):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
+        obs = json.loads(fake_applog_observation("line").model_dump_json())
+        obs["context"].update(
+            source=source.value,
+            format=format.value,
+            time_interval={"start": END.isoformat(), "end": START.isoformat()},
+        )
+        obs["body"] = body
+
+        response = client.post(f"/v1/attributor/{att_id}/observation", json=obs)
+
+        assert response.status_code == 422
+
+    def test_post_observation_inverted_legacy_interval_accepted(self, client):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
+        obs = json.loads(fake_applog_observation("line").model_dump_json())
+        obs["context"]["time_interval"] = {"start": END.isoformat(), "end": START.isoformat()}
+
+        response = client.post(f"/v1/attributor/{att_id}/observation", json=obs)
+
+        assert response.status_code == 201
+
+    @pytest.mark.parametrize(
         ("source", "format"),
         [
             (ObservationSource.UFMLOG, ObservationFormat.UFMLOG),

@@ -10,9 +10,12 @@
 
 """Exception hierarchy for the attribution library."""
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from attribution_lib.observation.inbound import TimeInterval
 
 
 class AttributionError(Exception):
@@ -99,6 +102,14 @@ class InvalidTimestampSourceError(ObservationError):
     """Raised when timestamp source is invalid."""
 
     pass
+
+
+class InvalidTimeIntervalError(ObservationError):
+    """Raised when an observation's `time_interval` starts after it ends."""
+
+    def __init__(self, time_interval: "TimeInterval") -> None:
+        self.time_interval = time_interval
+        super().__init__(f"time_interval start is after end: {time_interval}")
 
 
 class ProcessingError(ObservationError):
