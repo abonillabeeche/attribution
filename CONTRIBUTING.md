@@ -23,6 +23,16 @@ pre-commit install
 
 The hook regenerates the service-app's OpenAPI client when a commit touches something the client is built from, blocking the commit until the regenerated files are staged. Skip with `git commit --no-verify`.
 
+## Title commits and pull requests
+
+Pull requests are squash-merged, so the PR title becomes the commit subject on `main`. Write it as a [Conventional Commit](https://www.conventionalcommits.org/), `type(scope)!: summary`. CI checks the format and type; the rest is guidance.
+
+- Types: `feat`, `fix`, `build`, `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style`, `test`.
+- Scope is optional. Common scopes are `attribution-lib`, `service-app`, `blueprint`, `frontend`, `docs`, and `ci`.
+- Write the summary in the imperative mood with no trailing period.
+- Mark a removed or incompatible public API with `!` and add a `BREAKING CHANGE:` footer to the PR body that says what callers must change.
+- The type signals the version bump for the next release of each touched component: `!` is major, `feat` is minor, `fix` is patch, and other types do not bump. A component still at `0.y.z` shifts each bump down one place: `!` is minor, and `feat` and `fix` are patch.
+
 ## Review interactive documentation
 
 The attribution walkthrough is a Slidev application published through GitHub
