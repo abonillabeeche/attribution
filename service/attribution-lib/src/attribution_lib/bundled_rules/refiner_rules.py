@@ -27,7 +27,7 @@ from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeh
 from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
-from attribution_lib.job_info import NVRX_TAG, JobInfo
+from attribution_lib.job_info import NVRX_TAG, JobInfo, Scheduler
 from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
 from attribution_lib.outcome import OutcomeAttribution
@@ -819,12 +819,12 @@ def job_state_fallback(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
     if len(job_info.nodes) == 0:
-        if job_info.type != "kueue" or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
+        if job_info.scheduler is not Scheduler.KUEUE or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
             symptoms.discard_all()
             symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
             return
     if job_info.state == "RUNNING":
-        if job_info.type != "kueue":
+        if job_info.scheduler is not Scheduler.KUEUE:
             symptoms.discard_all()
         if not symptoms:
             symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
@@ -1013,7 +1013,7 @@ def slurm_state_symptoms(context: RefinerContext):
         symptoms.add(job_info.source_value("Job requeued", job_info.state, "state requeued"))
     elif (
         job_info.state == "NODE_FAIL"
-        and job_info.type == "kueue"
+        and job_info.scheduler is Scheduler.KUEUE
         and not job_info.failed_node
         and len(job_info.nodes) != 1
     ):
@@ -1245,7 +1245,7 @@ def slurm_timeout_xid145_cascade(context: RefinerContext):
         symptoms is None
         or my_bad_nodes is None
         or job_info is None
-        or job_info.type == "kueue"
+        or job_info.scheduler is Scheduler.KUEUE
         or job_info.job_end_time is None
         or "Cancelled by Timeout" not in symptoms
         or _XID145_RXPIPE_SYMPTOM not in symptoms
@@ -2392,7 +2392,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # types retain their historical PREEMPTED reclassification behavior.
     if (
         not nvrx_failed
-        and (job_info.type != "kueue" or kueue_has_only_preemption_fallback)
+        and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

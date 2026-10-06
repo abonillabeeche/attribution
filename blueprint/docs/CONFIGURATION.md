@@ -491,9 +491,11 @@ as `FAILED`, `UNKNOWN`, or an unrecognized scheduler-specific state fall back
 to `job failed`. Use the scheduler's real state, and do not use `state` to
 preselect the desired attribution outcome.
 
-`workload_type` identifies the workload manager to the service. The Kueue
-adapter sends `kueue` and also records `scheduler = "kueue"` internally for
-SQLite output. Service v2 accepts open string values.
+`workload_type` is the legacy free-form workload token sent as `workload.type`.
+Scheduler identity comes from the execution context's `scheduler` value, which
+Blueprint sends as `workload.scheduler` when it is a supported scheduler
+(`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
+treats the scheduler as unknown.
 
 ### `[workload]`
 

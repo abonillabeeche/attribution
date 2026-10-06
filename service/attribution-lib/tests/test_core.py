@@ -25,7 +25,7 @@ from attribution_lib.core import (
     calculate_bad_nodes,
     calculate_symptoms,
 )
-from attribution_lib.job_info import JobInfoBuilder
+from attribution_lib.job_info import JobInfoBuilder, Scheduler
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Id
 from attribution_lib.observation.processing import _extract_timestamp_from_log_line
@@ -212,7 +212,7 @@ class TestNeverRanJob:
         job_info = simple_job_factory(
             node_to_ranks={},
             state="FAILED",
-            job_type="kueue",
+            scheduler=Scheduler.KUEUE,
         )
 
         result = calculate_symptoms(
@@ -223,6 +223,19 @@ class TestNeverRanJob:
 
         assert "job failed" in result
         assert "Job didn't start" not in result
+
+    def test_kueue_type_without_scheduler_retains_didnt_start_fallback(
+        self, event_stream, simple_job_factory
+    ):
+        job_info = simple_job_factory(node_to_ranks={}, state="FAILED", job_type="kueue")
+
+        result = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
+        )
+
+        assert list(result.symptoms()) == ["Job didn't start"]
 
     def test_non_kueue_terminal_failed_job_without_nodes_retains_didnt_start_fallback(
         self, event_stream, simple_job_factory
@@ -261,7 +274,7 @@ class TestRunningJob:
         self, event_stream, simple_job_factory, source_set_factory
     ):
         """A running Kueue workload must not hide collected failure evidence."""
-        job_info = simple_job_factory(state="RUNNING", job_type="kueue")
+        job_info = simple_job_factory(state="RUNNING", scheduler=Scheduler.KUEUE)
         bad_nodes = JobNodeAttributions()
         bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
 
@@ -1835,7 +1848,12 @@ class TestSingleNodeNodeFail:
         return result.my_bad_nodes
 
     def test_single_node_nodefail_no_failed_node_attributes_sole_node(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["example-batch-node-00985"], job_type="slurm")
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["example-batch-node-00985"],
+            job_type="slurm",
+            scheduler=Scheduler.SLURM,
+        )
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1853,6 +1871,7 @@ class TestSingleNodeNodeFail:
             nodes=["node-a", "node-b"],
             failed_node="node-b",
             job_type="slurm",
+            scheduler=Scheduler.SLURM,
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1861,7 +1880,12 @@ class TestSingleNodeNodeFail:
         assert source.rule == "slurm_failed_node_field"
 
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"], job_type="slurm")
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            job_type="slurm",
+            scheduler=Scheduler.SLURM,
+        )
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1883,7 +1907,7 @@ class TestSingleNodeNodeFail:
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
             failed_node="node-b",
-            job_type="kueue",
+            scheduler=Scheduler.KUEUE,
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)

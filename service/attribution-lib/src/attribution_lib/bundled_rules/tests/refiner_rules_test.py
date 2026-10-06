@@ -30,7 +30,7 @@ from attribution_lib.failed_node_provenance import FailedNodeResolution
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
@@ -187,7 +187,7 @@ def _job_info_with(**overrides) -> JobInfo:
 
 def _slurm_job_info(**overrides) -> JobInfo:
     """Build a JobInfo explicitly identified as Slurm."""
-    return default_job_info(**overrides)._replace(type="slurm")
+    return default_job_info(scheduler=Scheduler.SLURM, **overrides)
 
 
 def _run_scrub(stream, job_info, bad_nodes, recorder=None):
@@ -1280,7 +1280,7 @@ class TestSlurmStateSymptoms:
             assert "Cancelled by cluster operators" not in symptoms
 
     def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx):
-        ji = _job_info_with(state="REQUEUED", nodes=[])._replace(type="kueue")
+        ji = _job_info_with(state="REQUEUED", nodes=[], scheduler=Scheduler.KUEUE)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1294,7 +1294,7 @@ class TestSlurmStateSymptoms:
         # dedicated service state (queue stopped, admission check failed,
         # pods-ready timeout, deactivated, ...) to the single EVICTED value;
         # rules never see the raw per-reason string.
-        ji = _job_info_with(state="EVICTED", nodes=[])._replace(type="kueue")
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1303,7 +1303,7 @@ class TestSlurmStateSymptoms:
         assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
 
     def test_kueue_eviction_preserves_real_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="EVICTED", nodes=[])._replace(type="kueue")
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
         symptoms = _make_symptoms(obs_ctx, "Python Exception")
 
         _run(stream, ji, symptoms)
@@ -1312,9 +1312,11 @@ class TestSlurmStateSymptoms:
         assert calculate_outcome(symptoms).value().outcome == "Fail User"
 
     def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="NODE_FAIL", nodes=["node01", "node02"])._replace(
-            type="kueue", failed_node=None
-        )
+        ji = _job_info_with(
+            state="NODE_FAIL",
+            nodes=["node01", "node02"],
+            scheduler=Scheduler.KUEUE,
+        )._replace(failed_node=None)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1987,7 +1989,12 @@ class TestSlurmTimeoutXid145Cascade:
 
     def test_kueue_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx):
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
-        ji = default_job_info(state="TIMEOUT", job_end_time=job_end, time_limit=60)._replace(type="kueue")
+        ji = default_job_info(
+            state="TIMEOUT",
+            job_end_time=job_end,
+            time_limit=60,
+            scheduler=Scheduler.KUEUE,
+        )
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
             obs_ctx,
@@ -3287,7 +3294,7 @@ class TestNodeFailureNfsCleanup:
 
 class TestLastResortSymptoms:
     def test_empty_symptoms_completed_job(self, stream, obs_ctx):
-        ji = _job_info_with(state="COMPLETED")._replace(type="kueue")
+        ji = _job_info_with(state="COMPLETED", scheduler=Scheduler.KUEUE)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "the process completes" in symptoms
@@ -3309,7 +3316,7 @@ class TestLastResortSymptoms:
         assert "job failed" not in symptoms
 
     def test_empty_symptoms_unknown_state(self, stream, obs_ctx):
-        ji = _job_info_with(state="OUT_OF_MEMORY")._replace(type="kueue")
+        ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=Scheduler.KUEUE)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
@@ -4203,7 +4210,7 @@ class TestFilterFatalXidNoise:
 
 class TestOutcomeReclassification:
     def test_preempted_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED")._replace(type="kueue")
+        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         result.outcome_attr = _make_outcome("Fail User")
@@ -4218,7 +4225,7 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
 
     def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED")._replace(type="kueue")
+        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
         result.symptoms.update(symptoms)
@@ -4246,7 +4253,12 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().outcome == "Pass"
 
     def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="TIMEOUT", cancelled_by="Timeout", time_limit=3600)._replace(type="kueue")
+        ji = _job_info_with(
+            state="TIMEOUT",
+            cancelled_by="Timeout",
+            time_limit=3600,
+            scheduler=Scheduler.KUEUE,
+        )
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         symptoms = _make_symptoms(obs_ctx, "Cancelled by Timeout")

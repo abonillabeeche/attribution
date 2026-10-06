@@ -14,7 +14,7 @@ from attribution_lib.events import EventStream
 
 _SYSTEM_CANCEL_FLAGS = frozenset({"root", "Timeout", "PyTorch NCCL watchdog"})
 from .megatron import get_pytorch_timeout_minutes
-from attribution_lib.job_info import JobInfo
+from attribution_lib.job_info import JobInfo, Scheduler
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.sources import SourceSet
 
@@ -74,7 +74,7 @@ def apply_outcome_reclassification_rules(
     # Kueue preemption must not mask evidence-backed failures. Other scheduler
     # types retain their historical PREEMPTED reclassification behavior.
     if (
-        (job_info.type != "kueue" or kueue_has_only_preemption_fallback)
+        (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

@@ -20,7 +20,7 @@ from pytest import param as pparam
 
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.events import EventStream
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.observation import (
     Context as ObservationContext,
     Observation,
@@ -62,6 +62,7 @@ def create_simple_job_info(
     source_name="artificial slurm",
     slurm_node_infos=None,
     failed_node=None,
+    scheduler: Scheduler | str | None = None,
 ):
     if timezone is None:
         if request is None:
@@ -97,6 +98,8 @@ def create_simple_job_info(
         .exit_code_signal(exit_code_signal)
         .time_limit(time_limit)
     )
+    if scheduler is not None:
+        builder = builder.scheduler(scheduler)
     if slurm_node_infos is not None:
         builder = builder.slurm_node_infos(slurm_node_infos)
     if failed_node is not None:
