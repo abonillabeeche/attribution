@@ -13,7 +13,7 @@
 # its affiliates is strictly prohibited.
 
 
-__version__ = "0.0.0+577eace5"
+__version__ = "2.0.0.dev0"
 
 # Define package exports
 __all__ = [

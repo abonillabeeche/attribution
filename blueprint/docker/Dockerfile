@@ -29,6 +29,8 @@ WORKDIR /opt/attribution-service
 # workdir at /opt/attribution-lib.
 COPY service/attribution-lib/ /opt/attribution-lib/
 COPY service/service-app/pyproject.toml service/service-app/uv.lock ./
+# hatchling reads the package version from this file at wheel-build time.
+COPY service/service-app/_build_version.py ./
 COPY service/service-app/README.md service/service-app/LICENSE ./
 COPY service/service-app/app/ ./app/
 COPY service/service-app/nvidia_attribution_client/ ./nvidia_attribution_client/

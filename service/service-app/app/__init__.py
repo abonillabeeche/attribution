@@ -8,5 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-# Static version stamped when the release bundle is built; the +<sha> suffix identifies the source commit.
-__version__ = "0.0.0+577eace5"
+# Release version: the only version literal anyone edits, and only in a release PR.
+# Build-time `+<distance>[.dirty]` stamping happens in `_build_version.py`.
+__version__ = "2.0.0.dev0"

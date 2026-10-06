@@ -17,6 +17,7 @@ from fastapi import Request, Response
 from loguru import logger
 
 import app.factory as factory
+from app import __version__
 
 
 def test_importing_factory_does_not_initialize_rules():
@@ -109,3 +110,8 @@ def test_http_logging_omits_bodies_and_preserves_request_handling(app, client):
     assert "RESPONSE: POST /_test/logging Status: 200" in logged
     assert "Error handling POST /_test/logging-error" in logged
     assert "expected test failure" in logged
+
+
+def test_app_and_openapi_version_follow_literal(app):
+    assert app.version == __version__
+    assert app.openapi()["info"]["version"] == __version__

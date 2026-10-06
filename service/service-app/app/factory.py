@@ -10,6 +10,10 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from importlib.metadata import (
+    PackageNotFoundError,
+    version as _dist_version,
+)
 from typing import Union
 
 from attribution_lib.core import setup_rules
@@ -53,6 +57,15 @@ It is possible to interleave observation-posting and attribution-getting; the mo
 """
 
 
+def _installed_version() -> str:
+    # Metric and log carry the build version (literal plus distance/dirty from `_build_version.py`);
+    # the OpenAPI spec and generated client carry the bare literal.
+    try:
+        return _dist_version("nvidia-attribution-service")
+    except PackageNotFoundError:  # source tree that was never installed
+        return __version__
+
+
 def create_app() -> FastAPI:
     """Create the service application, initializing logging and attribution rules."""
     otlp_provider = setup_logging()
@@ -84,6 +97,7 @@ def create_app() -> FastAPI:
         description=_DESCRIPTION,
         summary="Service for producing failure attribution/workload information from metrics & logs",
         contact={"name": "NVIDIA Corporation"},
+        version=__version__,  # bare literal since it lands in the committed openapi.json.
         lifespan=lifespan,
         # TBD: License, URL, etc
     )
@@ -158,8 +172,9 @@ def create_app() -> FastAPI:
             logger.exception(f"Error handling {request.method} {request.url.path}: {e}")
             return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-    VERSION_INFO.labels(version=__version__).set(1)
-    logger.info(f"Current Version: {__version__}")
+    build_version = _installed_version()
+    VERSION_INFO.labels(version=build_version).set(1)
+    logger.info(f"Current Version: {build_version}")
 
     return lapp
 
