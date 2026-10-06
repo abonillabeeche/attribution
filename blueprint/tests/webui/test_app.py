@@ -682,8 +682,14 @@ def test_dashboard_rollup_node_ledger_is_capped_to_top_10(tmp_path):
         conn.close()
     client = TestClient(create_app(str(p)))
 
-    node_ledger = client.get("/api/v1/dashboard").json()["ledgers"]["node"]
+    dashboard = client.get("/api/v1/dashboard").json()
+    node_ledger = dashboard["ledgers"]["node"]
 
+    # Every node ties on count and GPU-hours, so the top 10 by either are the same 10;
+    # the dashboard still counts all 12.
+    assert dashboard["categoryCounts"]["node"] == 12
+    # All 12 tie for largest in both measures, the two past the ten kept too.
+    assert dashboard["largestTies"]["node"] == {"count": 12, "nodeHours": 12}
     assert len(node_ledger) == 10
     assert [entry["node"] for entry in node_ledger] == [f"node-{idx:02d}" for idx in range(10)]
     assert node_ledger[0]["count"] == 1
@@ -729,8 +735,16 @@ def test_dashboard_rollup_pareto_ledgers_are_capped_to_top_10(tmp_path):
         conn.close()
     client = TestClient(create_app(str(p)))
 
-    ledgers = client.get("/api/v1/dashboard").json()["ledgers"]
+    dashboard = client.get("/api/v1/dashboard").json()
+    ledgers = dashboard["ledgers"]
 
+    assert dashboard["categoryCounts"] == {"symptom": 12, "node": 1, "user": 12, "rule": 12}
+    assert dashboard["largestTies"] == {
+        "symptom": {"count": 12, "nodeHours": 12},
+        "node": {"count": 1, "nodeHours": 1},
+        "user": {"count": 12, "nodeHours": 12},
+        "rule": {"count": 12, "nodeHours": 12},
+    }
     assert len(ledgers["symptom"]) == 10
     assert len(ledgers["rule"]) == 10
     assert len(ledgers["user"]) == 10
@@ -740,6 +754,122 @@ def test_dashboard_rollup_pareto_ledgers_are_capped_to_top_10(tmp_path):
     assert ledgers["symptom"][0]["outcomes"] == {"hardware": 1}
     assert ledgers["rule"][0]["outcomes"] == {"hardware": 1}
     assert ledgers["user"][0]["outcomes"] == {"hardware": 1}
+
+
+def test_dashboard_pareto_ledgers_keep_the_top_by_either_measure(tmp_path):
+    p = tmp_path / "pareto-union.db"
+    out = SQLiteOutput(str(p))
+    # Eleven symptoms fail twice at 10 GPU-hours each and one fails once at
+    # 5000: by count the one-off is last, outside the top 10, and by GPU-hours
+    # it is first, so the ledger keeps it beside the top 10 by count.
+    for idx in range(11):
+        for attempt in range(2):
+            ctx = _ctx(f"count-job-{idx}-{attempt}", f"count-sluid-{idx}-{attempt}")
+            ctx["gpu_count"] = 8
+            ctx["d_gpu_hours"] = 10
+            out.write(ctx, _attr("Fail InfraHW", symptom=f"symptom-{idx:02d}"))
+    long = _ctx("long-job", "long-sluid")
+    long["gpu_count"] = 8
+    long["d_gpu_hours"] = 5000
+    out.write(long, _attr("Fail InfraHW", symptom="long-one"))
+    out.close()
+    client = TestClient(create_app(str(p)))
+
+    dashboard = client.get("/api/v1/dashboard").json()
+
+    assert [entry["symptom"] for entry in dashboard["ledgers"]["symptom"]] == [
+        *(f"symptom-{idx:02d}" for idx in range(10)),
+        "long-one",
+    ]
+    assert dashboard["categoryCounts"]["symptom"] == 12
+    # By count the eleven twice-failed symptoms tie; by GPU-hours the one-off leads alone.
+    assert dashboard["largestTies"]["symptom"] == {"count": 11, "nodeHours": 1}
+
+
+@pytest.mark.parametrize("rollup", [False, True], ids=["runs", "rollup"])
+def test_dashboard_node_ledger_splits_each_failure_among_its_responsible_nodes(tmp_path, rollup):
+    p = tmp_path / "node-hours.db"
+    out = SQLiteOutput(str(p))
+
+    def blamed(*nodes):
+        attribution = _attr("Fail InfraHW")
+        site = attribution["symptoms"]["XID-79"][0]
+        attribution["symptoms"]["XID-79"] = [{**site, "node": node} for node in nodes]
+        return attribution
+
+    # A ran on n1 alone but blamed n2 too; B listed no nodes; C ran on two and
+    # blamed one; D's two sites both named n7, which the writer records once.
+    for job, nodes, hours, responsible in (
+        ("a", ("n1",), 10, ("n1", "n2")),
+        ("b", (), 6, ("n3", "n4")),
+        ("c", ("n5", "n6"), 4, ("n5",)),
+        ("d", ("n7", "n8"), 8, ("n7", "n7")),
+    ):
+        ctx = _ctx(f"node-hours-{job}", f"node-hours-sluid-{job}", nodes=nodes)
+        ctx["gpu_count"] = 8
+        ctx["d_gpu_hours"] = hours
+        out.write(ctx, blamed(*responsible))
+    out.close()
+    if rollup:
+        # The same runs in the rollup table, which the dashboard reads when it exists.
+        conn = sqlite3.connect(str(p))
+        try:
+            conn.execute(
+                "CREATE TABLE webui_run_fact ("
+                "run_id TEXT PRIMARY KEY, end_time TEXT NOT NULL, end_day TEXT NOT NULL, "
+                "job_id TEXT NOT NULL, outcome TEXT NOT NULL, gpu_hours REAL NOT NULL, "
+                "gpu_count INTEGER NOT NULL, root_symptom TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO webui_run_fact"
+                "(run_id, end_time, end_day, job_id, outcome, gpu_hours, gpu_count, root_symptom) "
+                "SELECT r.id, c.end_time, substr(c.end_time, 1, 10), c.job_id, r.outcome, "
+                "CAST(json_extract(c.raw_scheduler_json, '$.d_gpu_hours') AS REAL), 8, "
+                "json_extract(r.raw_result_json, '$.verdict.root_symptom.symptom') "
+                "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    client = TestClient(create_app(str(p)))
+
+    dashboard = client.get("/api/v1/dashboard").json()
+    ledger = {entry["node"]: (entry["count"], entry["nodeHours"]) for entry in dashboard["ledgers"]["node"]}
+
+    # A failure's GPU-hours are its cost, split evenly among the nodes it
+    # names, whether or not they ran it; so the nodes' shares add up to the
+    # cost of the failures that name a node.
+    assert ledger == {"n1": (1, 5.0), "n2": (1, 5.0), "n3": (1, 3.0), "n4": (1, 3.0), "n5": (1, 4.0), "n7": (1, 8.0)}
+    total = sum(entry["nodeHours"] for entry in dashboard["ledgers"]["outcome"])
+    assert sum(hours for _, hours in ledger.values()) == total == 28.0
+
+
+def test_dashboard_ledgers_keep_gpu_hours_to_a_millionth(tmp_path):
+    p = tmp_path / "hours.db"
+    out = SQLiteOutput(str(p))
+    # Two attempts that each name two nodes responsible: every ledger's
+    # GPU-hours, each node's half share included, are kept to a millionth.
+    for idx, hours in enumerate((1.23456789, 2.0000004)):
+        ctx = _ctx(f"hours-job-{idx}", f"hours-sluid-{idx}", nodes=("node-a", "node-b"))
+        ctx["gpu_count"] = 8
+        ctx["d_gpu_hours"] = hours
+        attribution = _attr("Fail InfraHW")
+        site = attribution["symptoms"]["XID-79"][0]
+        attribution["symptoms"]["XID-79"] = [site, {**site, "node": "node-b"}]
+        out.write(ctx, attribution)
+    out.close()
+    client = TestClient(create_app(str(p)))
+
+    ledgers = client.get("/api/v1/dashboard").json()["ledgers"]
+
+    assert ledgers["outcome"] == [{"outcome": "hardware", "count": 2, "nodeHours": 3.234568}]
+    assert [entry["nodeHours"] for entry in ledgers["symptom"]] == [3.234568]
+    assert [entry["nodeHours"] for entry in ledgers["user"]] == [3.234568]
+    assert [entry["nodeHours"] for entry in ledgers["rule"]] == [3.234568]
+    assert [(entry["node"], entry["nodeHours"]) for entry in ledgers["node"]] == [
+        ("node-a", 1.617284),
+        ("node-b", 1.617284),
+    ]
 
 
 def test_dashboard_rollup_pareto_ledgers_follow_outcome_filter(tmp_path):

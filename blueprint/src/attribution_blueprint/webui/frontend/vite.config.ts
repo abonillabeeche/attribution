@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+/// <reference types="vitest/config" />
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -17,5 +21,10 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    // Vitest blanks every stylesheet import, `?raw` included. The design-token
+    // guard in application-components.test.tsx reads globals.css as text.
+    css: { include: [/\/src\/styles\/globals\.css\?raw$/] },
   },
 })

@@ -1,4 +1,5 @@
-"use client"
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 
 import { Collapsible as CollapsiblePrimitive } from "radix-ui"
 

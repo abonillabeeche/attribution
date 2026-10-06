@@ -6,8 +6,6 @@ export type OutcomeKey = 'hardware' | 'software' | 'multi' | 'user' | 'undetermi
 export interface Outcome {
   id: OutcomeKey
   label: string
-  short: string
-  color: string
 }
 
 export type LogLevel = 'info' | 'debug' | 'error' | 'symptom'

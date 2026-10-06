@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 
-import { describe, it, expect } from 'vitest'
-import { buildVerdictMarkdown } from '@/lib/evidence'
+import { describe, it, expect, vi } from 'vitest'
+import { buildNodeMarkdown, buildVerdictMarkdown } from '@/lib/evidence'
+import { utcStamp } from '@/lib/time'
 import { findSymptomDocumentation, symptomDocumentationApiUrl } from '@/lib/documentation'
 import type { RunSummary } from '@/interfaces/attribution'
 import type { SymptomDocumentationCatalog } from '@/interfaces/documentation'
@@ -18,6 +19,45 @@ const base: RunSummary = {
 }
 
 describe('buildVerdictMarkdown', () => {
+  it('names the verdict and every unrecorded value as the page does', () => {
+    // The verdict badge's label, whichever outcome bucket holds it; the outcome's name only when it has none.
+    expect(buildVerdictMarkdown({ ...base, outcome: 'multi', verdictLabel: 'Cancelled, Workload Owner' }, 'https://x/'))
+      .toMatch(/^\*Attribution escalation: Cancelled, Workload Owner · GpuFell\*/)
+    expect(buildVerdictMarkdown({ ...base, verdictLabel: '' }, 'https://x/')).toMatch(/^\*Attribution escalation: Hardware Fault · GpuFell\*/)
+    // A value the record does not hold reads "Not recorded", never an empty pair of backticks.
+    const md = buildVerdictMarkdown({ ...base, rootSymptom: { symptom: '', rule: '', time: '', line: '' } }, 'https://x/')
+    expect(md).toMatch(/^\*Attribution escalation: Hardware · Root symptom not recorded\*/)
+    expect(md).toContain('**Root symptom:** Not recorded')
+    expect(md).toContain('**Rule:** Not recorded')
+    expect(md).toContain('**Matched log:**\nNot recorded')
+    expect(md).not.toContain('``')
+    // The verdict line names it as the header does; empty names say so; an
+    // empty list reads "None"; the summary, as the page's service detail, and
+    // a node link when no node is responsible are left out.
+    const bare = buildVerdictMarkdown({ ...base, verdictLabel: '', detail: '', user: '', pipeline: '', service: '', responsibleNodes: [] }, 'https://x/')
+    expect(bare).toContain('**Verdict:** Hardware Fault')
+    expect(bare).not.toContain('**Summary:**')
+    expect(bare).toContain('**User / tenant:** Not recorded')
+    expect(bare).toContain('**Responsible node(s):**\nNone\n')
+    expect(bare).not.toContain('Node detail')
+    expect(bare).toContain('- Pipeline / service: Not recorded / Not recorded')
+    // No label is left with nothing after it, and no placeholder of another wording.
+    expect(bare).not.toMatch(/ $|: \/ | \/ $|n\/a|\(none/m)
+    const nodeMd = buildNodeMarkdown('n1', [{ ...base, rootSymptom: { ...base.rootSymptom, symptom: '' } }], 'https://x/')
+    expect(nodeMd).toContain('- Not recorded × 1')
+    expect(nodeMd).toContain('· Root symptom not recorded ·')
+    expect(nodeMd).not.toContain('``')
+    // A node no attempt blames lists no symptom and no attempt.
+    const quiet = buildNodeMarkdown('n2', [base], 'https://x/')
+    expect(quiet).toContain('**Symptoms on this node:**\nNone\n')
+    expect(quiet).toContain('**Latest attempts it is responsible in:**\nNone\n')
+    expect(quiet).not.toMatch(/\(none/)
+    // Its counts carry the node page's names, over every recorded run.
+    expect(nodeMd).toContain('**Responsible in:** 1 attempt\n**Distinct symptoms:** 1\n')
+    expect(quiet).toContain('**Responsible in:** 0 attempts')
+    expect(`${nodeMd}${quiet}`).not.toMatch(/window|impacted|recurring/)
+  })
+
   it('includes tenant and operator guidance when personas are present', () => {
     const run = {
       ...base,
@@ -53,6 +93,26 @@ describe('buildVerdictMarkdown', () => {
     const md = buildVerdictMarkdown(base, 'https://x/')
     expect(md).toContain('Hardware')
     expect(md).toContain('GpuFell')
+  })
+
+  it('writes every time as the UI shows it: the full UTC stamp with its mark', () => {
+    const md = buildVerdictMarkdown({ ...base, rootSymptom: { ...base.rootSymptom, time: '2026-05-01T00:30:01+00:00' } }, 'https://x/')
+    expect(md).toContain('**Window:** 2026-05-01 00:00:00 UTC → 2026-05-01 01:00:00 UTC')
+    expect(md).toContain('**Matched at:** 2026-05-01 00:30:01 UTC')
+    expect(md).not.toMatch(/\dT\d|\+00:00|Z\b|\(UTC\)/)
+    // A time recorded without a zone is UTC, as the server reads it, never the
+    // reader's zone: read here in UTC+8, where a local reading would differ.
+    vi.stubEnv('TZ', 'Asia/Shanghai')
+    try {
+      expect(new Date(2026, 4, 1).getTimezoneOffset()).toBe(-8 * 60)
+      expect(utcStamp('2026-05-01T00:30:01')).toBe('2026-05-01 00:30:01 UTC')
+      expect(utcStamp('2026-05-01T08:30:01+08:00')).toBe('2026-05-01 00:30:01 UTC')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    // A time that does not parse is unavailable, as the UI says.
+    expect(buildVerdictMarkdown(base, 'https://x/')).toContain('**Matched at:** Unavailable')
+    expect(buildNodeMarkdown('n1', [base], 'https://x/')).toContain('- 2026-05-01 01:00:00 UTC · GpuFell · https://x/verdict/1')
   })
 })
 
