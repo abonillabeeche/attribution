@@ -132,7 +132,11 @@ def test_index_serves_spa_with_bootstrap(populated_db):
     assert dashboard["meta"]["windowedRuns"] == 2
     # Both payloads name the backend, and each is built by its own handler.
     assert dashboard["meta"]["database"] == "test.db"
-    assert client.get("/api/v1/meta").json()["database"] == "test.db"
+    meta = client.get("/api/v1/meta").json()
+    assert meta["database"] == "test.db"
+    newest = db.list_runs(populated_db)[0]
+    assert meta["versions"]["pipeline"] == newest.pipeline_version
+    assert meta["versions"]["service"] == newest.service_api_version
 
 
 def test_dashboard_query_params_filter_server_payload(tmp_path):
@@ -168,6 +172,9 @@ def test_empty_db_serves_empty_payload(tmp_path):
     assert r.status_code == 200
     assert "attr-bootstrap" not in r.text
     assert client.get("/api/v1/dashboard").json()["meta"]["windowedRuns"] == 0
+    versions = client.get("/api/v1/meta").json()["versions"]
+    assert versions["pipeline"] is None
+    assert versions["service"] is None
 
 
 def test_deep_link_returns_spa_shell(populated_db):

@@ -8,4 +8,4 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-__version__ = "0.1.0"
+__version__ = "0.1.0.dev0"
