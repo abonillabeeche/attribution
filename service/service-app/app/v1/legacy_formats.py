@@ -275,10 +275,16 @@ _FORMATS_BY_SOURCE: dict[Source, frozenset[Format]] = {
 }
 
 
+_EPILOG_TAIL = timedelta(minutes=10)
+
+
 def _epilog_time_start(job_info: JobInfo) -> datetime:
     time_start = job_info.interest_start_time
-    if job_info.last_tflops_time and job_info.last_tflops_time > time_start:
-        time_start = job_info.last_tflops_time
+    last_tflops = job_info.last_tflops_time
+    # Shared logs can contain progress from a later workload. Only narrow this
+    # window with progress inside it; otherwise retain the health-check evidence.
+    if last_tflops is not None and time_start < last_tflops <= job_info.interest_end_time + _EPILOG_TAIL:
+        time_start = last_tflops
     return time_start
 
 
@@ -286,7 +292,7 @@ _WindowBound = Callable[[JobInfo], Optional[datetime]]
 
 # Legacy bodies are filtered on these per-source windows; their declared `time_interval` is ignored.
 _WINDOWS: dict[Source, tuple[_WindowBound, _WindowBound]] = {
-    Source.HEALTH_CHECK: (_epilog_time_start, lambda ji: ji.interest_end_time + timedelta(minutes=10)),
+    Source.HEALTH_CHECK: (_epilog_time_start, lambda ji: ji.interest_end_time + _EPILOG_TAIL),
     Source.SYSLOG: (lambda ji: ji.interest_start_time, lambda ji: ji.interest_end_time),
     Source.UFMLOG: (lambda ji: ji.job_start_time, lambda ji: ji.job_end_time),
     Source.NODE_METRICS: (lambda ji: ji.job_start_time, lambda ji: ji.job_end_time),
