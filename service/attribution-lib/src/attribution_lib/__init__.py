@@ -11,10 +11,6 @@
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
-from _attribution_lib_version import (
-    get_commit_sha as get_commit_sha,
-    get_version as get_version,
-)
 from attribution_lib.exceptions import (
     UninitializedRuleEngineError,
     UninitializedSymptomRegistryError,
@@ -25,6 +21,8 @@ if TYPE_CHECKING:
     from attribution_lib.prefilters import MetricSpec, PreFilterSpec
     from attribution_lib.rules_engine import RuleEngine
     from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
+
+__version__ = "0.5.0.dev0"
 
 ip_to_nodenames: dict[str, str] = {}
 ignored_hostname_prefixes: list[str] = []
@@ -80,9 +78,3 @@ NodeDomainResolver = Callable[[str], Optional[str]]
 node_domain_resolver: Optional[NodeDomainResolver] = None
 
 initialized: bool = False
-
-
-def __getattr__(name: str) -> str:
-    if name == "__version__":
-        return get_version()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
