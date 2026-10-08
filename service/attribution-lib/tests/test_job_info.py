@@ -336,6 +336,7 @@ class TestNormalizeSchedulerIdentity:
         [
             pytest.param("slurm", Scheduler.SLURM, id="slurm"),
             pytest.param("kueue", Scheduler.KUEUE, id="kueue"),
+            pytest.param("kai", Scheduler.KAI, id="kai"),
             pytest.param("SLURM", Scheduler.SLURM, id="case-insensitive"),
             pytest.param(" kueue ", Scheduler.KUEUE, id="trims surrounding whitespace"),
             pytest.param("", Scheduler.UNKNOWN, id="empty is unknown"),
@@ -375,7 +376,7 @@ class TestJobInfoBuilderScheduler:
         assert job_info.scheduler is Scheduler.KUEUE
         assert job_info.type == "anything"  # `type` is preserved verbatim regardless
 
-    @pytest.mark.parametrize("type_", ["slurm", "kueue", "training", ""])
+    @pytest.mark.parametrize("type_", ["slurm", "kueue", "kai", "training", ""])
     def test_unset_scheduler_is_unknown_regardless_of_type(self, timezone, type_):
         builder = _builder(timezone, node_to_ranks={}, type=type_)
         job_info = builder.job_end_time(_end_time(timezone)).build()

@@ -70,11 +70,12 @@ def _fake_v2_observation(source: ObservationSource, body: str) -> ObservationV2:
     )
 
 
-def test_v1_accepts_kueue_workload_type(client):
+@pytest.mark.parametrize("workload_type", ["kueue", "kai"])
+def test_v1_accepts_queue_scheduler_workload_type(client, workload_type):
     """v1's `type` is the `WorkloadTypeEnum`, which gates accepted values -
     unlike v2's plain `str`. Post to v1 so this actually exercises the enum
     change, not just the always-permissive v2 field."""
-    info = make_up_attributor_info("v1", type="kueue")
+    info = make_up_attributor_info("v1", type=workload_type)
 
     response = client.post("/v1/attributor", content=info.model_dump_json())
 
@@ -496,12 +497,13 @@ class TestSchedulerIdentityTranslation:
     V2 carries the explicit field and never derives it from `type`; V1 has no
     wire change, so its conversion maps the legacy `type` to a scheduler."""
 
-    def test_v2_explicit_scheduler_is_set_on_job_info(self):
-        info = make_up_attributor_info("v2", type="anything", scheduler="kueue")
+    @pytest.mark.parametrize("scheduler", ["kueue", "kai"])
+    def test_v2_explicit_scheduler_is_set_on_job_info(self, scheduler):
+        info = make_up_attributor_info("v2", type="anything", scheduler=scheduler)
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == "kueue"
+        assert job_info.scheduler == scheduler
         assert job_info.type == "anything"  # type is preserved verbatim regardless
 
     def test_v2_missing_scheduler_is_unknown_even_when_type_names_one(self):
@@ -517,6 +519,7 @@ class TestSchedulerIdentityTranslation:
         [
             (WorkloadTypeEnum.SLURM, "slurm"),
             (WorkloadTypeEnum.KUEUE, "kueue"),
+            (WorkloadTypeEnum.KAI, "kai"),
             (WorkloadTypeEnum.RUNAI, ""),  # no supported scheduler yet
             (WorkloadTypeEnum.UNDEFINED, ""),
         ],

@@ -56,6 +56,8 @@ class Scheduler(StrEnum):
     UNKNOWN = ""
     SLURM = "slurm"
     KUEUE = "kueue"
+    # Identity only; attribution raises NotImplementedError until KAI rules land.
+    KAI = "kai"
 
 
 def normalize_scheduler_identity(raw: "str | None") -> Scheduler:

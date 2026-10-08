@@ -28,6 +28,7 @@ class Scheduler(str, Enum):
     EMPTY = ''
     SLURM = 'slurm'
     KUEUE = 'kueue'
+    KAI = 'kai'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

@@ -41,6 +41,7 @@ from app.util import HashableModel, to_zoneinfo
 _V1_TYPE_TO_SCHEDULER: dict[WorkloadTypeEnum, Scheduler] = {
     WorkloadTypeEnum.SLURM: Scheduler.SLURM,
     WorkloadTypeEnum.KUEUE: Scheduler.KUEUE,
+    WorkloadTypeEnum.KAI: Scheduler.KAI,
 }
 
 

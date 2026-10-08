@@ -91,6 +91,7 @@ class WorkloadTypeEnum(str, Enum):
     UNDEFINED = ""
     SLURM = "slurm"
     KUEUE = "kueue"
+    KAI = "kai"
     RUNAI = "runai"
 
 

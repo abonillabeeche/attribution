@@ -28,6 +28,7 @@ class WorkloadTypeEnum(str, Enum):
     EMPTY = ''
     SLURM = 'slurm'
     KUEUE = 'kueue'
+    KAI = 'kai'
     RUNAI = 'runai'
 
     @classmethod

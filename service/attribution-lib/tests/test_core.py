@@ -42,6 +42,17 @@ from attribution_lib.utils import get_hostname
 from test_support.helpers import create_source_set, make_node_to_ranks
 
 
+def test_attribute_rejects_kai_until_supported(simple_job_factory):
+    """KAI is a recognized identity, but attribution has no KAI rules yet."""
+    with pytest.raises(NotImplementedError, match="kai"):
+        core.attribute(
+            event_stream=None,  # type: ignore[arg-type]
+            job_info=simple_job_factory(scheduler=Scheduler.KAI),
+            bad_node_result=None,  # type: ignore[arg-type]
+            extract_job_metadata_from_logfile=False,
+        )
+
+
 def test_setup_rules_without_mapping_clears_previous_mapping(monkeypatch):
     """A forced reconfiguration must not retain inventory from an earlier run."""
     for attribute in ("initialized", "node_domain_resolver", "_rules_engine", "_symptom_registry"):
