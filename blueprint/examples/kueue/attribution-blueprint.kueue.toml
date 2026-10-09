@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Attribution Blueprint configuration for Kueue Workloads.
 #
 # Replace every CHANGE_ME value. Paths are resolved from the directory where

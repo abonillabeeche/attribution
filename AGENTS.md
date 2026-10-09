@@ -1,13 +1,6 @@
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # Repository agent instructions
@@ -157,10 +150,10 @@ Pull requests are squash-merged, so the PR title becomes the commit subject on
 - Do not commit build outputs, caches, local databases, virtual environments,
   or `node_modules/`.
 
-## Early Access license boundary
+## License boundaries
 
-This repository is Early Access, pre-1.0 software. Read and preserve the
-closest applicable `LICENSE` and its notices before you edit, copy, move, or
+NVIDIA Attribution project code is licensed under Apache-2.0. Read and preserve
+the closest applicable `LICENSE` and its notices before you edit, copy, move, or
 distribute a file. The root `LICENSE` applies only when no closer nested
 `LICENSE` applies. Do not assume that the root `LICENSE` alone governs all
 files.
@@ -178,8 +171,9 @@ For files under `blueprint/`, read `blueprint/LICENSE`. For files under
 `service/`, read the closest applicable service license and preserve its
 license notices.
 
-Do not remove or alter a license notice, change the license, state that this
-repository is open source, or distribute material beyond the applicable
-license. Do not publish a package, image, release, or source bundle without
+Preserve third-party licenses and the exceptions described in
+`THIRD_PARTY_NOTICES.md`. Changes to license terms and notices require
+explicit human approval. Distribute material only under its applicable license.
+Do not publish a package, image, release, or source bundle without
 explicit human approval and the required NVIDIA authorization. Human approval
 does not override the license.

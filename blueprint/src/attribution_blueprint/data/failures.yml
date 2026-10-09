@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVIDIA Attribution failure catalog.
 # recommended_action follows the Remediation Action Schema RFC (dsx-ai-factory/attribution#116):
 #   operational_state: ready | monitor | drain
