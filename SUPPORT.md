@@ -1,6 +1,6 @@
 # Support for NVIDIA Attribution
 
-This document describes support for NVIDIA Attribution beginning with its general availability (GA) release. It covers the Attribution Service, Attribution Blueprint, and Attribution Library. Support under an NVIDIA commercial agreement is governed by that agreement.
+This document describes support for NVIDIA Attribution as a public open-source project. It covers the Attribution Service, Attribution Blueprint, and Attribution Library. Support under an NVIDIA commercial agreement is governed by that agreement.
 
 ## Support channels
 

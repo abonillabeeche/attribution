@@ -16,7 +16,10 @@ Later rule stages can correlate or suppress these events, turn them into symptom
 
 Adding a rule here means changing the checked-in bundled rule catalog and shipping that change with the Attribution Service.
 It is not a rule uploaded at runtime through an API or user interface.
-During private preview, the bundled rules are not a supported customer extension point.
+Propose changes through [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+The Library does not offer a stable external interface. Upstream bug reports
+must reproduce on the unmodified main branch, as described in
+[SUPPORT.md](../../../SUPPORT.md).
 
 ## Why Add an Extractor Rule?
 

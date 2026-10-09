@@ -1,12 +1,12 @@
 # NVIDIA Attribution
 
-**NVIDIA Early Access - pre-1.0**
+**Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.
 
 Modern AI training and inference workloads fail in dozens of ways. A multi-rank workload at 10k-GPU scale typically produces hundreds to tens of thousands of log lines across application logs, host syslogs, scheduler database entries, GPU driver dmesg, fabric manager logs, and metric backends. Application logs in particular scale with rank count, so volume grows with the size of the workload. Triaging them by hand breaks down at production-cluster volume. NVIDIA Attribution automates the cross-correlation. Each failed workload becomes one structured diagnosis, with the cascade rendered as the symptom chain that produced it.
 
-**Status.** Currently in private preview. The V1 public surface is the Attribution Service HTTP API and the Blueprint reference orchestrator. External rule-catalog contributions and additional scheduler connectors land at V1 GA.
+**Status.** NVIDIA Attribution is open-source software. The Service exposes a versioned HTTP API. The Library and Blueprint interfaces can change. See [SUPPORT.md](SUPPORT.md#interface-compatibility) for compatibility commitments and [CONTRIBUTING.md](CONTRIBUTING.md) to propose improvements.
 
 <p align="center">
   <img src="docs/media/attribution-demo.gif" alt="NVIDIA Attribution web UI showing a diagnosed workload and its symptom chain" width="640">
@@ -16,10 +16,10 @@ Modern AI training and inference workloads fail in dozens of ways. A multi-rank 
 
 NVIDIA Attribution ships in two components that share one rules engine. Pick the form that matches how you want to integrate.
 
-* **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept, an early-access deployment, or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
+* **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
 * **Attribution Service.** A self-hosted HTTP REST service that owns the rules engine and returns one diagnosis per workload. Use when you want a shared attribution endpoint across many workloads and a single deployment to operate.
 
-Both use the Apache License 2.0 and are currently in private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
+Both use the Apache License 2.0. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and propose improvements through the [contribution workflow](CONTRIBUTING.md).
 
 ## What NVIDIA Attribution does
 
@@ -90,7 +90,7 @@ Run the attribution service and web UI in Docker, attribute sample AI factory ev
 Clone the repository and change into it:
 
 ```bash
-git clone <repository-url> nvidia-attribution
+git clone https://github.com/dsx-ai-factory/attribution.git nvidia-attribution
 cd nvidia-attribution
 ```
 
@@ -168,23 +168,39 @@ If you are running from a source checkout rather than the release bundle, use th
 
 ## Maintainers
 
-* Aaron Blakeman, NVIDIA Attribution Blueprint engineering lead
-* Ben Gueret, Product Manager
-* Jason Sewall, NVIDIA Attribution Architect
+The repository maintainer team is listed in [CODEOWNERS](.github/CODEOWNERS).
 
 ## Contributing
 
-Contributions open at GA.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the
+proposal, testing, sign-off, and review process, and follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Reporting issues
+## Support and releases
 
-* Bug reports and feature requests: get in touch with your NVIDIA account team during EA.
-* Security issues: report through your NVIDIA AI Enterprise security contact. Do not file security issues in any public channel.
+* Reproducible upstream bugs: [GitHub Issues](https://github.com/dsx-ai-factory/attribution/issues).
+* Usage questions and feature requests: [GitHub Discussions](https://github.com/dsx-ai-factory/attribution/discussions).
+* Support scope, response targets, and compatibility: [SUPPORT.md](SUPPORT.md).
+* Security vulnerabilities: use the private reporting route in [SECURITY.md](SECURITY.md).
+* Versions and release process: [RELEASE.md](RELEASE.md).
 
 ## License
 
 NVIDIA Attribution project code is licensed under the Apache License 2.0.
 See [LICENSE](LICENSE).
+
+The components retain their own Apache-2.0 license files so their source and
+package distributions include the license when distributed separately:
+
+| Component directory | License | License file |
+|---|---|---|
+| `blueprint/` | Apache-2.0 | [blueprint/LICENSE](blueprint/LICENSE) |
+| `service/attribution-lib/` | Apache-2.0 | [service/attribution-lib/LICENSE](service/attribution-lib/LICENSE) |
+| `service/service-app/` | Apache-2.0 | [service/service-app/LICENSE](service/service-app/LICENSE) |
+| `service/service-app/nvidia_attribution_client/` | Apache-2.0 | [service/service-app/nvidia_attribution_client/LICENSE](service/service-app/nvidia_attribution_client/LICENSE) |
+| `service/service-app/openapi/extras/` | Apache-2.0 | [service/service-app/openapi/extras/LICENSE](service/service-app/openapi/extras/LICENSE) |
+
+The `openapi/extras/` license is copied into the client package during generation.
 
 The [Code of Conduct](CODE_OF_CONDUCT.md) retains its CC BY-SA 4.0 terms.
 OpenAPI Generator templates retain [their upstream license](service/service-app/openapi/templates/LICENSE).
