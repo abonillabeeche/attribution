@@ -65,6 +65,8 @@ class Source(NamedTuple):
     time: Optional[datetime]
     resources: ResourceSet
     rule: Optional[str]
+    # Verified producer metadata, separate from resources inferred from the body.
+    declared_node: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:
@@ -79,10 +81,13 @@ class Source(NamedTuple):
             time=time,
             resources=validate_resource_set(data.get("resources") or "AllJobResources"),
             rule=data.get("rule"),
+            declared_node=data.get("declared_node"),
         )
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = recursive_asdict(self)
+        if self.declared_node is None:
+            result.pop("declared_node")
         return result
 
     def derived(
@@ -97,7 +102,9 @@ class Source(NamedTuple):
         the_rule = rule if rule is not None else self.rule
         the_datum = datum if datum is not None else self.datum
         the_resources = resources if resources is not None else self.resources
-        return Source(self.source_context, self.line_num, the_datum, the_time, the_resources, the_rule)
+        return Source(
+            self.source_context, self.line_num, the_datum, the_time, the_resources, the_rule, self.declared_node
+        )
 
 
 T = TypeVar("T")

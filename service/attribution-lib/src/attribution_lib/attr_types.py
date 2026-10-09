@@ -60,12 +60,16 @@ def _normalize_node(name: str) -> str:
 
 @dataclass(eq=True, frozen=True)
 class BadPairInfo:
-    local_node: str
-    remote_node: str
+    local_node: str | None
+    remote_node: str | None
     local_dev_ip: Optional[str] = None
     local_device: Optional[str] = None
     remote_dev_ip: Optional[str] = None
     remote_device: Optional[str] = None
+    # Hostnames resolved from GIDs can disagree with the logged hostnames.
+    # Keep them independently so pair merging never erases that evidence.
+    local_gid_node: Optional[str] = None
+    remote_gid_node: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, BadPairInfo):
@@ -87,6 +91,10 @@ class BadPairInfo:
                 object.__setattr__(self, "remote_device", other.remote_device)
             if other.remote_dev_ip and not self.remote_dev_ip:
                 object.__setattr__(self, "remote_dev_ip", other.remote_dev_ip)
+            if other.local_gid_node is not None and self.local_gid_node is None:
+                object.__setattr__(self, "local_gid_node", other.local_gid_node)
+            if other.remote_gid_node is not None and self.remote_gid_node is None:
+                object.__setattr__(self, "remote_gid_node", other.remote_gid_node)
         elif other.remote_node == self.local_node:
             if other.remote_device and not self.local_device:
                 object.__setattr__(self, "local_device", other.remote_device)
@@ -96,6 +104,10 @@ class BadPairInfo:
                 object.__setattr__(self, "remote_device", other.local_device)
             if other.local_dev_ip and not self.remote_dev_ip:
                 object.__setattr__(self, "remote_dev_ip", other.local_dev_ip)
+            if other.remote_gid_node is not None and self.local_gid_node is None:
+                object.__setattr__(self, "local_gid_node", other.remote_gid_node)
+            if other.local_gid_node is not None and self.remote_gid_node is None:
+                object.__setattr__(self, "remote_gid_node", other.local_gid_node)
         return self
 
 

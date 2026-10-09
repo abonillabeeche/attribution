@@ -340,6 +340,18 @@ class TimeseriesEntryObj(EntryBase):
         self._resources = validate_resource_set(declared) if declared is not None else None
         self._body_fallbacks = body_fallbacks
 
+    def attribution_source_base(self, job_info: Optional[JobInfo]) -> Source:
+        """Retain a verified producer-declared node separately from body fallbacks."""
+        source = super().attribution_source_base(job_info)
+        if (
+            job_info is not None
+            and self._resources is not None
+            and self._resources != ResourceSetClass.ANY
+            and any(isinstance(resource, NodeResource) for resource in self._resources)
+        ):
+            return source._replace(declared_node=get_single_node(source.resources).hostname)
+        return source
+
     @method_cache
     def time(self) -> Optional[datetime]:
         if self._ts is None:

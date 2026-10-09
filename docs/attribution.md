@@ -279,6 +279,24 @@ There is a further sub-phase of `POST_OUTCOME` rules that take the computed outc
 
 Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event stream during the attribution process. This may be relevant job parameters or component versions found during the attribution process. See [Collector](#collector) under Rule Types for more detail.
 
+For NCCL `Got completion from peer` errors, the `bad_pairs` collector preserves
+the explicit source hostname even when it is outside the workload's node list.
+When no hostname is printed, a mapped local GID can supply it. If neither
+provides a hostname, a verified producer-declared node or an explicit leading
+rank resolved within the supplied workload can supply the source, even when a
+local GID is present but unmapped. The internal source retains `declared_node`
+to distinguish producer metadata from parser fallbacks. An implicit rank-zero
+default is not source evidence. When no hostname is known, `src_node` stays
+null and an available IP remains in `src_ip`.
+
+If the logged hostname and the hostname mapped from its local GID disagree,
+`src_node` keeps the logged hostname and `src_gid_node` exposes the mapped name.
+When reverse-direction reports are combined, the corresponding information
+can appear as `dst_gid_node`. These extra fields are omitted when the names
+agree or no GID hostname is known. Conflicting IPs, interfaces, or GID hostnames
+remain separate pairs. These fields describe network evidence; they do not
+change workload membership or establish that either node is faulty.
+
 ### Phase 5: Reporting
 
 There are no rules specific to the reporting stage; instead, remaining bad nodes are collected, and the outcome, plus the root cause symptom and any collector results are formatted and returned in the attribution result. 
