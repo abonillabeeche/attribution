@@ -140,6 +140,10 @@ export interface RunSummary {
   startTime: string
   outcome: OutcomeKey
   verdictLabel: string
+  terminalStates?: string[]
+  failureDomains?: string[]
+  cancellationActors?: string[]
+  uncertaintyType?: string | null
   detail: string
   rootSymptom: RootSymptom
   symptoms: SymptomEntry[]

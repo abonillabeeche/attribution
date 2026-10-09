@@ -316,6 +316,12 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _list_of_str(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _display_run(run):
     """Keep malformed evidence out of display fields without changing storage."""
     raw = _object(run.raw_result)
@@ -384,6 +390,10 @@ def _run_summary_fields(run) -> dict[str, Any]:
         "responsibleNodes": list(run.responsible_nodes or []),
         "pipeline": run.pipeline_version or "",
         "service": run.service_api_version or "",
+        "terminalStates": _list_of_str(verdict.get("terminal_states")),
+        "failureDomains": _list_of_str(verdict.get("failure_domains")),
+        "cancellationActors": _list_of_str(verdict.get("cancellation_actors")),
+        "uncertaintyType": verdict.get("uncertainty_type") if isinstance(verdict.get("uncertainty_type"), str) else None,
         "diagnose": _diagnose_camel(diagnose),
         "operatorDiagnose": _diagnose_camel(operator_diagnose),
     }

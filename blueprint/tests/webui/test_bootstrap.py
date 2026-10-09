@@ -346,3 +346,55 @@ def test_inject_escapes_script_breakout():
     end = out.index("</script>", start)
     restored = json.loads(out[start:end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&"))
     assert restored["runs"][0]["log"][0]["text"] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_run_to_react_passes_compound_outcome_fields(tmp_path):
+    p = tmp_path / "m.db"
+    out = SQLiteOutput(str(p))
+    ctx = {
+        "id": "s1",
+        "sluid": "s1",
+        "attempt_id": "s1",
+        "workload_type": "slurm",
+        "scheduler": "slurm",
+        "job_id": "job-1",
+        "nodes": ["node-a"],
+        "start_time": datetime(2026, 5, 1, 0, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+        "state": "FAILED",
+        "user_name": "alice",
+        "gpus_per_node": 8,
+    }
+    out.write(
+        ctx,
+        {
+            "verdict": {
+                "attribution_outcome": "Fail InfraHW",
+                "detail": "",
+                "root_symptom": {"symptom": "GpuFell", "source": {"rule": "r", "line": "l", "time": "2026-05-01T00:30:00+00:00"}},
+                "terminal_states": ["Fail"],
+                "failure_domains": ["InfraHW"],
+                "cancellation_actors": [],
+                "uncertainty_type": None,
+            },
+            "model_type": "AttributionResponseV2",
+        },
+    )
+    out.close()
+    run = dbmod.get_run(str(p), dbmod.list_runs(str(p))[0].run_id)
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == ["Fail"]
+    assert r["failureDomains"] == ["InfraHW"]
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None
+
+
+def test_run_to_react_defaults_compound_fields_when_absent(tmp_path):
+    run = _seed_one(tmp_path)
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == []
+    assert r["failureDomains"] == []
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None

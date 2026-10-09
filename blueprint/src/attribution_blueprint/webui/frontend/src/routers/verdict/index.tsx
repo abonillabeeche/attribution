@@ -26,7 +26,7 @@ import { Identifier, NotRecorded } from '@/components/field'
 import { InfoHint } from '@/components/info-hint'
 import { LogExcerpt } from '@/components/log-excerpt'
 import { NodeHoverCard } from '@/components/node-hover-card'
-import { OutcomeBadge } from '@/components/outcome'
+import { CompoundOutcomeBadge } from '@/components/outcome'
 import { PageBreadcrumb, PageHeader, type PageCrumb } from '@/components/page-header'
 import { SectionCard } from '@/components/section-card'
 import { SiteStatusBadge } from '@/components/site-status-badge'
@@ -49,6 +49,29 @@ import { RouterLink } from '@/components/ui/router-link'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 import { SymptomsSection } from '@/routers/verdict/components/symptom-sites'
+
+const TERMINAL_STATE_LABELS: Record<string, string> = {
+  Pass: 'Pass',
+  Fail: 'Fail',
+  ExpectedFail: 'Expected failure',
+  Cancelled: 'Cancelled',
+}
+
+const FAILURE_DOMAIN_LABELS: Record<string, string> = {
+  User: 'Application',
+  InfraHW: 'Infrastructure (hardware)',
+  InfraSW: 'Infrastructure (software)',
+}
+
+const CANCELLATION_ACTOR_LABELS: Record<string, string> = {
+  User: 'Workload owner',
+  Operator: 'Operator',
+}
+
+const UNCERTAINTY_LABELS: Record<string, string> = {
+  Aleatoric: 'Aleatoric (data ambiguity)',
+  Epistemic: 'Epistemic (rule gap)',
+}
 
 // The scheduler's status enum, read as words.
 const RUN_STATUS_LABELS: Record<RunSummary['status'], string> = {
@@ -171,6 +194,18 @@ function verdictFacts(run: RunDetail): DescriptionListItem[] {
           ),
         }]
       : []),
+    ...((run.terminalStates ?? []).length > 0
+      ? [{ key: 'terminal-state', label: 'Terminal state', value: (run.terminalStates ?? []).map(s => TERMINAL_STATE_LABELS[s] ?? s).join(', ') }]
+      : []),
+    ...((run.failureDomains ?? []).length > 0
+      ? [{ key: 'failure-domain', label: 'Failure domain', value: (run.failureDomains ?? []).map(d => FAILURE_DOMAIN_LABELS[d] ?? d).join(', ') }]
+      : []),
+    ...((run.cancellationActors ?? []).length > 0
+      ? [{ key: 'cancellation-actor', label: 'Cancelled by', value: (run.cancellationActors ?? []).map(a => CANCELLATION_ACTOR_LABELS[a] ?? a).join(', ') }]
+      : []),
+    ...((run.uncertaintyType ?? null) !== null
+      ? [{ key: 'uncertainty-type', label: 'Uncertainty type', value: UNCERTAINTY_LABELS[run.uncertaintyType!] ?? run.uncertaintyType! }]
+      : []),
   ]
 }
 
@@ -242,7 +277,7 @@ function VerdictCard({ run }: { run: RunDetail }) {
               {/* The badge is the title itself, beside the card's action and
                   no text, so it takes no mark offset: centered in the header
                   as the action's label is. */}
-              <OutcomeBadge outcome={run.outcome} label={run.verdictLabel} className="top-0" />
+              <CompoundOutcomeBadge run={run} className="top-0" />
             </h2>
           </CardTitle>
           <CardAction>
