@@ -90,6 +90,13 @@ run_end_to_end() {
     )
 }
 
+run_ci_tests() {
+    (
+        cd "${repository_root}"
+        uv run --no-project --with pytest --with packaging pytest .ci/tests -q
+    )
+}
+
 case "${suite}" in
     attribution-lib)
         run_attribution_lib
@@ -112,6 +119,9 @@ case "${suite}" in
     end-to-end)
         run_end_to_end
         ;;
+    ci-tests)
+        run_ci_tests
+        ;;
     all)
         run_end_to_end
         run_attribution_lib
@@ -120,9 +130,10 @@ case "${suite}" in
         run_license_compliance
         run_blueprint
         run_frontend
+        run_ci_tests
         ;;
     *)
-        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|license-compliance|frontend|end-to-end}" >&2
+        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|license-compliance|frontend|end-to-end|ci-tests}" >&2
         exit 2
         ;;
 esac
