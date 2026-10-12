@@ -14,12 +14,15 @@ from attribution_blueprint.connectors.execution_contexts import ExecutionContext
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
-from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
+from attribution_blueprint.result import ConnectorReport, IngestionReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
 # Scheduler identities the service accepts on `workload.scheduler`, taken from
 # the generated client so the values are not retyped here.
 _SUPPORTED_WORKLOAD_SCHEDULERS = frozenset(s.value for s in Scheduler if s is not Scheduler.EMPTY)
+
+# Bounds persisted ingestion reasons; non-HTTP errors such as validation failures can be long.
+_MAX_REASON_CHARS = 500
 
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
@@ -150,17 +153,19 @@ class AttributionOrchestrator:
         return results
 
     def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
-        observations: list[dict] = []
         connector_reports: list[ConnectorReport] = []
+        batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
             try:
                 collected = collector.collect(ctx)
             except Exception as e:
                 logger.warning(f"collector {getattr(collector, 'source', '?')} failed for ctx {ctx['id']}: {e}")
                 connector_reports.append(_connector_report(collector, "error", str(e), 0))
+                batches.append((connector_reports[-1], []))
                 continue
-            observations.extend(collected)
             connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
+            batches.append((connector_reports[-1], collected))
+        observations = [obs for _, collected in batches for obs in collected]
 
         if self.dump_observations_dir is not None:
             self._dump_observations(ctx, observations)
@@ -168,15 +173,25 @@ class AttributionOrchestrator:
         info = self._build_attributor_info(ctx)
         attributor_id = self.attribution.create_or_replace_attributor(info)
 
-        for obs in observations:
-            try:
-                service_obs = ObservationV2.model_validate(obs)
-                self.attribution.ingest_observation(attributor_id, service_obs)
-            except Exception as e:
-                obs_source = obs.get("context", {}).get("source", "?")
-                obs_source_value = obs_source.value if hasattr(obs_source, "value") else obs_source
-                logger.warning(f"ingest_observation failed for ctx {ctx['id']} source={obs_source_value}: {e}")
-                continue
+        ingestion_reports: list[IngestionReport] = []
+        for report, collected in batches:
+            failed = 0
+            first_reason = ""
+            for obs in collected:
+                try:
+                    service_obs = ObservationV2.model_validate(obs)
+                    self.attribution.ingest_observation(attributor_id, service_obs)
+                except Exception as e:
+                    obs_context = obs.get("context")
+                    obs_source = obs_context.get("source", "?") if isinstance(obs_context, dict) else "?"
+                    obs_source_value = obs_source.value if hasattr(obs_source, "value") else obs_source
+                    logger.warning(f"ingest_observation failed for ctx {ctx['id']} source={obs_source_value}: {e}")
+                    if failed == 0:
+                        first_reason = str(e) or type(e).__name__
+                    failed += 1
+            ingestion_reports.append(
+                _ingestion_report(report, submitted=len(collected), failed=failed, reason=first_reason)
+            )
 
         # Get the verdict, then ALWAYS clean up via a finally so we don't
         # leave attributors behind on the service even when get_attribution
@@ -196,7 +211,7 @@ class AttributionOrchestrator:
         if result is None:
             return None
 
-        result = enrich_attribution_result(result, connector_reports)
+        result = enrich_attribution_result(result, connector_reports, ingestion_reports)
 
         # Per-sink try/except: a broken sqlite write must not skip the
         # other sinks for the same ctx.
@@ -369,6 +384,23 @@ def _connector_report(
     }
 
 
+def _ingestion_report(report: ConnectorReport, submitted: int, failed: int, reason: str) -> IngestionReport:
+    if failed == 0:
+        status = "ok"
+    elif failed < submitted:
+        status = "partial"
+    else:
+        status = "error"
+    return {
+        "connector": report["connector"],
+        "source": report["source"],
+        "status": status,
+        "submitted": submitted,
+        "failed": failed,
+        "reason": reason[:_MAX_REASON_CHARS],
+    }
+
+
 def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
     """Return the stable fields the CLI prints after a run completes."""
     verdict = result.get("verdict")
@@ -392,4 +424,5 @@ def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
         "sub_domain": taxonomy.sub_domain,
         "root_symptom": root_symptom if root_symptom != "" else "none",
         "symptoms": symptom_names if symptom_names != "" else "none",
+        "evidence_status": result["evidence_status"],
     }

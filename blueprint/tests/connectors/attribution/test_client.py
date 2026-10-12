@@ -91,6 +91,17 @@ def test_ingest_observation_posts_and_returns_id(mocker):
     assert kwargs["body"]["context"]["source"] == "syslog"
 
 
+def test_ingest_observation_http_error_raises_bounded_message(mocker):
+    _transport(mocker, _FakeResponse(HTTPStatus.UNPROCESSABLE_ENTITY, {"detail": "x" * 10000}))
+
+    conn = AttributionConnector("http://svc:8000")
+    with pytest.raises(RuntimeError) as excinfo:
+        conn.ingest_observation("attr-7", _observation())
+
+    assert str(excinfo.value).startswith("HTTP 422")
+    assert len(str(excinfo.value)) < 400
+
+
 def test_get_attribution_returns_full_dict(mocker):
     request = _transport(mocker, _FakeResponse(HTTPStatus.OK, FIXTURES["attribution_response"]))
 

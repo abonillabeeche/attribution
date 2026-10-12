@@ -378,6 +378,9 @@ def test_run_to_react_passes_compound_outcome_fields(tmp_path):
                 "uncertainty_type": None,
             },
             "model_type": "AttributionResponseV2",
+            "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+            "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "submitted": 1, "failed": 1, "reason": "HTTP 500"}],
+            "evidence_status": "partial",
         },
     )
     out.close()
@@ -388,13 +391,24 @@ def test_run_to_react_passes_compound_outcome_fields(tmp_path):
     assert r["failureDomains"] == ["InfraHW"]
     assert r["cancellationActors"] == []
     assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] == "partial"
+    assert r["ingestionReports"] == {
+        "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+        "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "submitted": 1, "failed": 1, "reason": "HTTP 500"}],
+    }
 
 
 def test_run_to_react_defaults_compound_fields_when_absent(tmp_path):
     run = _seed_one(tmp_path)
+    # Rows saved before ingestion reports were recorded still carry connector_reports.
+    run.raw_result["connector_reports"] = [
+        {"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}
+    ]
     r = bootstrap.run_to_react(run)
 
     assert r["terminalStates"] == []
     assert r["failureDomains"] == []
     assert r["cancellationActors"] == []
     assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] is None
+    assert r["ingestionReports"] is None

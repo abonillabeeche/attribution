@@ -18,10 +18,20 @@ section. It is part of the distributed source tree.
 
 ## Missing signals and data gaps
 
-Attribution output quality scales with the quantity and coverage of the logs the Service sees. If a signal source is missing entirely (no PromQL backend configured, Loki not reachable, sacct StdOut paths not resolvable), the affected collector reports zero observations in `connector_reports` and the rules that depended on that source don't fire. Observation submission failures after collection are logged and skipped by the Blueprint, but they are not represented in `connector_reports`. The verdict is still issued. Two consequences:
+Attribution output quality scales with the quantity and coverage of the logs the Service sees. If a signal source is missing entirely (no PromQL backend configured, Loki not reachable, sacct StdOut paths not resolvable), the affected collector reports zero observations in `connector_reports` and the rules that depended on that source don't fire. Attribution continues on partial evidence by design: if a collector errors or a collected observation fails to reach the Service, the verdict is still issued. Delivery outcomes are recorded in `ingestion_reports`, one entry per connector in the same order as `connector_reports`, and the verdict-level flag is `evidence_status`:
+
+| `evidence_status` | When |
+|---|---|
+| `complete` | No collector reported `status: "error"` and every ingestion report has `status: "ok"`. This includes runs that collected zero observations. |
+| `partial` | Something failed, but at least one connector delivered evidence (an ingestion report with `submitted > 0` and `status` `ok` or `partial`). |
+| `none` | Something failed and no evidence reached the Service. |
+
+* **Anything other than `complete` means the verdict was issued without some of its evidence.** Check `connector_reports` and `ingestion_reports` for the connector and reason.
+
+Two further consequences:
 
 * **Coverage matters more than completeness.** Better to have applog from Loki and node_metrics from Prometheus than to wait until syslog is also wired up. Attribution returns a verdict from whatever it has.
-* **The `connector_reports` field is the collector coverage record.** A diagnosis that ran with one collector erroring out is honestly different from one that ran with all collectors green. Downstream consumers should inspect `connector_reports` and the run logs when treating verdicts as evidence.
+* **The `connector_reports` field is the collector coverage record.** A diagnosis that ran with one collector erroring out is honestly different from one that ran with all collectors green. Downstream consumers should inspect `connector_reports`, `ingestion_reports`, and `evidence_status` when treating verdicts as evidence.
 
 ## Taxonomy: terminal_state and sub_domain
 

@@ -144,6 +144,9 @@ export interface RunSummary {
   failureDomains?: string[]
   cancellationActors?: string[]
   uncertaintyType?: string | null
+  evidenceStatus?: string | null
+  // Why evidence was partial or missing.
+  ingestionReports?: { connector_reports: object[]; ingestion_reports: object[] } | null
   detail: string
   rootSymptom: RootSymptom
   symptoms: SymptomEntry[]

@@ -330,7 +330,14 @@ def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -
             f"terminal_state={summary.get('terminal_state', 'unknown')} "
             f"sub_domain={summary.get('sub_domain', 'unclassified')} "
             f"root_symptom={summary.get('root_symptom', 'none')} "
-            f"symptoms={summary.get('symptoms', 'none')}"
+            f"symptoms={summary.get('symptoms', 'none')} "
+            f"evidence={summary.get('evidence_status', 'unknown')}"
+        )
+    incomplete = sum(1 for summary in summaries if summary.get("evidence_status") != "complete")
+    if incomplete > 0:
+        logger.warning(
+            f"{incomplete} of {len(summaries)} verdicts were issued with incomplete evidence; "
+            "see connector_reports and ingestion_reports in the saved result."
         )
 
 

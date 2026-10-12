@@ -12,9 +12,10 @@ The schema has three core tables:
 - `attribution_run`, stores one enriched attribution result for an execution
   context.
 
-There is no `connector_run` table in schema version `1`. Collector coverage is
-stored inside `attribution_run.raw_result_json` as part of the enriched
-attribution payload.
+There is no `connector_run` table in schema version `1`. Collector coverage
+(`connector_reports`), observation delivery (`ingestion_reports`), and the
+verdict-level `evidence_status` are stored inside
+`attribution_run.raw_result_json` as part of the enriched attribution payload.
 
 ## Schema Version
 
@@ -95,7 +96,8 @@ CREATE TABLE IF NOT EXISTS attribution_run (
 
 `outcome` is the raw service outcome. `terminal_state` and `sub_domain` are the
 Blueprint taxonomy fields derived from that outcome. `raw_result_json` stores
-the full enriched result payload, including connector reports.
+the full enriched result payload, including connector reports, ingestion
+reports, and `evidence_status`.
 `responsible_nodes_json` stores the extracted responsible-node list as JSON.
 
 ## Indexes

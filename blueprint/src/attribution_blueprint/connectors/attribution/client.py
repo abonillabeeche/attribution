@@ -55,9 +55,13 @@ class AttributionConnector:
 
     def ingest_observation(self, attributor_id: str, observation: ObservationV2) -> int:
         """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""
-        response = self._api.ingest_v2_attributor_att_id_observation_post(
-            attributor_id, observation, _request_timeout=self._request_timeout
-        )
+        try:
+            response = self._api.ingest_v2_attributor_att_id_observation_post(
+                attributor_id, observation, _request_timeout=self._request_timeout
+            )
+        except ApiException as e:
+            body = e.body or ""
+            raise RuntimeError(f"HTTP {e.status} {e.reason}: {body[:300]}") from e
         return response.observation_id
 
     def get_attribution(self, attributor_id: str) -> dict:

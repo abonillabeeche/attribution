@@ -346,11 +346,23 @@ def _display_run(run):
     )
 
 
+def _ingestion_reports(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Return both report lists for display, or None for rows saved before ingestion reports were recorded."""
+    if "ingestion_reports" not in raw:
+        return None
+    return {
+        "connector_reports": raw.get("connector_reports") or [],
+        "ingestion_reports": raw.get("ingestion_reports") or [],
+    }
+
+
 def _run_summary_fields(run) -> dict[str, Any]:
     """Map shared display fields without loading logs or validating evidence."""
     run = _display_run(run)
     verdict = (run.raw_result or {}).get("verdict") or {}
     collectors = (run.raw_result or {}).get("collectors")
+    evidence_status = (run.raw_result or {}).get("evidence_status")
+    ingestion_reports = _ingestion_reports(run.raw_result or {})
     bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
     root = verdict.get("root_symptom") or {}
     root_src = root.get("source") or {}
@@ -394,6 +406,8 @@ def _run_summary_fields(run) -> dict[str, Any]:
         "failureDomains": _list_of_str(verdict.get("failure_domains")),
         "cancellationActors": _list_of_str(verdict.get("cancellation_actors")),
         "uncertaintyType": verdict.get("uncertainty_type") if isinstance(verdict.get("uncertainty_type"), str) else None,
+        "evidenceStatus": evidence_status if isinstance(evidence_status, str) else None,
+        "ingestionReports": ingestion_reports,
         "diagnose": _diagnose_camel(diagnose),
         "operatorDiagnose": _diagnose_camel(operator_diagnose),
     }

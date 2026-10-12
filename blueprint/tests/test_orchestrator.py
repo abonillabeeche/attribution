@@ -135,6 +135,7 @@ def test_analyze_records_run_summaries():
             "sub_domain": "hardware",
             "root_symptom": "XID-79",
             "symptoms": "XID-79",
+            "evidence_status": "complete",
         }
     ]
 
@@ -590,7 +591,7 @@ def test_outputs_preserve_scheduler_gpu_count():
     assert output_ctx["gpu_count"] == 6
 
 
-def test_failing_ingest_does_not_block_other_observations():
+def test_failing_ingest_is_recorded_and_does_not_block_other_observations():
     contexts = [_make_ctx("1")]
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
@@ -602,11 +603,37 @@ def test_failing_ingest_does_not_block_other_observations():
     attr = _make_attribution_mock()
     attr.ingest_observation.side_effect = [1, Exception("boom"), 3]
 
-    pipeline = _make_pipeline(eca, [coll], attribution=attr)
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
     pipeline.analyze(ids=["1"])
 
     assert attr.ingest_observation.call_count == 3
     assert attr.get_attribution.call_count == 1
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert (report["status"], report["submitted"], report["failed"]) == ("partial", 3, 1)
+    assert result["evidence_status"] == "partial"
+
+
+def test_every_ingest_failing_persists_verdict_flagged_no_evidence():
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    coll = MagicMock(source="APPLOG")
+    # A malformed observation counts as a failed ingest instead of aborting the context.
+    coll.collect.return_value = [_make_obs(), {**_make_obs(), "context": None}]
+    attr = _make_attribution_mock()
+    attr.ingest_observation.side_effect = Exception("x" * 5000)
+
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
+    pipeline.analyze(ids=["1"])
+
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert report["status"] == "error"
+    assert len(report["reason"]) <= 500
+    assert result["evidence_status"] == "none"
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1}
 
 
 @pytest.mark.parametrize("ids", [["1"], ["1", "2"]])

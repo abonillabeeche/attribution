@@ -85,6 +85,7 @@ def test_run_summary_reports_context():
                     "sub_domain": "hardware",
                     "root_symptom": "XID-79",
                     "symptoms": "XID-79, NCCL timeout",
+                    "evidence_status": "partial",
                 }
             ],
         )
@@ -94,9 +95,10 @@ def test_run_summary_reports_context():
     assert any("Attribution complete: 1/1 execution contexts succeeded." in msg for msg in messages)
     assert any(
         "sample-job attempt=0 terminal_state=fail sub_domain=hardware "
-        "root_symptom=XID-79 symptoms=XID-79, NCCL timeout" in msg
+        "root_symptom=XID-79 symptoms=XID-79, NCCL timeout evidence=partial" in msg
         for msg in messages
     )
+    assert sum("incomplete evidence" in msg for msg in messages) == 1
 
 
 def test_time_range_passes_raw_nodelist_to_connector(patched_pipeline, clean_env):
