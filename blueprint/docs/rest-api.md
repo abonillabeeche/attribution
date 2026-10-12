@@ -74,8 +74,21 @@ to the rules engine as a string. When no stronger evidence exists,
 states produce the failed fallback symptom.
 
 Creating an identical attributor while the first one still exists returns
-HTTP 409. Delete the old attributor, or change the workload context, before
-retrying.
+HTTP 409 (`DuplicateAttributorError`). The response's `att_id` identifies the
+existing session; it does not establish that the session is stale or safe to
+delete. The Blueprint preserves that session and its accumulated evidence and
+rejects the duplicate creation. See the
+[Blueprint session flow](../../docs/ARCHITECTURE.md#end-to-end-flow-for-one-workload)
+for conflict reporting.
+
+Serialize runs with identical workload information against the same Service.
+Retry after the existing session's owner finishes and deletes it. If a caller
+crashed, delete its session only after confirming that no caller still uses it,
+or wait for the Service to expire it after 24 hours of inactivity (checked
+hourly, normally about 24–25 hours after the last activity). Normal sequential
+Blueprint runs clean up their own sessions and can be repeated. Recovery before
+expiry requires an operator to explicitly delete the session; ownership-aware
+recovery would require a separate Service lifecycle change.
 
 ## 2. Submit an observation
 
@@ -145,7 +158,8 @@ curl --fail-with-body --silent --show-error \
 
 A successful delete returns HTTP 204 with no response body. Attributors are
 temporary service state, not a result database. Always delete them after
-retrieving the result. The Blueprint does this in a `finally` block and writes
+retrieving the result, and only delete sessions you own. The Blueprint cleans
+up successfully created sessions in a `finally` block and writes
 the enriched result through its configured output connectors.
 
 ## API discovery and errors

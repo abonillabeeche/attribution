@@ -307,24 +307,35 @@ def _write_aggregate_run_summary(run_results: list[tuple[dict[str, int], list[di
 
     attempted = 0
     succeeded = 0
+    conflicted = 0
     for stats, _summaries in run_results:
         attempted += stats.get("attempted", 0)
         succeeded += stats.get("succeeded", 0)
-    _write_run_summary({"attempted": attempted, "succeeded": succeeded}, [])
+        conflicted += stats.get("conflicted", 0)
+    _write_run_summary({"attempted": attempted, "succeeded": succeeded, "conflicted": conflicted}, [])
 
 
 def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -> None:
     """Log a concise per-run completion summary after an attribution attempt."""
     attempted = stats.get("attempted", 0)
     succeeded = stats.get("succeeded", 0)
+    conflicted = stats.get("conflicted", 0)
     if attempted == 0:
         logger.info("Attribution complete: 0 execution contexts discovered.")
         return
-    logger.info(f"Attribution complete: {succeeded}/{attempted} execution contexts succeeded.")
+    conflict_summary = f" {conflicted} execution contexts conflicted." if conflicted else ""
+    logger.info(f"Attribution complete: {succeeded}/{attempted} execution contexts succeeded.{conflict_summary}")
     for summary in summaries:
         attempt = summary.get("attempt_id")
         if attempt is None or attempt == "":
             attempt = "n/a"
+        if summary.get("status") == "conflicted":
+            logger.info(
+                f"- {summary.get('job_id', '?')} attempt={attempt} "
+                f"context={summary.get('context_id', '?')} status=conflicted "
+                f"attributor_id={summary.get('attributor_id', '?')}"
+            )
+            continue
         logger.info(
             f"- {summary.get('job_id', '?')} attempt={attempt} "
             f"terminal_state={summary.get('terminal_state', 'unknown')} "
@@ -333,10 +344,11 @@ def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -
             f"symptoms={summary.get('symptoms', 'none')} "
             f"evidence={summary.get('evidence_status', 'unknown')}"
         )
-    incomplete = sum(1 for summary in summaries if summary.get("evidence_status") != "complete")
+    verdicts = [summary for summary in summaries if summary.get("status") == "attributed"]
+    incomplete = sum(1 for summary in verdicts if summary.get("evidence_status") != "complete")
     if incomplete > 0:
         logger.warning(
-            f"{incomplete} of {len(summaries)} verdicts were issued with incomplete evidence; "
+            f"{incomplete} of {len(verdicts)} verdicts were issued with incomplete evidence; "
             "see connector_reports and ingestion_reports in the saved result."
         )
 

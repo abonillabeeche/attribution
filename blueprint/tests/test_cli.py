@@ -81,6 +81,7 @@ def test_run_summary_reports_context():
                 {
                     "job_id": "sample-job",
                     "attempt_id": "0",
+                    "status": "attributed",
                     "terminal_state": "fail",
                     "sub_domain": "hardware",
                     "root_symptom": "XID-79",
@@ -1886,3 +1887,128 @@ def test_partial_success_still_exits_zero(patched_pipeline, clean_env):
     patched_pipeline.return_value.last_run_stats = {"attempted": 100, "succeeded": 1}
     rc = cli.main(["--connector", "eca", "slurm", "ids", "1"])
     assert rc == 0
+
+
+@pytest.mark.parametrize(("succeeded", "expected_exit"), [(1, 0), (0, 1)])
+def test_conflicts_appear_in_cli_summary_without_changing_exit_policy(
+    patched_pipeline, clean_env, mocker, succeeded, expected_exit
+):
+    patched_pipeline.return_value.last_run_stats = {"attempted": succeeded + 1, "succeeded": succeeded, "conflicted": 1}
+    patched_pipeline.return_value.last_run_summaries = [
+        {
+            "context_id": "job-2-attempt-0",
+            "job_id": "job-2",
+            "attempt_id": "0",
+            "status": "conflicted",
+            "attributor_id": "active-2",
+        }
+    ]
+    info = mocker.patch("attribution_blueprint.cli.logger.info")
+
+    rc = cli.main(["--connector", "eca", "slurm", "ids", "1,2"])
+
+    assert rc == expected_exit
+    messages = [call.args[0] for call in info.call_args_list]
+    assert (
+        f"Attribution complete: {succeeded}/{succeeded + 1} execution contexts succeeded. "
+        "1 execution contexts conflicted."
+    ) in messages
+    assert "- job-2 attempt=0 context=job-2-attempt-0 status=conflicted attributor_id=active-2" in messages
+    assert not any("terminal_state=" in message for message in messages)
+
+
+@pytest.mark.parametrize("attempt_id", [None, ""])
+def test_conflict_summary_marks_missing_attempt_as_unavailable(mocker, attempt_id):
+    info = mocker.patch("attribution_blueprint.cli.logger.info")
+
+    cli._write_run_summary(
+        {"attempted": 1, "succeeded": 0, "conflicted": 1},
+        [
+            {
+                "context_id": "ctx-1",
+                "job_id": "job-1",
+                "attempt_id": attempt_id,
+                "status": "conflicted",
+                "attributor_id": "active-1",
+            }
+        ],
+    )
+
+    info.assert_any_call("- job-1 attempt=n/a context=ctx-1 status=conflicted attributor_id=active-1")
+
+
+def test_multiple_configs_aggregate_conflicts(patched_pipeline, tmp_path, clean_env, mocker):
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    stats = [
+        {"attempted": 2, "succeeded": 1, "conflicted": 1},
+        {"attempted": 3, "succeeded": 1, "conflicted": 2},
+        {"attempted": 1, "succeeded": 1},  # Callers without the new counter remain supported.
+    ]
+    pipelines = []
+    for index, run_stats in enumerate(stats):
+        (config_dir / f"{index}.toml").write_text('[eca]\ncomponent = "slurm"\n')
+        pipeline = mocker.Mock()
+        pipeline.last_run_stats = run_stats
+        pipeline.last_run_summaries = []
+        pipelines.append(pipeline)
+    patched_pipeline.side_effect = pipelines
+    info = mocker.patch("attribution_blueprint.cli.logger.info")
+
+    assert cli.main(["--configs", str(config_dir)]) == 0
+
+    assert patched_pipeline.call_count == 3
+    for pipeline in pipelines:
+        pipeline.analyze.assert_called_once()
+    assert info.call_args.args[0] == (
+        "Attribution complete: 3/6 execution contexts succeeded. 3 execution contexts conflicted."
+    )
+
+
+@pytest.mark.parametrize(
+    "non_verdict",
+    [
+        pytest.param(
+            {
+                "context_id": "conflicted-job",
+                "job_id": "conflicted-job",
+                "status": "conflicted",
+                "attributor_id": "active-session",
+            },
+            id="conflicted",
+        ),
+        pytest.param({"job_id": "legacy-job"}, id="missing-status"),
+        pytest.param({"job_id": "unknown-job", "status": "unknown"}, id="unknown-status"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("evidence_statuses", "incomplete"),
+    [([], 0), (["complete"], 0), (["partial", "complete"], 1), (["none"], 1), (["unknown"], 1)],
+    ids=["no-verdicts", "complete-verdict", "mixed-evidence", "no-evidence", "unknown-evidence"],
+)
+def test_only_attributed_summaries_count_as_evidence_verdicts(mocker, non_verdict, evidence_statuses, incomplete):
+    warning = mocker.patch("attribution_blueprint.cli.logger.warning")
+    summaries = [
+        non_verdict,
+        *[
+            {"job_id": f"job-{index}", "status": "attributed", "evidence_status": status}
+            for index, status in enumerate(evidence_statuses)
+        ],
+    ]
+
+    cli._write_run_summary(
+        {
+            "attempted": len(summaries),
+            "succeeded": len(evidence_statuses),
+            "conflicted": int(non_verdict.get("status") == "conflicted"),
+        },
+        summaries,
+    )
+
+    if incomplete:
+        warning.assert_called_once_with(
+            f"{incomplete} of {len(evidence_statuses)} verdicts were issued with incomplete evidence; "
+            "see connector_reports and ingestion_reports in the saved result."
+        )
+    else:
+        warning.assert_not_called()

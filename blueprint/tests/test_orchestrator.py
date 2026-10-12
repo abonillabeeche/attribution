@@ -3,12 +3,13 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 from zoneinfo import ZoneInfo
 
 import pytest
 from nvidia_attribution_client import ApiException, AttributorInfoV2
 
+from attribution_blueprint.connectors.attribution import AttributorConflictError
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
@@ -49,7 +50,6 @@ def _make_obs(source: Source = Source.SYSLOG) -> dict:
 def _make_attribution_mock():
     attr = MagicMock()
     attr.create_attributor.side_effect = lambda info: f"attr-{info.workload.id}"
-    attr.create_or_replace_attributor.side_effect = lambda info: attr.create_attributor(info)
     attr.ingest_observation.return_value = 1
     attr.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
     attr.delete_attributor.return_value = None
@@ -131,6 +131,7 @@ def test_analyze_records_run_summaries():
             "context_id": "1",
             "job_id": "1",
             "attempt_id": "0",
+            "status": "attributed",
             "terminal_state": "fail",
             "sub_domain": "hardware",
             "root_symptom": "XID-79",
@@ -633,7 +634,7 @@ def test_every_ingest_failing_persists_verdict_flagged_no_evidence():
     assert report["status"] == "error"
     assert len(report["reason"]) <= 500
     assert result["evidence_status"] == "none"
-    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1}
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
 
 
 @pytest.mark.parametrize("ids", [["1"], ["1", "2"]])
@@ -694,7 +695,7 @@ def test_output_write_failure_does_not_abort_batch():
     assert flaky_output.write.call_count == 3
     # All three verdicts still returned (output failure logged, not propagated).
     assert len(results) == 3
-    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2}
+    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2, "conflicted": 0}
 
 
 def test_all_output_write_failures_do_not_count_as_success():
@@ -712,7 +713,8 @@ def test_all_output_write_failures_do_not_count_as_success():
 
     assert len(results) == 2
     assert failing_output.write.call_count == 2
-    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0}
+    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0, "conflicted": 0}
+    assert [summary["status"] for summary in pipeline.last_run_summaries] == ["attributed", "attributed"]
 
 
 def test_one_failing_sink_does_not_skip_other_sinks_for_same_ctx():
@@ -735,12 +737,22 @@ def test_one_failing_sink_does_not_skip_other_sinks_for_same_ctx():
     assert raising.write.call_count == 1
     assert ok_c.write.call_count == 1
     assert len(results) == 1
-    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1}
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
 
 
-def test_analyze_continues_when_create_attributor_raises_non_409():
+@pytest.mark.parametrize(
+    ("error", "conflicted", "summary_ids"),
+    [
+        (RuntimeError("boom"), 0, ["1", "3"]),
+        (ApiException(status=409, reason="Conflict"), 0, ["1", "3"]),
+        (AttributorConflictError("active-attr-2"), 1, ["1", "2", "3"]),
+    ],
+    ids=["unexpected-error", "unrecognized-conflict", "duplicate-session"],
+)
+def test_analyze_continues_when_create_attributor_raises(error, conflicted, summary_ids):
     """A create failure for one ctx must not abort the batch."""
     contexts = [_make_ctx("1"), _make_ctx("2"), _make_ctx("3")]
+    contexts[1].update(job_id="job-2", attempt_id=0)
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
 
@@ -748,17 +760,70 @@ def test_analyze_continues_when_create_attributor_raises_non_409():
     # Second context's create fails hard; first and third must still process.
     attr.create_attributor.side_effect = [
         "attr-1",
-        RuntimeError("boom"),
+        error,
         "attr-3",
     ]
 
+    collector = MagicMock(source="syslog")
+    collector.collect.return_value = [_make_obs()]
     output = _ListOutput()
-    pipeline = _make_pipeline(eca, [], attribution=attr, output=output)
+    pipeline = _make_pipeline(eca, [collector], attribution=attr, output=output)
     results = pipeline.analyze(ids=["1", "2", "3"])
 
     # Two successful contexts; the failed one yields no result entry.
     assert len(results) == 2
-    assert len(output.entries) == 2
+    assert [ctx["id"] for ctx, _ in output.entries] == ["1", "3"]
+    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2, "conflicted": conflicted}
+    assert [summary["context_id"] for summary in pipeline.last_run_summaries] == summary_ids
+    assert [summary["status"] for summary in pipeline.last_run_summaries] == (
+        ["attributed", "conflicted", "attributed"] if conflicted else ["attributed", "attributed"]
+    )
+    if conflicted:
+        assert pipeline.last_run_summaries[1] == {
+            "context_id": "2",
+            "job_id": "job-2",
+            "attempt_id": "0",
+            "status": "conflicted",
+            "attributor_id": "active-attr-2",
+        }
+    assert [args.args[0] for args in attr.ingest_observation.call_args_list] == ["attr-1", "attr-3"]
+    assert attr.get_attribution.call_args_list == [call("attr-1"), call("attr-3")]
+    assert attr.delete_attributor.call_args_list == [call("attr-1"), call("attr-3")]
+
+
+def test_conflict_stats_and_summaries_reset_between_runs():
+    eca = MagicMock()
+    eca.discover.return_value = [_make_ctx("1"), _make_ctx("2")]
+    attr = _make_attribution_mock()
+    attr.create_attributor.side_effect = [AttributorConflictError("active-1"), AttributorConflictError("active-2")]
+    output = MagicMock()
+    pipeline = _make_pipeline(eca, [], attribution=attr, output=output)
+    assert pipeline.last_run_stats == {"attempted": 0, "succeeded": 0, "conflicted": 0}
+
+    assert pipeline.analyze() == []
+
+    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0, "conflicted": 2}
+    assert [summary["attributor_id"] for summary in pipeline.last_run_summaries] == ["active-1", "active-2"]
+    attr.ingest_observation.assert_not_called()
+    attr.get_attribution.assert_not_called()
+    attr.delete_attributor.assert_not_called()
+    output.write.assert_not_called()
+    output.close.assert_called_once_with()
+
+    # An explicit later retry must replace the previous run's conflict report.
+    eca.discover.return_value = [_make_ctx("1")]
+    attr.create_attributor.side_effect = None
+    attr.create_attributor.return_value = "owned-1"
+    assert len(pipeline.analyze()) == 1
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
+    assert len(pipeline.last_run_summaries) == 1
+    assert "attributor_id" not in pipeline.last_run_summaries[0]
+    attr.delete_attributor.assert_called_once_with("owned-1")
+
+    eca.discover.return_value = []
+    assert pipeline.analyze() == []
+    assert pipeline.last_run_stats == {"attempted": 0, "succeeded": 0, "conflicted": 0}
+    assert pipeline.last_run_summaries == []
 
 
 def test_dump_observations_tolerates_non_json_body(tmp_path):

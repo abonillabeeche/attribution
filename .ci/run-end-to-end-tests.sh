@@ -87,6 +87,10 @@ docker run --detach --rm \
 wait_for_url "http://127.0.0.1:${service_port}/v2/healthz"
 wait_for_url "http://127.0.0.1:${web_port}/"
 
+ATTRIBUTION_TEST_SERVICE_URL="http://127.0.0.1:${service_port}" \
+uv run --project blueprint --frozen --extra dev pytest \
+    blueprint/tests/connectors/attribution/test_session_lifecycle.py -q
+
 uv run --project blueprint --frozen nvidia-attribution-blueprint \
     --configs blueprint/examples/static/configs \
     --connector attribution service_url "http://127.0.0.1:${service_port}" \

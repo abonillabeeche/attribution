@@ -48,7 +48,7 @@
     "model_type": "AttributionResponseV2"
   },
   "conflict_response": {
-    "att_id": "stale-attr-id",
+    "att_id": "active-attr-id",
     "model_type": "DuplicateAttributorError"
   }
 }

@@ -19,6 +19,21 @@ from nvidia_attribution_client import (
 _CONNECT_TIMEOUT_SECONDS = 3.05
 
 
+class AttributorConflictError(RuntimeError):
+    """An existing session prevents creation; its ownership is unchanged."""
+
+    def __init__(self, attributor_id: str):
+        self.attributor_id = attributor_id
+        super().__init__(
+            f"Attributor {attributor_id} already exists; preserving the existing session. "
+            "Retry after its owner finishes and deletes it."
+        )
+
+    def __reduce__(self):
+        """Rebuild from the session ID rather than the formatted message."""
+        return type(self), (self.attributor_id,), self.__dict__
+
+
 class AttributionConnector:
     """Blueprint-facing wrapper around the v2 API of the Attribution Service client."""
 
@@ -34,24 +49,19 @@ class AttributionConnector:
         self._api = DefaultApi(ApiClient(configuration))
 
     def create_attributor(self, info: AttributorInfoV2) -> str:
-        """POST /v2/attributor. Returns attributor_id."""
-        response = self._api.new_attribution_v2_attributor_post(info, _request_timeout=self._request_timeout)
-        return response.attributor_id
+        """POST /v2/attributor. Return a newly created attributor's id.
 
-    def create_or_replace_attributor(self, info: AttributorInfoV2) -> str:
-        """Create an attributor, replacing the stale service record on 409.
-
-        The service returns the existing attributor id as `att_id` on conflict.
-        Keeping that HTTP-specific recovery here prevents callers from knowing
-        the transport error type or response envelope.
+        A conflict does not establish that the existing session is stale or
+        owned by this caller. Preserve it and raise AttributorConflictError,
+        chaining the original service error. Other service errors propagate.
         """
         try:
-            return self.create_attributor(info)
+            response = self._api.new_attribution_v2_attributor_post(info, _request_timeout=self._request_timeout)
         except ApiException as e:
-            if e.status != HTTPStatus.CONFLICT or not isinstance(e.data, DuplicateAttributorError):
-                raise
-            self.delete_attributor(e.data.att_id)
-            return self.create_attributor(info)
+            if e.status == HTTPStatus.CONFLICT and isinstance(e.data, DuplicateAttributorError):
+                raise AttributorConflictError(e.data.att_id) from e
+            raise
+        return response.attributor_id
 
     def ingest_observation(self, attributor_id: str, observation: ObservationV2) -> int:
         """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""

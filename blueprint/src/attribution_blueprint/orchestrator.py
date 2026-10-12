@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 from nvidia_attribution_client import AttributorInfoV2, ObservationV2, Scheduler
 
-from attribution_blueprint.connectors.attribution import AttributionConnector
+from attribution_blueprint.connectors.attribution import AttributionConnector, AttributorConflictError
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
@@ -104,8 +104,9 @@ class AttributionOrchestrator:
         self.gpus_per_node = gpus_per_node
         # Per-run counters surfaced via `last_run_stats` so callers can decide
         # whether to exit non-zero. `succeeded` counts contexts whose verdict
-        # reached at least one output sink.
-        self.last_run_stats: dict[str, int] = {"attempted": 0, "succeeded": 0}
+        # reached at least one output sink. `conflicted` counts contexts rejected
+        # because another session already exists, without producing a verdict.
+        self.last_run_stats: dict[str, int] = {"attempted": 0, "succeeded": 0, "conflicted": 0}
         self.last_run_summaries: list[dict[str, str]] = []
 
     def analyze(
@@ -131,12 +132,22 @@ class AttributionOrchestrator:
         # Each context is processed in a single try/except so any failure —
         # including in attributor creation or info building — keeps the batch
         # moving.
-        self.last_run_stats = {"attempted": len(contexts), "succeeded": 0}
+        self.last_run_stats = {"attempted": len(contexts), "succeeded": 0, "conflicted": 0}
         self.last_run_summaries = []
         try:
             for ctx in contexts:
                 try:
                     processed = self._process_one(ctx, collectors)
+                except AttributorConflictError as e:
+                    summary = {
+                        **_summarize_context(ctx),
+                        "status": "conflicted",
+                        "attributor_id": e.attributor_id,
+                    }
+                    self.last_run_stats["conflicted"] += 1
+                    self.last_run_summaries.append(summary)
+                    logger.warning(f"attribution conflict for ctx {summary['context_id']}: {e}")
+                    continue
                 except Exception as e:
                     logger.warning(f"processing failed for ctx {ctx.get('id', '?')}: {e}")
                     continue
@@ -153,6 +164,8 @@ class AttributionOrchestrator:
         return results
 
     def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
+        # Collect before opening a session so collection/dump failures cannot
+        # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []
         batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
@@ -171,7 +184,9 @@ class AttributionOrchestrator:
             self._dump_observations(ctx, observations)
 
         info = self._build_attributor_info(ctx)
-        attributor_id = self.attribution.create_or_replace_attributor(info)
+        # Only a successful create gives this run a session to ingest into and
+        # clean up. A duplicate belongs to another caller and must be preserved.
+        attributor_id = self.attribution.create_attributor(info)
 
         ingestion_reports: list[IngestionReport] = []
         for report, collected in batches:
@@ -401,6 +416,20 @@ def _ingestion_report(report: ConnectorReport, submitted: int, failed: int, reas
     }
 
 
+def _summarize_context(ctx: dict) -> dict[str, str]:
+    """Identify a context consistently in verdict and conflict summaries."""
+    context_id = ctx.get("id")
+    job_id = ctx.get("job_id")
+    if job_id is None:
+        job_id = context_id
+    attempt_id = ctx.get("attempt_id")
+    return {
+        "context_id": str(context_id if context_id is not None else "?"),
+        "job_id": str(job_id if job_id is not None else "?"),
+        "attempt_id": str(attempt_id if attempt_id is not None else ""),
+    }
+
+
 def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
     """Return the stable fields the CLI prints after a run completes."""
     verdict = result.get("verdict")
@@ -410,16 +439,10 @@ def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
     root_symptom = root.get("symptom", "") if isinstance(root, dict) else ""
     symptoms = result.get("symptoms")
     symptom_names = ", ".join(sorted(str(name) for name in symptoms)) if isinstance(symptoms, dict) else ""
-    context_id = ctx.get("id")
-    job_id = ctx.get("job_id")
-    if job_id is None:
-        job_id = context_id
-    attempt_id = ctx.get("attempt_id")
     taxonomy = taxonomy_for_service_value(service_outcome(result))
     return {
-        "context_id": str(context_id if context_id is not None else "?"),
-        "job_id": str(job_id if job_id is not None else "?"),
-        "attempt_id": str(attempt_id if attempt_id is not None else ""),
+        **_summarize_context(ctx),
+        "status": "attributed",
         "terminal_state": taxonomy.terminal_state,
         "sub_domain": taxonomy.sub_domain,
         "root_symptom": root_symptom if root_symptom != "" else "none",
