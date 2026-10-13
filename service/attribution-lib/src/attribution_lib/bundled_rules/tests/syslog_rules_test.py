@@ -351,6 +351,39 @@ class TestNodes:
         assert "XID-95-UNCONTAINED_ERROR" in plain_nodes.attributions["host-98f6741a"].attributions
 
 
+@pytest.mark.parametrize(
+    ("contained_detail", "expected_symptom"),
+    [
+        ("CE User Channel (0x36)", "XID-94-CONTAINED_ERROR-CE"),
+        ("SM (0x1)", "XID-94-CONTAINED_ERROR-SM"),
+        ("GSP", "XID-94-CONTAINED_ERROR-GSP"),
+        ("Unknown Engine", "XID-94-CONTAINED_ERROR"),
+    ],
+)
+def test_xid94_poison_victim_selects_concrete_symptom(
+    contained_detail,
+    expected_symptom,
+    get_one_line_attr_builder,
+    syslog_jobinfo,
+):
+    """Emit concrete XID-94 identity when the poison victim is recognized."""
+
+    node = syslog_jobinfo.nodes[0]
+    line = f"NVRM: Xid (PCI:0000:06:00): 94, Contained: {contained_detail}. RST: No, D-RST: No"
+    node_attributions = get_one_line_attr_builder(
+        line,
+        node,
+        syslog_jobinfo.job_start_time.timestamp(),
+        syslog_jobinfo,
+    )
+
+    symptoms = node_attributions.attributions[node].attributions
+    assert expected_symptom in symptoms
+    assert any(source.datum == line and source.rule == "known-xid-event" for source in symptoms[expected_symptom])
+    if expected_symptom != "XID-94-CONTAINED_ERROR":
+        assert "XID-94-CONTAINED_ERROR" not in symptoms
+
+
 class TestKernelFailureCascade:
     """End-to-end tests for kernel panic, invalid-memory-access, and oops rules.
 
@@ -512,6 +545,7 @@ class TestXid140Outcome:
     """Exercise XID-140 classification and node-scoped cleanup from raw syslog."""
 
     _XID140 = "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE"
+    _XID94_GSP = "XID-94-CONTAINED_ERROR-GSP"
     _FATAL = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
     _LINES = (
         "NVRM: Xid (PCI:0000:06:00): 140, pid=1234, name=test, Poison error in GSP.",
@@ -592,7 +626,8 @@ class TestXid140Outcome:
             assert "poisoned gsp" not in symptoms
             assert self._FATAL not in symptoms
             assert "XID-94-CONTAINED_ERROR" not in symptoms
-        for index, symptom in [(1, self._FATAL), (2, "XID-94-CONTAINED_ERROR")]:
+            assert self._XID94_GSP not in symptoms
+        for index, symptom in [(1, self._FATAL), (2, self._XID94_GSP)]:
             if index in indices:
                 assert node_symptoms[symptom].has_interesting()
                 assert len(list(node_symptoms[symptom].all_sources())) == indices.count(index)
@@ -621,9 +656,9 @@ class TestXid140Outcome:
             assert {source.datum for source in other["poisoned gsp"]} == set(other_lines)
         else:
             assert self._FATAL in other
-            assert "XID-94-CONTAINED_ERROR" in other
+            assert self._XID94_GSP in other
             assert self._FATAL in attribution.symptoms
-            assert "XID-94-CONTAINED_ERROR" in attribution.symptoms
+            assert self._XID94_GSP in attribution.symptoms
 
 
 class TestPoisonedGspOutcome:

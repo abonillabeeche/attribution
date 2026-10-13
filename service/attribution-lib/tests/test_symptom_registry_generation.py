@@ -86,6 +86,33 @@ def test_known_prefixes_from_committed_declarations():
     assert "XID-" in prefixes
 
 
+def test_xid94_poison_victim_members_preserve_multicategory_outcome():
+    """Declare poison-victim identity without assigning outcome policy."""
+
+    registry = _load_committed_registry()
+    expected_members = {
+        "XID-94-CONTAINED_ERROR-CE": "CE",
+        "XID-94-CONTAINED_ERROR-SM": "SM",
+        "XID-94-CONTAINED_ERROR-GSP": "GSP",
+    }
+
+    for symptom_id, poison_victim in expected_members.items():
+        properties = {
+            "number": 94,
+            "mnemonic": "CONTAINED_ERROR",
+            "poison_victim": poison_victim,
+        }
+        assert registry.family_for(symptom_id) == SymptomFamily(name="xid", properties=properties)
+        assert registry.selector_for(symptom_id) == SymptomSelector(
+            family_name="xid",
+            family_properties=properties,
+        )
+
+        outcome = registry.outcome_for([symptom_id])
+        assert outcome is not None
+        assert outcome.outcome == "Fail MultiCategory"
+
+
 def test_cuda_not_ready_and_not_supported_classify_as_multicategory():
     """cudaErrorNotReady / cudaErrorNotSupported must resolve to Fail
     MultiCategory (consistent with cudaErrorDevicesUnavailable), not fall

@@ -194,7 +194,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert not result.symptoms._data[symptom].has_bad()
         assert result.symptoms._data[symptom].has_interesting()
@@ -207,7 +207,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert symptom not in cascade_node
         assert cascade_node._data[symptom].has_interesting()

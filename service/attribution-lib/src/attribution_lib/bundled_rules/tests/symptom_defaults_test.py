@@ -41,12 +41,19 @@ def test_xid_family_represents_declared_identifier_shapes() -> None:
         "port_down_reason_code": int,
         "port_down_reason": str,
         "error_status": int,
+        "poison_victim": str,
     }
     assert registry.families["XID-94-"].properties == {"number": 94}
     assert registry.families["XID-94-CONTAINED_ERROR"].properties == {
         "number": 94,
         "mnemonic": "CONTAINED_ERROR",
     }
+    for poison_victim in ("CE", "GSP", "SM"):
+        assert registry.families[f"XID-94-CONTAINED_ERROR-{poison_victim}"].properties == {
+            "number": 94,
+            "mnemonic": "CONTAINED_ERROR",
+            "poison_victim": poison_victim,
+        }
     assert registry.families["XID-140-"].properties == {"number": 140}
     assert registry.family_for("XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE").properties == {
         "number": 140,

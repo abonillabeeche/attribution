@@ -400,10 +400,18 @@ _SLURM_TIMEOUT_XID145_WINDOW = timedelta(seconds=90)
 # timestamp precision and clock skew, rather than making the full 90 s window
 # symmetric and potentially suppressing a genuine pre-timeout XID.
 _SLURM_TIMEOUT_XID145_CLOCK_SKEW = timedelta(seconds=1)
+_XID94_CONTAINED_ERROR_SYMPTOMS = frozenset(
+    {
+        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-CE",
+        "XID-94-CONTAINED_ERROR-GSP",
+        "XID-94-CONTAINED_ERROR-SM",
+    }
+)
 _XID145_RXPIPE_COMPANIONS = frozenset(
     {
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        *_XID94_CONTAINED_ERROR_SYMPTOMS,
     }
 )
 # In the regression fixture, XID-94 preceded RXPIPE by 70 ms, and XID-137
@@ -798,6 +806,7 @@ def poisoned_gsp_composite(context: RefinerContext):
 _KUEUE_ALLOWED_ZERO_NODE_STATES = frozenset(
     {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
 )
+
 
 @refiner_def(name="JobStateFallback", author="NVIDIA Attribution team", priority=_priority("JobStateFallback"))
 def job_state_fallback(context: RefinerContext):

@@ -39,7 +39,10 @@ from attribution_lib.rules import (
 )
 from attribution_lib.sources import Source, SourceSet
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
-from attribution_lib.xid_analyzer.nvidia_xid_analyzer import get_resolution_for_xid154
+from attribution_lib.xid_analyzer.nvidia_xid_analyzer import (
+    extract_xid94_poison_victim,
+    get_resolution_for_xid154,
+)
 
 rule_author = "NVIDIA Attribution team"
 
@@ -186,6 +189,9 @@ def syslog_xid(groups: Dict[str, str], node: str, source: Source, ctx: RuleConte
         return events
 
     nice_name = catalog["nice_name"]
+    poison_victim = extract_xid94_poison_victim(source.datum)
+    if poison_victim is not None:
+        nice_name = f"{nice_name}-{poison_victim}"
     recovery_action = catalog["recovery_action"]
     catalog_investigatory_action = catalog["investigatory_action"]
     if isinstance(catalog_investigatory_action, str) or not math.isnan(catalog_investigatory_action):

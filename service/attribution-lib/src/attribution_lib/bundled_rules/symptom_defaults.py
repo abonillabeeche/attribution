@@ -42,6 +42,7 @@ XID_FAMILY_SCHEMA = SymptomFamily(
         "port_down_reason_code": int,
         "port_down_reason": str,
         "error_status": int,
+        "poison_victim": str,
     },
 )
 
@@ -54,6 +55,7 @@ def _xid_member(
     port_down_reason_code: int | None = None,
     port_down_reason: str | None = None,
     error_status: int | None = None,
+    poison_victim: str | None = None,
 ) -> SymptomFamily:
     """Build an XID family member from explicitly decoded identity fields.
 
@@ -64,6 +66,7 @@ def _xid_member(
         port_down_reason_code: Optional numeric NVLink port-down reason.
         port_down_reason: Optional symbolic NVLink port-down reason.
         error_status: Optional decoded NVLink error status.
+        poison_victim: Optional XID 94 poison-victim component.
 
     Returns:
         Structured XID family identity containing the supplied fields.
@@ -75,6 +78,7 @@ def _xid_member(
         ("port_down_reason_code", port_down_reason_code),
         ("port_down_reason", port_down_reason),
         ("error_status", error_status),
+        ("poison_victim", poison_victim),
     ):
         if value is not None:
             properties[name] = value
@@ -2688,6 +2692,21 @@ known_symptom(
 known_symptom("XID-92-EXCESSIVE_SBE_INTERRUPTS", family=_xid_member(92, mnemonic="EXCESSIVE_SBE_INTERRUPTS"))
 
 known_symptom("XID-94-CONTAINED_ERROR", family=_xid_member(94, mnemonic="CONTAINED_ERROR"))
+
+known_symptom(
+    "XID-94-CONTAINED_ERROR-CE",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="CE"),
+)
+
+known_symptom(
+    "XID-94-CONTAINED_ERROR-SM",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="SM"),
+)
+
+known_symptom(
+    "XID-94-CONTAINED_ERROR-GSP",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="GSP"),
+)
 
 known_symptom("XID-95-UNCONTAINED_ERROR", family=_xid_member(95, mnemonic="UNCONTAINED_ERROR"))
 

@@ -704,10 +704,15 @@ def test_incremental_xid140_replaces_poisoned_gsp_and_retains_evidence(request, 
     node_symptoms = result.bad_nodes_attr.my_bad_nodes["node1"].attributions
     for symptoms in [result.symptoms, node_symptoms]:
         assert set(symptoms.symptoms()) == {xid140, "NV_ERR_RESET_REQUIRED kernel_gsp.c"}
-    for symptom in ["NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-CONTAINED_ERROR"]:
+    for symptom in ["NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-CONTAINED_ERROR-GSP"]:
         assert node_symptoms[symptom].has_interesting()
     for symptom, line in zip(
-        ["NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-CONTAINED_ERROR", "NV_ERR_RESET_REQUIRED kernel_gsp.c", xid140],
+        [
+            "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR",
+            "XID-94-CONTAINED_ERROR-GSP",
+            "NV_ERR_RESET_REQUIRED kernel_gsp.c",
+            xid140,
+        ],
         lines,
         strict=True,
     ):
