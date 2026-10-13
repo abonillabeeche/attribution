@@ -549,6 +549,10 @@ def scheduler_node_failure_refiner(context: RefinerContext):
     my_bad_nodes = context.my_bad_nodes
     if job_info is None or my_bad_nodes is None:
         return
+    if job_info.suppress_inherited_node_failure:
+        # Associated cancellation supplies execution termination; the node
+        # failure remains allocation evidence. Independent faults still apply.
+        return
     if job_info.state != "NODE_FAIL":
         return
 
@@ -821,12 +825,12 @@ def job_state_fallback(context: RefinerContext):
     job_info = context.job_info
     if symptoms is None or job_info is None:
         return
-    if len(job_info.nodes) == 0:
+    if len(job_info.nodes) == 0 and job_info.attributed_cancellation is None:
         if job_info.scheduler is not Scheduler.KUEUE or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
             symptoms.discard_all()
             symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
             return
-    if job_info.state == "RUNNING":
+    if job_info.state == "RUNNING" and job_info.attributed_cancellation is None:
         if job_info.scheduler is not Scheduler.KUEUE:
             symptoms.discard_all()
         if not symptoms:
@@ -946,6 +950,11 @@ def empty_symptoms_fallback(context: RefinerContext):
     job_info = context.job_info
     if raw_keywords is None or symptoms is None or job_info is None:
         return
+    if job_info.attributed_cancellation is not None:
+        # Explicit execution termination is already known. Collection metadata
+        # must not replace it with a missing-log outcome; raw keywords remain
+        # available and independently extracted faults retain their precedence.
+        return
     if not symptoms or (len(symptoms) == 1 and "Cancelled by user" in symptoms):
         if "log file is not recognized from slurm cmdline" in raw_keywords:
             sources = raw_keywords["log file is not recognized from slurm cmdline"]
@@ -1003,7 +1012,19 @@ def slurm_state_symptoms(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
 
-    if _is_root_cancellation(job_info):
+    if (cancellation := job_info.attributed_cancellation) is not None:
+        actor = cancellation.cancelled_by
+        if actor == "root":
+            symptom = "Cancelled by root"
+        elif actor == "site-automation-account":
+            symptom = "Cancelled by cluster operators"
+        elif actor == "Timeout":
+            symptom = "Cancelled by Timeout"
+        else:
+            symptom = "Cancelled by user"
+        symptoms.add(SourceSet(symptom).add(cancellation.source))
+        _add_kueue_scheduler_node_failure(job_info, symptoms)
+    elif _is_root_cancellation(job_info):
         symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "state cancelled by root"))
     elif job_info.state.startswith("CANCELLED"):
         if job_info.cancelled_by == "site-automation-account":
@@ -1014,14 +1035,23 @@ def slurm_state_symptoms(context: RefinerContext):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
     elif job_info.state == "REQUEUED":
         symptoms.add(job_info.source_value("Job requeued", job_info.state, "state requeued"))
-    elif (
+    else:
+        _add_kueue_scheduler_node_failure(job_info, symptoms)
+
+
+def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -> None:
+    """Add Kueue scheduler-level node loss when the exact failed node is unknown.
+
+    Args:
+        job_info: The record being attributed.
+        symptoms: The symptom set to add to.
+    """
+    if (
         job_info.state == "NODE_FAIL"
         and job_info.scheduler is Scheduler.KUEUE
         and not job_info.failed_node
         and len(job_info.nodes) != 1
     ):
-        # Scheduler-level node-loss evidence is still actionable when the
-        # exact failed node cannot be identified.
         symptoms.add(
             job_info.source_value(
                 "Node failure reported by slurm",
@@ -1137,7 +1167,7 @@ def cancellation_resolution(context: RefinerContext):
         symptoms.discard("Cancelled by user")
     elif singlehooks.CancelledByCleanup(job_info, symptoms):
         symptoms.discard("Cancelled by user")
-    elif job_info.state == "TIMEOUT":
+    elif job_info.state == "TIMEOUT" and job_info.attributed_cancellation is None:
         symptoms.add(job_info.source_value("Cancelled by Timeout", job_info.state, "Timeout"))
 
     if "Cancelled by Timeout" in symptoms:
@@ -1885,6 +1915,8 @@ def last_resort_symptoms(context: RefinerContext):
     job_info = context.job_info
     if symptoms is None or job_info is None:
         return
+    if job_info.attributed_cancellation is not None:
+        return
 
     # LAST RESORTS
     #
@@ -2206,7 +2238,11 @@ def post_process_symptoms_refiner(context: RefinerContext):
     symptoms = context.symptoms
     job_info = context.job_info
     outcome = context.outcome
-    cancelled_by = context.cancelled_by
+    cancelled_by = (
+        job_info.attributed_cancelled_by
+        if job_info is not None and job_info.attributed_cancellation is not None
+        else context.cancelled_by
+    )
     if symptoms is None or job_info is None:
         return
 
@@ -2394,7 +2430,8 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # Kueue preemption must not mask evidence-backed failures. Other scheduler
     # types retain their historical PREEMPTED reclassification behavior.
     if (
-        not nvrx_failed
+        job_info.attributed_cancellation is None
+        and not nvrx_failed
         and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
@@ -2459,7 +2496,12 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # allowlist (not a denylist) so it only touches outcomes with no specific category to
     # mask: any categorized failure (InfraHW/InfraSW/User/MultiCategory), a cancellation,
     # or an already-decided Pass is left alone, and new outcomes are safe by default.
-    if is_nvrx and job_info.exit_code == 0 and job_info.exit_code_signal == 0:
+    if (
+        is_nvrx
+        and job_info.exit_code == 0
+        and job_info.exit_code_signal == 0
+        and not job_info.suppress_inherited_node_failure
+    ):
         current_outcome = (
             attribution_result.outcome_attr.value().outcome if attribution_result.outcome_attr is not None else None
         )

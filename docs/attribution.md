@@ -32,6 +32,10 @@ N.B. Outcomes will become compound in the future, allowing a set of semantically
 
 Primary data for attribution comes from logs, metrics, and telemetry. It is important to track this information throughout the attribution process, so information about the provenance of a given internal representation (symptom, outcome, event, etc) is carried with it. A source will often say from which rule the item originated, as well as the line number, time, and type of data that produced it. See [Events](#events) for how source information is represented on an event record.
 
+`JobInfoBuilder` accepts two optional inputs for a record that represents part of an allocation, such as an array task's participation in an NVRx cycle. `allocation_failure` is a `SchedulerFailure`: the allocation's ID, state, failed node and source. Its time is when the scheduler reported the failure, not when the failure began. `execution_cancellation` is an `ExecutionCancellation` that the caller has established for this record: the record ID, who cancelled it, and a timezone-aware source time. A mismatched record ID or a missing identity or timestamp is rejected.
+
+A supplied cancellation provides the record's cancellation symptom, regardless of the record's raw scheduler state. Independent faults still take precedence. `allocation_failure` changes attribution only together with a cancellation. When the record's state is `NODE_FAIL` and the allocation's failed node is not among the record's nodes, the inherited node failure is not attributed to the record, unless the record's own `failed_node` names a different node that is among its nodes. Omitting both inputs keeps existing behavior.
+
 ## Attribution Process Overview
 
 ### State management
