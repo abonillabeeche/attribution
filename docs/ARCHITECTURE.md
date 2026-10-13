@@ -79,7 +79,7 @@ for durable Pod-to-node placement before post-hoc Kueue attribution.
 1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
 2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and a body in one of the wire-format `Format` values.
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
-4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped.
+4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
 6. **Clean up.** `DELETE /v2/attributor/{id}` for the handle created by this run so later runs don't collide. A failed create does not grant ownership of an existing handle.
 7. **Enrich.** The Blueprint's `result.enrich_attribution_result()` maps the service verdict to `(terminal_state, sub_domain)` via `taxonomy.py`, and attaches a `ConnectorReport` per collector.
@@ -98,7 +98,9 @@ multiple configuration files. Its exit policy is unchanged: a configuration
 with attempted contexts but no successful output exits nonzero; partial
 success or no discovered contexts exits zero. Scheduling systems that need to
 detect partial conflicts must inspect the summaries; a zero exit code alone
-does not mean every context was attributed. See the
+does not mean every context was attributed. With `--strict`, the CLI also
+exits nonzero when any attributed context's `evidence_status` is not
+`complete`. See the
 [session lifecycle guidance](../blueprint/docs/rest-api.md) for retry and
 abandoned-session handling.
 

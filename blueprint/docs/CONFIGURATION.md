@@ -61,6 +61,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 | `--config PATH`           | Yes        | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists.                                                                                                                       |
 | `--configs DIR`           | Yes        | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files.                                                                      |
 | `--dump-observations DIR` | No         | Write collected observations to `DIR/<ctx-id>.<source>.json` before service-specific adaptation and submission. Multiple observations with the same context ID and source use the same path, so the last one replaces earlier dumps.           |
+| `--strict`                | No         | Exit 1 when any verdict has an `evidence_status` other than `complete`, including runs that collected zero observations. Conflicted contexts are not counted. Without it, the exit code ignores `evidence_status`.                             |
 
 
 Notes:

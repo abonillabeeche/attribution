@@ -379,7 +379,7 @@ def test_run_to_react_passes_compound_outcome_fields(tmp_path):
             },
             "model_type": "AttributionResponseV2",
             "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
-            "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "submitted": 1, "failed": 1, "reason": "HTTP 500"}],
+            "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
             "evidence_status": "partial",
         },
     )
@@ -394,7 +394,7 @@ def test_run_to_react_passes_compound_outcome_fields(tmp_path):
     assert r["evidenceStatus"] == "partial"
     assert r["ingestionReports"] == {
         "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
-        "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "submitted": 1, "failed": 1, "reason": "HTTP 500"}],
+        "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
     }
 
 
