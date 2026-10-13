@@ -76,15 +76,99 @@ By making a contribution to this project, I certify that:
 
 ## Run the test gate
 
-Install `uv`, Node.js 22, pnpm 10.11, and Docker, then run:
+Run the commands below in Bash from the repository root. Before running the
+full gate, install:
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage Python
+  runtimes and locked project dependencies. CI uses uv **0.12.3**; use that
+  version to match CI.
+- Node.js 22 and [pnpm 10.11.0](https://pnpm.io/10.x/installation), matching the
+  frontend CI setup.
+- [Docker](https://docs.docker.com/get-started/get-docker/), with the daemon
+  running and accessible to your user. The end-to-end suite builds images and
+  starts containers; installing the Docker CLI alone is not enough.
+- Git and `curl`, used by the test scripts.
+
+With Node.js 22 installed, enable Corepack and select the same pnpm version as CI:
+
+```bash
+corepack enable
+corepack prepare pnpm@10.11.0 --activate
+```
+
+If your Node.js installation does not include Corepack, follow the
+[pnpm installation instructions](https://pnpm.io/10.x/installation) to install
+Corepack or pnpm 10.11.0 directly.
+
+The full gate also needs Python **3.14.6** on the host, even when Docker is
+available. This is the Service's pinned runtime in
+[`service/service-app/.python-version`](service/service-app/.python-version)
+and the version used for all Python suites in CI. The Library and Blueprint
+declare Python 3.11+ support, but that minimum is not sufficient for the Service.
+
+Install the pinned runtime and select it for this shell, as CI does:
+
+```bash
+export UV_PYTHON="$(cat service/service-app/.python-version)"
+uv python install "$UV_PYTHON"
+uv run --no-project --python "$UV_PYTHON" python --version
+```
+
+`UV_PYTHON` is set only for the current shell. Repeat the setup above when
+opening a new terminal to run the tests.
+
+If installation fails, update uv and check that the pinned runtime is available
+for your platform before continuing. Do not change the project's Python pin to
+work around a local setup failure.
+
+Check that Docker is reachable and the frontend tools have the required versions:
+
+```bash
+docker info
+node --version
+pnpm --version
+```
+
+Before running the full gate, stage the changes you want to test with
+`git add <files>`. The `service-app-client-drift` suite uses the Git index
+(staged source), and `end-to-end` builds its Docker images from the Git index.
+Unstaged edits are not included in those snapshots. The end-to-end suite also
+reads host-side tests and configurations from the working tree, so keep those
+changes staged too. The same requirement applies when running either suite
+independently.
+
+Once the setup checks succeed and your changes are staged, run the full gate:
 
 ```bash
 bash .ci/run-tests.sh all
 ```
 
 The command runs the Docker end-to-end tests, the Library, Service, and Blueprint
-Python suites, the generated-client and license checks, and the frontend tests
-and build. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
+Python suites, the generated-client and license checks, the frontend tests and
+build, and the CI-script tests. The first run needs network access to download
+dependencies and container images.
+
+### Run a focused suite
+
+Run one suite independently while working on a change, for example:
+
+```bash
+bash .ci/run-tests.sh attribution-lib
+bash .ci/run-tests.sh service-app
+bash .ci/run-tests.sh frontend
+```
+
+| Suite | Requirements |
+| --- | --- |
+| `attribution-lib`, `blueprint` | uv and Python 3.11+; use the pinned runtime above to match CI |
+| `service-app`, `service-app-client-drift` | uv and the pinned Service Python runtime |
+| `license-compliance`, `ci-tests` | uv and Python; use the pinned runtime above to match CI |
+| `frontend` | Node.js 22 and pnpm 10.11.0; no host Python or Docker required |
+| `end-to-end` | uv, host Python, Git, `curl`, and a running Docker daemon; use the pinned runtime above |
+
+Python-only suites do not require Docker or frontend tools. A focused suite
+does not replace the full gate before review; state which checks you ran and
+which you could not run in the pull request.
 
 ## Install the pre-commit hook
 
