@@ -2857,6 +2857,12 @@ class TestConnectionClosedCascade:
         assert "NaN reported by Megatron" in symptoms
         assert "Connection closed" not in symptoms
 
+    def test_cuda_out_of_memory_discards_connection_closed(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "cudaError out of memory", "Connection closed")
+        _run(stream, job_info, symptoms)
+        assert "cudaError out of memory" in symptoms
+        assert "Connection closed" not in symptoms
+
     def test_nccl_invalid_nic_selection_keeps_connection_closed(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(obs_ctx, "NCCL invalid NIC selection", "Connection closed")
         _run(stream, job_info, symptoms)

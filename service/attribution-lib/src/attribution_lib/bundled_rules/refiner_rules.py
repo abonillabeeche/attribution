@@ -388,6 +388,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "XID-145-RLW_SRC_TRACK-4",
     "Node failure reported by slurm",
     "NaN reported by Megatron",
+    "cudaError out of memory",
 ]
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
