@@ -21,6 +21,7 @@ from attribution_lib.exceptions import (
     EventStorageOutOfMemoryError as LibEventStorageOutOfMemoryError,
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
+from attribution_lib.ingest_summary import IngestSummary
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import (
     Id as ObservationId,
@@ -265,6 +266,11 @@ class AttributorWrapper:
                 logger.error(f"Event storage overflow for attributor {self.id}: {e}")
                 raise EventStorageOverflowError.new(self.id).to_http_exception() from e
             return _id
+
+    def ingest_summary(self, observation_id: ObservationId) -> IngestSummary:
+        """Return the entry counts recorded when this observation was ingested."""
+        with self.lock:
+            return self.attributor.ingested_observations[observation_id].summary
 
     def attribute(self, include_decision_graph: bool = False) -> AttributionContext:
         """Run attribution and optionally build its runtime decision graph.

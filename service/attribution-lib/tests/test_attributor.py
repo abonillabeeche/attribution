@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -24,6 +25,7 @@ from attribution_lib.exceptions import (
     UnhandledObservationSourceError,
 )
 from attribution_lib.hostlist import parse_hostlist
+from attribution_lib.ingest_summary import DropReason, IngestSummary
 from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation import (
     Observation,
@@ -264,6 +266,82 @@ def test_unhandled_sources(request, event_manager, job_info):
         observation = make_observation(source)
         with pytest.raises(UnhandledObservationSourceError):
             _ = ConsumedObservation.new(event_stream, job_info, observation)
+
+
+def make_syslog_observation(job_info, entries):
+    context = ObservationContext(
+        time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
+        resources=AllJobResources,
+        source=ObservationSource.SYSLOG,
+        format=ObservationFormat.ENTRY_TIMESERIES,
+        timezone=job_info.timezone,
+    )
+    return Observation.from_inbound_observation(InboundObservation(context, entries))
+
+
+def test_entries_outside_window_or_job_are_counted_in_one_warning(request, event_manager, job_info, caplog):
+    event_stream = event_manager.create_stream(request.node.name)
+    in_window_ns = (job_info.job_start_time + timedelta(minutes=1)).timestamp() * 1e9
+    after_window_ns = (job_info.job_end_time + timedelta(minutes=1)).timestamp() * 1e9
+    observation = make_syslog_observation(
+        job_info,
+        [
+            make_syslog_entry("kernel: in window", node="node1", timestamp_ns=in_window_ns),
+            make_syslog_entry("kernel: after window", node="node1", timestamp_ns=after_window_ns),
+            make_syslog_entry("kernel: foreign node", node="node9", timestamp_ns=in_window_ns),
+        ],
+    )
+    event_stream.register_observation_context(observation.context)
+
+    with caplog.at_level("WARNING"):
+        ConsumedObservation.new(event_stream, job_info, observation)
+
+    [warning] = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert "accepted 1 entries" in warning.message
+    assert "{'outside_window': 1, 'unknown_node': 1}" in warning.message
+
+
+def test_ingest_records_accepted_and_dropped_entries_on_the_ingested_observation(request, event_manager, job_info):
+    event_stream = event_manager.create_stream(request.node.name)
+    in_window_ns = (job_info.job_start_time + timedelta(minutes=1)).timestamp() * 1e9
+    after_window_ns = (job_info.job_end_time + timedelta(minutes=1)).timestamp() * 1e9
+    context = ObservationContext(
+        time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
+        resources=AllJobResources,
+        source=ObservationSource.SYSLOG,
+        format=ObservationFormat.ENTRY_TIMESERIES,
+        timezone=job_info.timezone,
+    )
+    entries = [
+        make_syslog_entry("kernel: in window", node="node1", timestamp_ns=in_window_ns),
+        make_syslog_entry("kernel: after window", node="node1", timestamp_ns=after_window_ns),
+        make_syslog_entry("kernel: foreign node", node="node9", timestamp_ns=in_window_ns),
+    ]
+    attributor = Attributor.new(event_stream, job_info)
+
+    obs_id = attributor.ingest(InboundObservation(context, entries))
+
+    assert attributor.ingested_observations[obs_id].summary == IngestSummary(
+        accepted=1, dropped=Counter({DropReason.OUTSIDE_WINDOW: 1, DropReason.UNKNOWN_NODE: 1})
+    )
+
+
+def test_source_needing_job_nodes_on_nodeless_job_is_skipped_with_warning(
+    request, event_manager, simple_job_factory, caplog
+):
+    event_stream = event_manager.create_stream(request.node.name)
+    job_info = simple_job_factory(node_to_ranks={}, state="PENDING")
+    in_window_ns = (job_info.job_start_time + timedelta(minutes=1)).timestamp() * 1e9
+    observation = make_syslog_observation(
+        job_info, [make_syslog_entry("kernel: in window", node="node1", timestamp_ns=in_window_ns)]
+    )
+
+    with caplog.at_level("WARNING"):
+        consumed = ConsumedObservation.new(event_stream, job_info, observation)
+
+    [warning] = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert "needs job nodes" in warning.message
+    assert consumed.summary.dropped == {DropReason.SOURCE_SKIPPED_NO_JOB_NODES: 1}
 
 
 def test_ingest_stores_fingerprints(request, event_manager, job_info):
@@ -822,6 +900,14 @@ def test_prefilter_only_affects_excluded_lines(prefilter_env, job_info):
     also_kept = _count_events_after_applog_ingest(prefilter_env, job_info, non_excluded_line, pre_filtered=False)
     assert kept == also_kept
     assert kept >= 1
+
+
+def test_prefilter_drop_is_counted_in_the_ingest_summary(prefilter_env, job_info):
+    attributor = Attributor.new(prefilter_env.create_stream("prefilter_summary"), job_info)
+    obs_id = attributor.ingest(_applog_observation(f"[rank 0] {_EXCLUDE_SENTINEL}", pre_filtered=False))
+    assert attributor.ingested_observations[obs_id].summary == IngestSummary(
+        accepted=0, dropped=Counter({DropReason.PRE_FILTERED: 1})
+    )
 
 
 def _count_events_after_applog_batch(event_manager, job_info, line, *, pre_filtered):
