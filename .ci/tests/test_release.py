@@ -18,6 +18,11 @@ INTERIM = {
     "service-app": "1.0.0",
     "blueprint": "0.1.0",
 }
+NEW_RELEASE = {
+    "attribution-lib": "0.5.0",
+    "service-app": "2.0.0",
+    "blueprint": "0.2.0",
+}
 
 
 @dataclass
@@ -47,8 +52,21 @@ class Repo:
             release_git.COMPONENTS[component].literal_file, f'__version__ = "{value}"\n'
         )
 
+    def add_changelog(self, component: str, literal: str) -> None:
+        changelog = self.path / release_git.COMPONENTS[component].path / "CHANGELOG.md"
+        existing = changelog.read_text() if changelog.is_file() else "# Changelog\n"
+        self.write(
+            str(changelog.relative_to(self.path)), existing + f"\n## [{literal}]\n"
+        )
+
     def statuses(self) -> dict[str, release_rules.ComponentStatus]:
         return release_rules.releasing_components(self.path, "base")
+
+    def results(self) -> list[release_rules.RuleResult]:
+        return release_rules.check_release(self.path, self.statuses())
+
+    def violations(self) -> list[release_rules.Violation]:
+        return release_rules.violations(self.results())
 
 
 @pytest.fixture
@@ -70,11 +88,22 @@ def repo(tmp_path: Path) -> Repo:
     return r
 
 
+def _release_everything_at_distance_zero(repo: Repo) -> None:
+    for component, literal in NEW_RELEASE.items():
+        repo.set_literal(component, literal)
+        repo.add_changelog(component, literal)
+    repo.commit("first release")
+    for component, literal in NEW_RELEASE.items():
+        repo.tag(release_git.tag_for(component, literal))
+    repo.mark_base()
+
+
 def test_unchanged_literals_are_not_a_release_pr(repo: Repo) -> None:
     statuses = repo.statuses()
 
     assert release._release_pr_line(statuses) == "not a release PR, nothing releasing"
     assert not any(s.releasing for s in statuses.values())
+    assert release_rules.check_release(repo.path, statuses) == []
 
 
 def test_only_bumped_component_releases_and_a_decrease_never_does(repo: Repo) -> None:
@@ -89,6 +118,123 @@ def test_only_bumped_component_releases_and_a_decrease_never_does(repo: Repo) ->
     statuses = repo.statuses()
     assert not statuses["attribution-lib"].releasing
     assert statuses["attribution-lib"].decreased
+    assert release_rules.check_release(repo.path, statuses) == []
+    hit = release_rules._rule_no_decrease(statuses["attribution-lib"])
+    assert isinstance(hit, release_rules.Violation) and "below base" in hit.message
+
+
+def test_first_release_needs_a_changelog_entry_per_component(repo: Repo) -> None:
+    for component, literal in NEW_RELEASE.items():
+        repo.set_literal(component, literal)
+    repo.commit("first release")
+
+    statuses = repo.statuses()
+    assert all(s.releasing for s in statuses.values())
+    violations = repo.violations()
+    assert [v.component for v in violations] == list(release_git.COMPONENTS)
+    assert all("CHANGELOG.md lacks" in v.message for v in violations)
+
+    for component, literal in NEW_RELEASE.items():
+        repo.add_changelog(component, literal)
+    repo.commit("changelogs")
+    results = repo.results()
+    assert results and all(isinstance(r, release_rules.Pass) for r in results)
+    rendered = release.render_check(statuses, results)
+    assert 'PASS      attribution-lib: CHANGELOG.md has "## [0.5.0]"' in rendered
+    assert "PASS: no violations" in rendered
+
+
+def test_blueprint_bump_over_moved_service_app_needs_service_app_release(
+    repo: Repo,
+) -> None:
+    assert release_git.COMPONENTS["blueprint"].closure == (
+        "attribution-lib",
+        "service-app",
+    )
+    assert release_git.closure_paths("blueprint") == [
+        "blueprint",
+        "service/attribution-lib",
+        "service/service-app",
+    ]
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/service-app/x", "")
+    repo.commit("touch service-app")
+    repo.set_literal("blueprint", "0.2.1")
+    repo.add_changelog("blueprint", "0.2.1")
+    repo.commit("bump blueprint")
+
+    violations = repo.violations()
+    assert len(violations) == 1
+    violation = violations[0]
+    assert violation.component == "blueprint"
+    assert (
+        "service-app has moved since service-app-v2.0.0 (distance 1)"
+        in violation.message
+    )
+    assert violation.log is not None and "touch service-app" in violation.log
+
+    repo.set_literal("service-app", "2.0.1")
+    repo.add_changelog("service-app", "2.0.1")
+    repo.commit("bump service-app")
+    assert repo.violations() == []
+
+
+def test_blueprint_bump_over_moved_lib_needs_whole_closure_released(repo: Repo) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/attribution-lib/x", "")
+    repo.commit("touch lib")
+    repo.set_literal("blueprint", "0.2.1")
+    repo.add_changelog("blueprint", "0.2.1")
+    repo.commit("bump blueprint")
+
+    violations = repo.violations()
+    assert [v.component for v in violations] == ["blueprint", "blueprint"]
+    assert "attribution-lib has moved since attribution-lib-v0.5.0 (distance 1)" in (
+        violations[0].message
+    )
+    assert "service-app has moved since service-app-v2.0.0 (distance 1)" in (
+        violations[1].message
+    )
+
+    repo.set_literal("service-app", "2.0.1")
+    repo.add_changelog("service-app", "2.0.1")
+    repo.commit("bump service-app")
+    violations = repo.violations()
+    assert [v.component for v in violations] == ["service-app", "blueprint"]
+    assert all("attribution-lib has moved" in v.message for v in violations)
+
+    repo.set_literal("attribution-lib", "0.5.1")
+    repo.add_changelog("attribution-lib", "0.5.1")
+    repo.commit("bump lib")
+    assert repo.violations() == []
+
+
+def test_stable_service_app_cannot_bundle_a_prerelease_lib_tag(repo: Repo) -> None:
+    repo.tag("attribution-lib-v0.5.2")
+    repo.write("service/attribution-lib/x", "")
+    repo.commit("lib change")
+    repo.tag("attribution-lib-v0.5.3-rc.1")
+    repo.tag("service-app-v2.0.1")
+    repo.mark_base()
+
+    repo.set_literal("service-app", "2.0.2")
+    repo.add_changelog("service-app", "2.0.2")
+    repo.commit("bump service-app")
+    violations = repo.violations()
+    assert len(violations) == 1
+    message = violations[0].message
+    assert "cannot bundle pre-release attribution-lib" in message
+    assert "attribution-lib-v0.5.3-rc.1" in message
+    assert "attribution-lib-v0.5.2" in message
+
+    repo.set_literal("service-app", "2.0.2rc1")
+    repo.add_changelog("service-app", "2.0.2rc1")
+    repo.commit("bump service-app to rc")
+    assert repo.violations() == []
+
+    latest = release_git.latest_tags(repo.path, "attribution-lib")
+    assert (latest.any.tag, latest.any.distance) == ("attribution-lib-v0.5.3-rc.1", 0)
+    assert (latest.stable.tag, latest.stable.distance) == ("attribution-lib-v0.5.2", 1)
 
 
 def test_literals_are_compared_at_the_merge_base_not_the_tip_of_base(

@@ -63,3 +63,7 @@ jobs:
           fi
           echo "base=$base" >> "$GITHUB_ENV"
           uv run .ci/release.py status --base "$base"
+      - name: Release check
+        # Advisory on branches only; the tag job owns main.
+        if: github.ref != 'refs/heads/main'
+        run: uv run .ci/release.py check --base "$base"

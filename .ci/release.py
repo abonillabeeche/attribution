@@ -5,12 +5,20 @@
 # requires-python = ">=3.11"
 # dependencies = ["packaging>=24"]
 # ///
-"""Advisory release status for the components in this repository.
+"""Advisory release check for the components in this repository.
 
-Read-only; needs a full clone with tags. One subcommand:
+Read-only; needs a full clone with tags. Two subcommands:
 
     status  per component: version literal, latest tag (any / stable-only),
             first-parent distance since that tag, PRs merged since.
+    check   validate a release PR; exit 1 unless all of these hold:
+            - literal is a PEP 440 release like 2.0.0 or 2.0.0rc1
+            - planned tag does not exist yet
+            - every in-repo dependency is released at distance 0, with a
+              stable tag when the consumer is stable
+            - CHANGELOG.md has a `## [X.Y.Z]` entry
+
+The rules are the executable form of RELEASE.md.
 """
 
 from __future__ import annotations
@@ -30,16 +38,14 @@ from release_git import (
     git,
     tag_for,
 )
-from release_rules import ComponentStatus, is_release_pr, releasing_components
-
-
-RELEASE_PR_RULE = (
-    "Release PR: any component's literal differs from the base; a component is "
-    "releasing when its own literal changed and did not decrease."
-)
-DISTANCE_RULE = (
-    "Distance counts first-parent commits since the tag over the component and "
-    "its in-repo dependencies; the shortlog covers the component's own path only."
+from release_rules import (
+    ComponentStatus,
+    Pass,
+    RuleResult,
+    check_release,
+    is_release_pr,
+    releasing_components,
+    violations,
 )
 
 
@@ -58,6 +64,16 @@ def _tag_cells(info: Optional[TagInfo]) -> tuple[str, str]:
     if info is None:
         return "unreleased", "unreleased"
     return info.tag, str(info.distance)
+
+
+RELEASE_PR_RULE = (
+    "Release PR: any component's literal differs from the base; a component is "
+    "releasing when its own literal changed and did not decrease."
+)
+DISTANCE_RULE = (
+    "Distance counts first-parent commits since the tag over the component and "
+    "its in-repo dependencies; the shortlog covers the component's own path only."
+)
 
 
 def render_status(repo: Path, statuses: dict[str, ComponentStatus]) -> str:
@@ -103,6 +119,31 @@ def render_status(repo: Path, statuses: dict[str, ComponentStatus]) -> str:
     return "\n".join(lines)
 
 
+def render_check(
+    statuses: dict[str, ComponentStatus], results: list[RuleResult]
+) -> str:
+    lines = [_release_pr_line(statuses), ""]
+    for name, s in statuses.items():
+        if s.decreased:
+            lines.append(
+                f"{name}: literal decreased relative to base; not releasing, "
+                "the tag job will not tag"
+            )
+    # Every rule outcome is listed, passes included, so a rule that passes for
+    # the wrong reason is visible in the log rather than silent.
+    for r in results:
+        if isinstance(r, Pass):
+            lines.append(f"PASS      {r.component}: {r.reason}")
+            continue
+        lines.append(f"VIOLATION {r.component}: {r.message}")
+        if r.log:
+            lines += ["", "```", r.log, "```", ""]
+    if len(violations(results)) == 0:
+        lines.append("PASS: no violations")
+    lines += ["", RELEASE_PR_RULE]
+    return "\n".join(lines)
+
+
 def _emit(text: str) -> None:
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -116,6 +157,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command, help_text in (
         ("status", "print literals, latest tags, distance and shortlogs"),
+        ("check", "validate the release PR; exit 1 on any violation"),
     ):
         sub = subparsers.add_parser(command, help=help_text)
         sub.add_argument(
@@ -129,12 +171,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         repo = args.repo if args.repo is not None else default_repo()
         statuses = releasing_components(repo, args.base)
-        report = render_status(repo, statuses)
+        if args.command == "status":
+            report, failed = render_status(repo, statuses), False
+        else:
+            results = check_release(repo, statuses)
+            report, failed = render_check(statuses, results), bool(violations(results))
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     _emit(report)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
