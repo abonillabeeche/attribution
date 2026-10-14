@@ -5,9 +5,9 @@
 # requires-python = ">=3.11"
 # dependencies = ["packaging>=24"]
 # ///
-"""Advisory release check for the components in this repository.
+"""Release check and tag-on-merge for the components in this repository.
 
-Read-only; needs a full clone with tags. Two subcommands:
+Needs a full clone with tags. Three subcommands:
 
     status  per component: version literal, latest tag (any / stable-only),
             first-parent distance since that tag, PRs merged since.
@@ -17,6 +17,10 @@ Read-only; needs a full clone with tags. Two subcommands:
             - every in-repo dependency is released at distance 0, with a
               stable tag when the consumer is stable
             - CHANGELOG.md has a `## [X.Y.Z]` entry
+    tag     runs on main after a merge. Re-runs the `check` rules on the
+            merged commit, then creates and pushes one `<component>-vX.Y.Z`
+            tag per component that is releasing. Exit 1 on any FAIL.
+            `--before SHA` is the push event's previous tip.
 
 The rules are the executable form of RELEASE.md.
 """
@@ -47,6 +51,7 @@ from release_rules import (
     releasing_components,
     violations,
 )
+from release_tag import TagRow, nothing_to_tag, tag_push
 
 
 def _release_pr_line(statuses: dict[str, ComponentStatus]) -> str:
@@ -144,6 +149,20 @@ def render_check(
     return "\n".join(lines)
 
 
+def render_tag(rows: list[TagRow]) -> str:
+    lines = ["nothing to tag", ""] if nothing_to_tag(rows) else []
+    lines += [
+        "| component | old | new | tag | outcome | detail |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r.component} | {r.old or ''} | {r.new} | {r.tag or ''} "
+            f"| {r.outcome} | {r.detail} |"
+        )
+    return "\n".join(lines)
+
+
 def _emit(text: str) -> None:
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -166,16 +185,37 @@ def main(argv: Optional[list[str]] = None) -> int:
             help="ref whose merge-base with HEAD the literals are compared against",
         )
         sub.add_argument("--repo", type=Path, default=None, help="repository root")
+
+    tag = subparsers.add_parser(
+        "tag", help="tag and push released components; main only, exit 1 on any FAIL"
+    )
+    tag.add_argument("--repo", type=Path, default=None, help="repository root")
+
+    tag.add_argument(
+        "--before",
+        metavar="SHA",
+        required=True,
+        help="push event: tag literals that moved since SHA",
+    )
     args = parser.parse_args(argv)
 
     try:
         repo = args.repo if args.repo is not None else default_repo()
-        statuses = releasing_components(repo, args.base)
-        if args.command == "status":
-            report, failed = render_status(repo, statuses), False
-        else:
-            results = check_release(repo, statuses)
-            report, failed = render_check(statuses, results), bool(violations(results))
+        match args.command:
+            case "status":
+                statuses = releasing_components(repo, args.base)
+                report, failed = render_status(repo, statuses), False
+            case "check":
+                statuses = releasing_components(repo, args.base)
+                results = check_release(repo, statuses)
+                report, failed = (
+                    render_check(statuses, results),
+                    bool(violations(results)),
+                )
+            case "tag":
+                rows = tag_push(repo, args.before)
+                report = render_tag(rows)
+                failed = any(r.outcome == "FAIL" for r in rows)
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

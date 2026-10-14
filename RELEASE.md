@@ -65,10 +65,7 @@ Pull requests use squash merges into the default branch. Rebase feature branches
 onto the default branch to keep them current. Do not merge the default branch
 into a feature branch.
 
-## Planned release process
-
-CI tagging is not implemented yet. Maintainers must implement and validate it
-before the first release under this process.
+## Release process
 
 For each component release:
 
@@ -83,9 +80,8 @@ For each component release:
    not change receive no new tag.
 
 Project maintainers review version changes and control the CI release workflow.
-Contributors propose version changes through pull requests. In the planned
-process, CI creates release tags. Contributors and maintainers do not push
-release tags by hand.
+Contributors propose version changes through pull requests. CI creates release
+tags. Contributors and maintainers do not push release tags by hand.
 
 ### CHANGELOG
 
@@ -113,9 +109,9 @@ differs from the default branch. A component is releasing when its literal
 changed and did not decrease. The Service depends on the Library, and the
 Blueprint depends on both.
 
-On every push, `.ci/release.py status` reports each component's literal, latest
-tags, distance since them, and pull requests merged since. On every branch
-other than the default branch, `.ci/release.py check` validates each releasing
+On every push to a branch other than the default branch, `.ci/release.py status`
+reports each component's literal, latest tags, distance since them, and pull
+requests merged since, and `.ci/release.py check` validates each releasing
 component, reports every rule outcome, and fails on any violation:
 
 - The literal is a PEP 440 final or release candidate: `X.Y.Z` or `X.Y.ZrcN`.
@@ -127,3 +123,9 @@ component, reports every rule outcome, and fails on any violation:
   touch it or its own dependencies.
 - A stable release cannot include a dependency whose latest tag is a release
   candidate, or one released as a candidate in the same pull request.
+
+After a merge to the default branch that changes a version literal, the
+`Release` workflow re-runs the same rules on the merged commit and, when they
+pass, creates and pushes one `<component>-vX.Y.Z` tag per releasing component.
+A rule violation tags nothing for that component; fix it in a new pull request.
+Re-run the job only for a transient failure such as a rejected push.

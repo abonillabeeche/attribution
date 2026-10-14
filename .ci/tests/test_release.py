@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -12,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # .ci/ is not a pa
 import release  # noqa: E402
 import release_git  # noqa: E402
 import release_rules  # noqa: E402
+import release_tag  # noqa: E402
 
 INTERIM = {
     "attribution-lib": "0.4.0",
@@ -295,3 +298,156 @@ def test_tag_names_round_trip_and_releasable_shapes() -> None:
     for literal in ("2.0.0.dev0", "2.0.0a1"):
         with pytest.raises(release_git.ReleaseError):
             release_git.tag_for("service-app", literal)
+
+
+WORKTREE = Path(__file__).resolve().parents[2]
+
+
+@dataclass
+class TaggingRepo(Repo):
+    def out(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=self.path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def origin_tags(self) -> dict[str, str]:
+        """Tag name -> commit it points at, as origin sees it."""
+        tags: dict[str, str] = {}
+        for line in self.out("ls-remote", "--tags", "origin").splitlines():
+            sha, _, ref = line.partition("\t")
+            if ref.endswith("^{}"):
+                tags[ref.removeprefix("refs/tags/").removesuffix("^{}")] = sha
+        return tags
+
+    def bump(self, component: str, literal: str) -> None:
+        self.set_literal(component, literal)
+        self.add_changelog(component, literal)
+
+    def push_rows(self) -> list[release_tag.TagRow]:
+        return release_tag.tag_push(self.path, self.out("rev-parse", "base"))
+
+    def push_outcomes(self) -> dict[str, str]:
+        return {r.component: r.outcome for r in self.push_rows()}
+
+
+@pytest.fixture
+def tagging_repo(repo: Repo, tmp_path_factory: pytest.TempPathFactory) -> TaggingRepo:
+    r = TaggingRepo(repo.path)
+    for relpath in release_tag.HELPER_FILES.values():
+        (r.path / relpath).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(WORKTREE / relpath, r.path / relpath)
+    r.commit("build-version helpers")
+    origin = tmp_path_factory.mktemp("origin")
+    r.git("init", "--bare", str(origin))
+    r.git("remote", "add", "origin", str(origin))
+    r.git("push", "origin", "main")
+    r.mark_base()
+    return r
+
+
+def test_moved_literal_is_tagged_once_and_a_rerun_is_done(
+    tagging_repo: TaggingRepo,
+) -> None:
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.commit("bump lib")
+    argv = [
+        "tag",
+        "--repo",
+        str(tagging_repo.path),
+        "--before",
+        tagging_repo.out("rev-parse", "base"),
+    ]
+
+    assert release.main(argv) == 0
+    assert tagging_repo.push_outcomes() == {
+        "attribution-lib": "DONE",
+        "service-app": "NOOP",
+        "blueprint": "NOOP",
+    }
+    assert release.main(argv) == 0
+    head = tagging_repo.out("rev-parse", "HEAD")
+    assert tagging_repo.origin_tags() == {"attribution-lib-v0.5.0": head}
+    assert tagging_repo.out("cat-file", "-t", "attribution-lib-v0.5.0") == "tag"
+
+
+def test_tag_already_on_origin_at_another_commit_fails(
+    tagging_repo: TaggingRepo,
+) -> None:
+    tagging_repo.tag("attribution-lib-v0.5.0")
+    tagging_repo.git("push", "origin", "attribution-lib-v0.5.0")
+    tagging_repo.git("tag", "-d", "attribution-lib-v0.5.0")
+    before = tagging_repo.origin_tags()
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.commit("bump lib")
+
+    assert tagging_repo.push_outcomes()["attribution-lib"] == "FAIL"
+    assert tagging_repo.origin_tags() == before
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [
+        (
+            "0.3.0",
+            {"attribution-lib": "SKIP", "service-app": "NOOP", "blueprint": "NOOP"},
+        ),
+        (
+            None,
+            {"attribution-lib": "NOOP", "service-app": "NOOP", "blueprint": "NOOP"},
+        ),
+    ],
+    ids=["decreased", "unchanged"],
+)
+def test_push_without_a_release_tags_nothing(
+    tagging_repo: TaggingRepo,
+    literal: Optional[str],
+    expected: dict[str, str],
+) -> None:
+    if literal is not None:
+        tagging_repo.bump("attribution-lib", literal)
+        tagging_repo.commit("change lib")
+
+    rows = tagging_repo.push_rows()
+    assert {r.component: r.outcome for r in rows} == expected
+    assert release.render_tag(rows).splitlines()[0] == "nothing to tag"
+    assert tagging_repo.origin_tags() == {}
+
+
+def test_bundle_violation_fails_the_consumer_and_tags_nothing_for_it(
+    tagging_repo: TaggingRepo,
+) -> None:
+    tagging_repo.bump("service-app", "2.0.0")
+    tagging_repo.commit("bump service-app over unreleased lib")
+
+    assert tagging_repo.push_outcomes()["service-app"] == "FAIL"
+    assert tagging_repo.origin_tags() == {}
+
+
+def test_rejected_dependency_push_fails_its_dependants_too(
+    tagging_repo: TaggingRepo,
+) -> None:
+    origin = Path(tagging_repo.out("remote", "get-url", "origin"))
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\ngrep -q refs/tags/attribution-lib- && exit 1\nexit 0\n")
+    hook.chmod(0o755)
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.bump("service-app", "2.0.0")
+    tagging_repo.commit("release lib and service-app")
+
+    outcomes = tagging_repo.push_outcomes()
+    assert outcomes["attribution-lib"] == "FAIL"
+    assert outcomes["service-app"] == "FAIL"
+    assert tagging_repo.origin_tags() == {}
+
+
+def test_rc_literal_gets_an_rc_tag(tagging_repo: TaggingRepo) -> None:
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.bump("service-app", "2.0.0rc1")
+    tagging_repo.commit("release lib and service-app rc")
+
+    outcomes = tagging_repo.push_outcomes()
+    assert outcomes["attribution-lib"] == outcomes["service-app"] == "TAGGED"
+    assert set(tagging_repo.origin_tags()) == {
+        "attribution-lib-v0.5.0",
+        "service-app-v2.0.0-rc.1",
+    }
