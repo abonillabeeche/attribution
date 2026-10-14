@@ -207,6 +207,10 @@ OpenAPI Generator templates retain [their upstream license](service/service-app/
 Bundled font files and dependencies retain their respective notices and terms.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for these license exceptions.
 
+The Blueprint WebUI and walkthrough builds also write
+`assets/THIRD_PARTY_NOTICES.txt` with the license and notice texts of the
+packages they bundle.
+
 ## Use cases
 
 For task-focused workflows, see the [Attribution Blueprint use-case guides](blueprint/docs/use-cases/README.md).

@@ -226,6 +226,10 @@ def write_wheel(
             archive.writestr(
                 "attribution_blueprint/webui/static/assets/app.js", "export{}"
             )
+            archive.writestr(
+                "attribution_blueprint/webui/static/assets/THIRD_PARTY_NOTICES.txt",
+                "notices",
+            )
         for member_name, data, file_type in extra_members:
             info = zipfile.ZipInfo(member_name)
             if file_type is not None:
@@ -298,6 +302,11 @@ def write_sdist(
                 archive,
                 f"{package_root}/src/attribution_blueprint/webui/static/assets/app.js",
                 b"export{}",
+            )
+            add_tar_bytes(
+                archive,
+                f"{package_root}/src/attribution_blueprint/webui/static/assets/THIRD_PARTY_NOTICES.txt",
+                b"notices",
             )
         for member_name, data, type_ in extra_members:
             add_tar_bytes(archive, member_name, data, type_)
@@ -1876,6 +1885,28 @@ class LicenseComplianceTest(unittest.TestCase):
                 self.assert_violation(
                     root,
                     f"Blueprint frontend asset is missing: {static_root}/logo.svg",
+                    artifacts,
+                )
+
+            with (
+                self.subTest(kind=kind, case="missing third-party notices"),
+                valid_fixture() as root,
+            ):
+                artifacts = self.overwrite_artifact(
+                    root,
+                    "nvidia-attribution-blueprint",
+                    kind,
+                    include_static=False,
+                    extra_members=(
+                        (f"{static_root}/index.html", complete_index, None),
+                        (f"{static_root}/logo.svg", b"<svg></svg>", None),
+                        *valid_assets,
+                    ),
+                )
+                self.assert_violation(
+                    root,
+                    "Blueprint frontend asset is missing: "
+                    f"{static_root}/assets/THIRD_PARTY_NOTICES.txt",
                     artifacts,
                 )
 

@@ -1241,6 +1241,8 @@ def validate_blueprint_frontend(
         references.append(
             (asset_path.suffix.lower(), f"{prefix}/{asset_path.as_posix()}")
         )
+    notices_name = f"{prefix}/assets/THIRD_PARTY_NOTICES.txt"
+    references.append((".txt", notices_name))
     for suffix in (".js", ".css"):
         if not any(reference_suffix == suffix for reference_suffix, _ in references):
             violations.append(
