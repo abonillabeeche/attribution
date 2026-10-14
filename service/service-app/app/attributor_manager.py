@@ -44,6 +44,7 @@ class AttributorManager:
         with self.lock:
             new_attributor = AttributorWrapper.new(info)
             if new_attributor.id in self.attributors:
+                new_attributor.close()  # free its DuckDB connection and spill dir now, not at GC
                 logger.warning(f"Attempted to add duplicate attributor with id: {new_attributor.id}")
                 raise DuplicateAttributorError.new(new_attributor.id).to_http_exception()
             self.attributors[new_attributor.id] = new_attributor

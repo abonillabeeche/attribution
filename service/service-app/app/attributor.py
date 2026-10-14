@@ -43,8 +43,8 @@ from app.util import HashableModel
 
 def _allow_disk_spill() -> bool:
     """Whether an attributor's per-connection DuckDB storage may spill excess
-    data (beyond memory_limit) to a local .tmp directory on disk instead of
-    raising. Defaults to false: this service is primarily deployed in
+    data (beyond memory_limit) to its own directory on disk (see
+    _duckdb_temp_root) instead of raising. Defaults to false: this service is primarily deployed in
     containers with little or no writable disk, so failing fast with a
     catchable, isolated-to-one-request error is safer than silently writing
     to whatever ephemeral storage the container happens to have. Deployments
@@ -63,6 +63,14 @@ def _duckdb_memory_limit() -> str:
     ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.
     """
     return os.environ.get("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "128MB").strip()
+
+
+def _duckdb_temp_root() -> Optional[str]:
+    """Directory in which each attributor creates its private DuckDB spill
+    directory, from ATTRIBUTOR_DUCKDB_TEMP_ROOT. Unset means the system temp
+    directory (TMPDIR or /tmp).
+    """
+    return os.environ.get("ATTRIBUTOR_DUCKDB_TEMP_ROOT", "").strip() or None
 
 
 AttributorId: TypeAlias = str
@@ -223,6 +231,7 @@ class AttributorWrapper:
             threads=1,
             memory_limit=_duckdb_memory_limit(),
             allow_disk_spill=_allow_disk_spill(),
+            temp_root=_duckdb_temp_root(),
         )
         event_stream = event_manager.create_stream(str(job_info.id))
 

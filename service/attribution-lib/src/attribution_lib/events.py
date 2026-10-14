@@ -767,6 +767,7 @@ class EventManager:
         threads: Optional[int] = None,
         memory_limit: Optional[str] = None,
         allow_disk_spill: bool = True,
+        temp_root: Optional[str] = None,
     ):
         """
         Args:
@@ -781,7 +782,10 @@ class EventManager:
                 Defaults to DuckDB's own default (~80% of system RAM) when
                 omitted.
             allow_disk_spill: whether DuckDB may spill data exceeding
-                memory_limit to a local `.tmp` directory instead of raising.
+                memory_limit to disk instead of raising. Spill files go in a
+                directory private to this instance (DuckDB's default `.tmp`
+                uses fixed file names, so instances sharing it corrupt each
+                other), removed on close.
                 Defaults to True, matching DuckDB's own default. Suitable
                 for deployments where local disk can be assumed (e.g. bare
                 metal). Set to False for deployments with no writable disk
@@ -791,14 +795,15 @@ class EventManager:
                 memory_limit (its host-RAM-based default if none is given
                 here), so this can matter even without setting memory_limit
                 explicitly.
+            temp_root: directory to create the private spill directory in.
+                Defaults to the system temp directory (`tempfile`, which
+                honors TMPDIR). Ignored when allow_disk_spill is False.
         """
         self._conn = duckdb.connect(":memory:")
         if threads is not None:
             self._conn.execute("SET threads = ?", [threads])
         if memory_limit is not None:
             self._conn.execute("SET memory_limit = ?", [memory_limit])
-        if not allow_disk_spill:
-            self._conn.execute("SET temp_directory = ''")
         self._conn.execute(SCHEMA)
         self._streams: dict[str, EventStream] = {}
         self._closed = False  # Track if already closed to prevent double-logging
@@ -846,6 +851,15 @@ class EventManager:
             self._conn, "obs_formats", "local_obs_formats", obs_formats_shared_id, obs_formats_shared_str
         )
 
+        # Last, so a setup failure above leaves no spill directory behind.
+        # abspath: before Python 3.12, mkdtemp returns a relative path for a relative temp_root.
+        self._spill_dir = (
+            os.path.abspath(tempfile.mkdtemp(prefix="attribution_lib_spill_", dir=temp_root))
+            if allow_disk_spill
+            else None
+        )
+        self._conn.execute("SET temp_directory = ?", [self._spill_dir or ""])
+
     def preload_rule_names(self, names: set[str]) -> None:
         """Pre-populate the rules lookup table and warm caches.
 
@@ -891,7 +905,7 @@ class EventManager:
 
     def __del__(self):
         """Destructor - fallback cleanup if close() not explicitly called."""
-        if not self._closed:
+        if not getattr(self, "_closed", True):  # unset when __init__ failed early
             # Try to close gracefully, but don't fail if there are issues
             try:
                 self.close()
@@ -1133,5 +1147,9 @@ class EventManager:
         if self._owned_lookup_path is not None:
             self._owned_lookup_path.unlink(missing_ok=True)
             self._owned_lookup_path = None
+
+        if self._spill_dir is not None:
+            shutil.rmtree(self._spill_dir, ignore_errors=True)
+            self._spill_dir = None
 
         self._closed = True

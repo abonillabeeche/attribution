@@ -16,6 +16,8 @@ directly (see `attribution-lib`'s `events.py`), so this is wired in as a
 plain constructor argument. No monkeypatching required.
 """
 
+import os
+
 import pytest
 
 from tests.conftest import make_up_attributor_info, post_attributor
@@ -76,3 +78,24 @@ def test_memory_limit_can_be_configured_via_env_var(app, client, monkeypatch):
     value, unit = memory_limit.split()
     assert unit == "MiB", f"expected a MiB-scale memory_limit, got {memory_limit!r}"
     assert float(value) == pytest.approx(256_000_000 / 1024**2, rel=0.01)
+
+
+def test_spill_dir_is_private_under_configured_root(app, client, monkeypatch, tmp_path):
+    """Each attributor spills into its own directory under
+    ATTRIBUTOR_DUCKDB_TEMP_ROOT: attributors sharing DuckDB's default `.tmp`
+    overwrite each other's fixed-name spill files."""
+    monkeypatch.setenv("ATTRIBUTOR_ALLOW_DISK_SPILL", "true")
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_TEMP_ROOT", str(tmp_path))
+    infos = [make_up_attributor_info(id=f"duckdb-limits-temp-{i}") for i in range(2)]
+    temp_dirs = []
+    for info in infos:
+        att_id = post_attributor(client, info)
+        conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
+        (temp_dir,) = conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        temp_dirs.append(temp_dir)
+    assert temp_dirs[0] != temp_dirs[1]
+    assert all(os.path.dirname(d) == str(tmp_path) for d in temp_dirs), temp_dirs
+
+    # A rejected duplicate must not leave its own spill dir behind.
+    assert client.post("/v1/attributor", content=infos[0].model_dump_json()).status_code == 409
+    assert sorted(str(p) for p in tmp_path.iterdir()) == sorted(temp_dirs)

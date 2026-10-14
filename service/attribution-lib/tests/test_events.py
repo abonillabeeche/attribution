@@ -89,9 +89,7 @@ class TestContentAddressedLookupIds:
         env = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
         outputs = set()
         for _ in range(3):
-            result = subprocess.run(
-                [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env
-            )
+            result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env)
             outputs.add(result.stdout.strip())
         assert len(outputs) == 1, f"id assignment differed across process runs: {outputs}"
 
@@ -278,6 +276,51 @@ class TestConnectionTuning:
         (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
         assert temp_dir == ""
         mgr.close()
+
+
+class TestPrivateSpillDirectories:
+    """DuckDB's default temp_directory is a cwd-relative `.tmp` with fixed file
+    names, so two EventManagers in one process that spill at once overwrite
+    each other's spill file (short reads, then a segfault). Each one must spill
+    into its own directory and remove it on close."""
+
+    def test_concurrent_spills_use_private_dirs_under_a_shared_root(self, tmp_path, monkeypatch):
+        import tempfile
+        import threading
+        from pathlib import Path
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # shared default root
+        mgrs = [EventManager(RuleLoader().build(), threads=1, memory_limit="16MB") for _ in range(2)]
+        dirs = [m._conn.execute("SELECT current_setting('temp_directory')").fetchone()[0] for m in mgrs]
+        assert dirs[0] != dirs[1], f"spill directories are shared: {dirs}"
+        assert all(Path(d).parent == tmp_path for d in dirs), dirs
+
+        errors = []
+
+        def spill(conn):
+            try:
+                conn.execute("CREATE TABLE big AS SELECT i, repeat(md5(i::VARCHAR), 12) AS s FROM range(200000) t(i)")
+                for _ in range(3):
+                    (total,) = conn.execute("SELECT sum(length(s)) FROM big WHERE s LIKE '%a%'").fetchone()
+                    assert total == 67_175_424  # 174,936 rows x 384 chars; a corrupt spill read changes it
+                (spilled,) = conn.execute("SELECT count(*) FROM duckdb_temporary_files()").fetchone()
+                assert spilled > 0, "workload did not spill"
+            except Exception as e:  # collect: an assert in a thread would be lost
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=spill, args=(m._conn,)) for m in mgrs]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        for m in mgrs:
+            m.close()
+        assert errors == []
+        assert not any(Path(d).exists() for d in dirs), "spill directories left behind after close"
+
+    def test_failed_construction_leaves_no_spill_dir(self, tmp_path):
+        with pytest.raises(Exception, match="memory"):
+            EventManager(RuleLoader().build(), memory_limit="not-a-size", temp_root=str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestOutOfMemoryHandling:
