@@ -99,3 +99,99 @@ def test_spill_dir_is_private_under_configured_root(app, client, monkeypatch, tm
     # A rejected duplicate must not leave its own spill dir behind.
     assert client.post("/v1/attributor", content=infos[0].model_dump_json()).status_code == 409
     assert sorted(str(p) for p in tmp_path.iterdir()) == sorted(temp_dirs)
+
+
+@pytest.mark.parametrize(("enabled", "limit"), [(True, "64MiB"), (True, ""), (True, "   "), (False, "invalid")])
+def test_spill_capacity_setting(app, client, monkeypatch, tmp_path, enabled, limit):
+    monkeypatch.setenv("ATTRIBUTOR_ALLOW_DISK_SPILL", str(enabled).lower())
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_TEMP_ROOT", str(tmp_path))
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", limit)
+    att_id = post_attributor(client, make_up_attributor_info(id="spill-capacity"))
+    conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
+    (directory,) = conn.execute("SELECT current_setting('temp_directory')").fetchone()
+    if enabled:
+        assert os.path.dirname(directory) == str(tmp_path)
+        if limit.strip():
+            assert conn.execute("SELECT current_setting('max_temp_directory_size')").fetchone()[0] == "64.0 MiB"
+    else:
+        assert directory == ""
+        assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", ""),
+        ("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "   "),
+        ("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "128"),
+        ("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "1Gi"),
+    ],
+)
+def test_invalid_size_fails_creation_without_registering_or_leaking(monkeypatch, tmp_path, version, variable, value):
+    from fastapi.testclient import TestClient
+
+    from app.factory import create_app
+
+    monkeypatch.setenv("ATTRIBUTOR_ALLOW_DISK_SPILL", "true")
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_TEMP_ROOT", str(tmp_path))
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        # Keep the request-time diagnostic if configuration changes after boot.
+        monkeypatch.setenv(variable, value)
+        response = client.post(
+            f"/{version}/attributor",
+            content=make_up_attributor_info(version=version, id="invalid-size").model_dump_json(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": (
+                f"Invalid server setting {variable}. Use a DuckDB size such as 128MB or 1GiB. "
+                "Correct the service environment and restart the service."
+            )
+        }
+        assert app.state.aim.attributors == {}
+        assert list(tmp_path.iterdir()) == []
+
+
+def test_unrelated_initialization_error_stays_generic(client, monkeypatch, version):
+    from unittest.mock import Mock
+
+    from app.attributor import AttributorWrapper
+
+    monkeypatch.setattr(AttributorWrapper, "initialize", Mock(side_effect=RuntimeError("internal details")))
+    response = client.post(f"/{version}/attributor", content=make_up_attributor_info(version=version).model_dump_json())
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal Server Error"}
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "spill", "invalid"),
+    [
+        ("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "", False, True),
+        ("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "128", True, True),
+        ("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "1Gi", True, True),
+        ("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "1Gi", False, False),
+        ("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "64MiB", True, False),
+        ("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "", True, False),
+    ],
+)
+def test_storage_configuration_checked_before_startup(monkeypatch, tmp_path, variable, value, spill, invalid):
+    from fastapi.testclient import TestClient
+
+    from app.factory import create_app
+
+    monkeypatch.setenv(variable, value)
+    monkeypatch.setenv("ATTRIBUTOR_ALLOW_DISK_SPILL", str(spill).lower())
+    monkeypatch.setenv("ATTRIBUTOR_DUCKDB_TEMP_ROOT", str(tmp_path))
+    app = create_app()
+    if invalid:
+        with pytest.raises(RuntimeError, match=variable), TestClient(app):
+            pytest.fail("Invalid configuration must not finish startup")
+        assert not hasattr(app.state, "cleanup_task")
+    else:
+        with TestClient(app) as client:
+            assert client.get("/v2/healthz").status_code == 200
+            assert not list(tmp_path.iterdir())  # The startup probe is already closed.
+    assert not app.state.aim.attributors
+    assert not list(tmp_path.iterdir())

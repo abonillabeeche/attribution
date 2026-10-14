@@ -42,6 +42,11 @@ A supplied cancellation provides the record's cancellation symptom, regardless o
 
 Attribution stores the bulk of its state in a relational database. The current implementation uses an in-memory database with lookup tables and a shared `events` table. Code accesses the rows for one job through an `EventStream`; throughout this document, **event stream** refers to that per-job interface and **`events` table** refers specifically to its database storage.
 
+`EventManager.close()` flushes buffered events before releasing its connection
+and private spill files. Use `close(flush=False)` when discarding the data, as
+the service does on retirement. Destructor cleanup also discards buffers;
+call `close()` explicitly when flushing is required.
+
 The `events` table is the only table that grows with job data:
 
 <div align="center">

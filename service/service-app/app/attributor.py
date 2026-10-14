@@ -4,6 +4,7 @@
 import os
 import threading
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -19,6 +20,7 @@ from attribution_lib.events import EventManager
 from attribution_lib.exceptions import (
     DuplicateObservationError as LibDuplicateObservationError,
     EventStorageOutOfMemoryError as LibEventStorageOutOfMemoryError,
+    InvalidEventStorageSizeError,
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
 from attribution_lib.ingest_summary import IngestSummary
@@ -60,7 +62,8 @@ def _duckdb_memory_limit() -> str:
     `"128MB"`). Each attributor's dataset is one job's worth of events and
     always tiny, so 128MB is a generous default ceiling, not a tuned value
     every deployment should be stuck with -- override it with
-    ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.
+    ATTRIBUTOR_DUCKDB_MEMORY_LIMIT. Values use DuckDB size syntax (MB is
+    decimal, MiB is binary); blank or invalid values fail service startup.
     """
     return os.environ.get("ATTRIBUTOR_DUCKDB_MEMORY_LIMIT", "128MB").strip()
 
@@ -71,6 +74,37 @@ def _duckdb_temp_root() -> Optional[str]:
     directory (TMPDIR or /tmp).
     """
     return os.environ.get("ATTRIBUTOR_DUCKDB_TEMP_ROOT", "").strip() or None
+
+
+def _duckdb_max_temp_directory_size() -> Optional[str]:
+    """Per-attributor DuckDB size string (e.g. "1GB" or "1GiB").
+
+    Unset or blank preserves DuckDB's default. Invalid values fail startup
+    when spill is enabled; the setting is ignored when disabled.
+    """
+    return os.environ.get("ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "").strip() or None
+
+
+def _event_storage_settings() -> dict[str, Any]:
+    return dict(
+        threads=1,
+        memory_limit=_duckdb_memory_limit(),
+        allow_disk_spill=_allow_disk_spill(),
+        temp_root=_duckdb_temp_root(),
+        max_temp_directory_size=_duckdb_max_temp_directory_size(),
+    )
+
+
+def validate_event_storage_configuration() -> None:
+    """Exercise the real initialization path before accepting requests."""
+    try:
+        with EventManager(attribution_lib.get_rules_engine(), **_event_storage_settings()):
+            pass
+    except InvalidEventStorageSizeError as error:
+        raise RuntimeError(
+            f"Invalid server setting ATTRIBUTOR_DUCKDB_{error.setting.upper()}. "
+            "Use a DuckDB size such as 128MB or 1GiB; correct the environment and restart."
+        ) from error
 
 
 AttributorId: TypeAlias = str
@@ -219,36 +253,38 @@ class AttributorWrapper:
     last_access_time: datetime
 
     def __init__(self, info: AttributorInput):
-        job_info = info.to_lib_jobinfo()
+        # This phase acquires no external resources. The manager can own the
+        # wrapper, including its lock and EventManager, before setup can fail.
         self.id = str(hash(info))
-
-        rules_engine = attribution_lib.get_rules_engine()
-        # Each attributor's dataset is one job's worth of events and never
-        # benefits from intra-query parallelism, so cap DuckDB's per-connection
-        # host-sized defaults (threads=cpu_count, memory_limit=~80% of RAM).
-        event_manager = EventManager(
-            rules_engine=rules_engine,
-            threads=1,
-            memory_limit=_duckdb_memory_limit(),
-            allow_disk_spill=_allow_disk_spill(),
-            temp_root=_duckdb_temp_root(),
-        )
-        event_stream = event_manager.create_stream(str(job_info.id))
-
-        self.attributor = Attributor.new(event_stream, job_info)
-        self._event_manager = event_manager
-        self._checkpoint_backend = MemoryCheckpointBackend()
-        self.parameters = info.parameters
         self.lock = threading.Lock()
         self.last_access_time = datetime.now()
+        self._closed = True
+        self._event_manager = EventManager.unopened()
+
+    def initialize(self, info: AttributorInput) -> None:
+        """Initialize under an owner's cleanup scope; publish only on success."""
+        job_info = info.to_lib_jobinfo()
+        # Each dataset is one job: avoid host-sized per-connection defaults.
+        self._event_manager.initialize(
+            rules_engine=attribution_lib.get_rules_engine(),
+            **_event_storage_settings(),
+        )
+        event_stream = self._event_manager.create_stream(str(job_info.id))
+        self.attributor = Attributor.new(event_stream, job_info)
+        self._checkpoint_backend = MemoryCheckpointBackend()
+        self.parameters = info.parameters
         self._closed = False
         logger.info(f"Created AttributorWrapper with id: {self.id} for workload: {job_info.id}")
 
     @classmethod
     def new(cls, info: AttributorInput) -> "AttributorWrapper":
-        """Create a new attributor."""
-        logger.debug(f"Creating new AttributorWrapper (hash={hash(info)})")
-        return cls(info)
+        """Create a standalone wrapper, releasing partial setup on failure."""
+        wrapper = cls(info)
+        with ExitStack() as cleanup:
+            cleanup.callback(wrapper._close_after_error)
+            wrapper.initialize(info)
+            cleanup.pop_all()
+        return wrapper
 
     def ingest(self, observation: ObservationInput) -> ObservationId:
         """Ingest observation into this instance and return ingest_id. Raise DuplicateObservationError if we have seen this already"""
@@ -320,7 +356,15 @@ class AttributorWrapper:
                 logger.error(f"Attribution failed for attributor {self.id}: {str(e)}")
                 raise
 
+    def _close_after_error(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            logger.exception(f"Failed to close attributor {self.id} while handling a setup error")
+
     def close(self) -> None:
         """Release the DuckDB connection now; the EventStream/EventManager cycle would leave it to the GC."""
         self._closed = True  # before close(): a failed close must still turn waiting requests away
-        self._event_manager.close()
+        # No request can use this data again; flushing can only delay teardown
+        # or fail repeatedly under the same resource limit that retired it.
+        self._event_manager.close(flush=False)

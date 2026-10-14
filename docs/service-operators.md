@@ -72,6 +72,37 @@ SQLite schema when the database file does not exist.
 When publishing ports with Docker, map the host port to the same container port
 you set through the environment variable.
 
+### DuckDB Event Storage
+
+These settings apply per attributor, so allow for concurrent attributors when sizing storage:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ATTRIBUTOR_ALLOW_DISK_SPILL` | `false` | Set to `true` to enable spilling to disk |
+| `ATTRIBUTOR_DUCKDB_MEMORY_LIMIT` | `128MB` | DuckDB memory limit |
+| `ATTRIBUTOR_DUCKDB_TEMP_ROOT` | System temporary directory | Writable spill root; each attributor gets a private subdirectory |
+| `ATTRIBUTOR_DUCKDB_MAX_TEMP_DIRECTORY_SIZE` | DuckDB default | Maximum spill storage, e.g. `1GB` |
+
+Blank roots and spill limits use their defaults; both are ignored when spilling
+is disabled. The system temporary directory honors `TMPDIR`. Private directories
+are removed on close; failed cleanup is retained for retry while the service runs.
+Forced termination can leave orphaned directories.
+
+Sizes take a number and unit: `128MB`, `128MiB`, `1.5GB`, or `128 MB`.
+Units are case-insensitive: `B`, `KB`, `MB`, `GB`, `TB` use powers of 1000;
+`KiB`, `MiB`, `GiB`, `TiB` use powers of 1024. Negative values mean unlimited.
+A blank memory limit is invalid.
+
+The service checks these settings with DuckDB during startup. An invalid memory
+limit, or an invalid spill capacity when spilling is enabled, fails startup
+before the service accepts requests. The startup error names the environment
+variable. Correct it and restart; for example, use `1GiB` instead of `1Gi`.
+Spill capacity remains ignored when spilling is disabled.
+
+Attributor creation also validates the settings. If configuration changes after
+startup, an invalid size returns HTTP 500 with a `detail` naming the server
+setting and giving valid examples; no attributor is registered.
+
 ## Health Checks
 
 Check the service:
