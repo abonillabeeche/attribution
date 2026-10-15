@@ -1718,6 +1718,38 @@ outcome_symptom(
     doc="nvrx-unhealthy-node",
 )
 
+# The check or action name follows these two prefixes, e.g.
+# "NVRx node health check failed: example_check".
+outcome_symptom(
+    "NVRx node health check failed",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-node-health-check-failed",
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx GPU recovery action",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-gpu-recovery-action",
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx step section timeout",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-step-section-timeout",
+)
+
+outcome_symptom(
+    "NVRx no progress across restarts",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-no-progress-across-restarts",
+)
+
 outcome_symptom(
     "PyTorch NCCL watchdog",
     outcome="Fail MultiCategory",
@@ -2576,8 +2608,6 @@ known_symptom("IB Error-5 (IBV_WC_WR_FLUSH_ERR)")
 known_symptom("IB firmware outdated")
 
 known_symptom("NV_ERR_INVALID_STATE nv_gpu_ops.c")
-
-known_symptom("NVRx step section timeout")
 
 known_symptom("NVRx GPU memory reclamation timeout")
 

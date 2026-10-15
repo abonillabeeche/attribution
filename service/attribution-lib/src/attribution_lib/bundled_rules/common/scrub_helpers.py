@@ -43,6 +43,8 @@ NON_NODE_ATTRIBUTABLE_SYMPTOM_MARKERS = (
     "PyTorch NCCL watchdog",
     "pushrecv",
     "NVRx detected failure",
+    "NVRx step section timeout",
+    "NVRx no progress across restarts",
 )
 
 _NON_NODE_ATTRIBUTABLE_RE = re.compile("|".join(re.escape(m) for m in NON_NODE_ATTRIBUTABLE_SYMPTOM_MARKERS))

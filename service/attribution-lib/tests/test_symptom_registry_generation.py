@@ -427,6 +427,27 @@ def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
+@pytest.mark.parametrize(
+    ("symptom", "declared"),
+    [
+        ("NVRx node health check failed: example_check", "NVRx node health check failed"),
+        ("NVRx GPU recovery action: Operating at reduced capacity", "NVRx GPU recovery action"),
+        ("NVRx step section timeout", "NVRx step section timeout"),
+        ("NVRx no progress across restarts", "NVRx no progress across restarts"),
+    ],
+)
+def test_nvrx_launcher_symptoms_map_to_fail_multicategory(symptom, declared):
+    """Classify NVRx launcher symptoms like an unhealthy NVRx node, without asserting a root cause."""
+    registry = _load_committed_registry()
+
+    assert registry.resolve_symptom(symptom) == declared
+    match = registry.outcome_for([symptom])
+    assert match is not None
+    assert match.matched_prefix == declared
+    assert match.outcome == "Fail MultiCategory"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
+
+
 def test_outcome_generation_preserves_within_tier_insertion_order():
     declarations = [
         SymptomDeclaration(
@@ -623,6 +644,8 @@ def test_generated_registry_resolves_all_declared_fallback_families():
         "EFA Error-7 something": "EFA Error-",
         "bad kernel stack frame pointer in some_dynamic_tool": "bad kernel stack frame pointer",
         "Call to ibv_modify_qp failed: eno 9999": "Call to ibv_modify_qp failed",
+        "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
+        "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
     }
     # Guard against drift: the cases above must exercise every declared fallback
     # family, so a newly declared fallback_prefix forces a new case here.
