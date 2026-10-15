@@ -557,6 +557,25 @@ class TestScrubBadNodes:
         _run_scrub(stream, job_info, bad_nodes)
         assert "DataLoader Exception" in bad_nodes["node01"]
 
+    def test_job_level_cascade_is_scrubbed_like_a_node(self, stream, obs_ctx, job_info):
+        """An unlabelled APPLOG line of a multi-node job lands in the job-level set.
+
+        The same cascade rules must apply there: a DataLoader crash under a node
+        failure is discarded whether or not its line named a node.
+        """
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node failure reported by slurm"]})
+        bad_nodes.job_level.add(SourceSet("DataLoader Exception").add(_make_source(obs_ctx)))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "Node failure reported by slurm" in bad_nodes["node01"]
+        assert "DataLoader Exception" not in bad_nodes.job_level
+
+    def test_job_level_symptom_preserved_without_its_cascade_root(self, stream, obs_ctx, job_info):
+        """A job-level symptom with no discarding root on any node survives the scrub."""
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.job_level.add(SourceSet("DataLoader Exception").add(_make_source(obs_ctx)))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "DataLoader Exception" in bad_nodes.job_level
+
     def test_false_positive_xid64_discards_cascaded(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(
             obs_ctx,
@@ -722,6 +741,40 @@ class TestIBSymptomCleanup:
         outcome = calculate_outcome(symptoms).value()
         assert outcome.outcome == "Fail InfraSW"
         assert outcome.root_cause_symptom == lifecycle
+
+    def test_job_level_root_cause_discards_ib_errors(self, stream, obs_ctx, job_info):
+        """A root cause from an unlabelled applog line (job-level set) still discards cascaded IB errors.
+
+        Mirrors test_non_ib_root_cause_discards_ib_errors with the root cause in the
+        job-level set instead of on a node: the cascade leaves the job-level symptoms
+        and the root cause's own group, exactly as it does for a per-node root cause.
+        """
+        ib12 = "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "cudaErrorECCUncorrectable", ib12, "EFA Error-107")
+        bad_nodes = JobNodeAttributions()
+        for symptom in ("cudaErrorECCUncorrectable", ib12, "EFA Error-107"):
+            bad_nodes.job_level.add(SourceSet(symptom).add(_make_source(obs_ctx)))
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert "cudaErrorECCUncorrectable" in symptoms
+        assert ib12 not in symptoms
+        assert "EFA Error-107" not in symptoms
+        assert "cudaErrorECCUncorrectable" in bad_nodes.job_level
+        assert ib12 not in bad_nodes.job_level
+        assert "EFA Error-107" not in bad_nodes.job_level
+
+    def test_ibv_modify_qp_removes_network_cascade_from_job_level(self, stream, obs_ctx, job_info):
+        """The network-cascade discard reaches job-level symptoms too."""
+        trigger = "Call to ibv_modify_qp failed"
+        symptoms = _make_symptoms(obs_ctx, trigger, "PyTorch NCCL watchdog")
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [trigger]})
+        bad_nodes.job_level.add(SourceSet("PyTorch NCCL watchdog").add(_make_source(obs_ctx)))
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert "PyTorch NCCL watchdog" not in symptoms
+        assert "PyTorch NCCL watchdog" not in bad_nodes.job_level
 
     def test_non_ib_root_cause_cleans_all_nodes(self, stream, obs_ctx, job_info):
         """Per-node root cause cleanup iterates ALL nodes, not just the first match."""
@@ -1210,6 +1263,25 @@ class TestKernelCrashIbCascadeCleanup:
 
         assert ib5 in symptoms
         assert ib5 in bad_nodes["node02"].attributions
+
+    def test_job_level_ib_error_12_is_preserved_under_kernel_crash(self, stream, obs_ctx, two_node_job):
+        """Unlabelled IB Error-12 (job-level set) has no known origin, so it is kept like crashed-node evidence.
+
+        The labelled peer report is still discarded. The preserved job-level copy
+        keeps the symptom in the job-level set, rather than leaving ``job_level``
+        bad while the verdict drops it.
+        """
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib12]})
+        bad_nodes.job_level.add(SourceSet(ib12).add(_make_source(obs_ctx)))
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "kernel panic" in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+        assert ib12 in bad_nodes.job_level
+        assert ib12 in symptoms
 
 
 class TestSlurmStateSymptoms:

@@ -35,6 +35,8 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.observation.processing import BodyFallbacks, EntryProtocol, EntrySourceBase
 from attribution_lib.prefilters import MetricSpec, PreFilterCallable, PreFilterSpec
+from attribution_lib.resources.node import Node as NodeResource
+from attribution_lib.resources.resource_set import ResourceSetClass
 from attribution_lib.rule_types.bases import (
     _RULE_TYPE_REGISTRY,
     LoaderBase,
@@ -596,6 +598,16 @@ def process_observation_source(
             except UnknownResourceError as e:
                 log_ignored_node_line(e, entry, job_info, entry.context().source)
                 att_src_base = entry.attribution_source_base(None)
+            if att_src_base.resources == ResourceSetClass.ANY and len(job_info.nodes) == 1:
+                # Unlabelled output (no ``srun --label`` prefix) of a single-node
+                # job can only have come from its sole allocated node. Without a
+                # node, symptoms are silently dropped when node attributions are
+                # built, so infer it as SchedulerNodeFailure does for NODE_FAIL.
+                # This covers both a prefix that is not a job node (raised above)
+                # and a line that parses to neither node nor rank (resolved to ANY).
+                att_src_base = att_src_base.derived(
+                    resources=ResourceSetClass([NodeResource(hostname=job_info.nodes[0])])
+                )
         else:
             try:
                 node = entry.node(job_info)

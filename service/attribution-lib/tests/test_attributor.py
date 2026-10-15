@@ -929,3 +929,161 @@ def test_prefiltered_context_keeps_excluded_extractor_line_in_batch(prefilter_en
     dropped = _count_events_after_applog_batch(prefilter_env, job_info, line, pre_filtered=False)
     assert dropped == 0
     assert kept >= 1
+
+
+def _job_info_on(hostlist: str):
+    tz = ZoneInfo("America/Los_Angeles")
+    nodes = parse_hostlist(hostlist)
+    return (
+        JobInfoBuilder(
+            id="test_job_unlabelled",
+            node_to_ranks=make_node_to_ranks(nodes, 1),
+            framework="pytorch",
+            type="batch",
+            state="FAILED",
+            cluster="test_cluster",
+            job_start_time=datetime(2024, 1, 1, 12, 0, tzinfo=tz),
+            source_name="artifical slurm",
+            timezone=tz,
+        )
+        .srun_cmd("srun ./test_app")
+        .exit_code_signal(1)
+        .slurm_node_infos({node: {"state": "idle"} for node in nodes})
+        .job_end_time(datetime(2024, 1, 1, 13, 0, tzinfo=tz))
+        .build()
+    )
+
+
+def _attribute_applog(request, event_manager, job_info, lines):
+    attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    backend = MemoryCheckpointBackend()
+    attributor.ingest_batch([make_inbound_observation(ObservationSource.APPLOG, lines=lines)], backend)
+    return attributor.attribute(backend)
+
+
+# Output captured without ``srun --label`` carries no node or rank prefix. The text
+# before the first colon (``OSError``, ``RuntimeError``) is not a job node.
+UNLABELLED_IO_ERROR = ["OSError: [Errno 5] Input/output error"]
+UNLABELLED_ECC_TRACEBACK = [
+    "Traceback (most recent call last):",
+    '  File "/workspace/train.py", line 42, in train',
+    "RuntimeError: CUDA error: uncorrectable ECC error encountered",
+]
+
+
+@pytest.mark.parametrize(
+    ("lines", "symptom"),
+    [(UNLABELLED_IO_ERROR, "IO error"), (UNLABELLED_ECC_TRACEBACK, "cudaErrorECCUncorrectable")],
+)
+def test_unlabelled_applog_line_on_single_node_job_blames_sole_node(request, event_manager, lines, symptom):
+    """Unlabelled output of a single-node job can only come from its sole node."""
+    result = _attribute_applog(request, event_manager, _job_info_on("node1"), lines)
+
+    assert symptom in result.symptoms
+    assert symptom in result.bad_nodes_attr.my_bad_nodes["node1"].symptoms()
+
+
+@pytest.mark.parametrize(
+    ("lines", "symptom"),
+    [(UNLABELLED_IO_ERROR, "IO error"), (UNLABELLED_ECC_TRACEBACK, "cudaErrorECCUncorrectable")],
+)
+def test_unlabelled_applog_line_on_multi_node_job_is_job_level(request, event_manager, lines, symptom):
+    """Unlabelled output of a multi-node job keeps its symptom without blaming a node."""
+    result = _attribute_applog(request, event_manager, _job_info_on("node[1-3]"), lines)
+
+    assert symptom in result.symptoms
+    assert symptom in result.bad_nodes_attr.my_bad_nodes.job_level
+    assert not any(symptom in group.symptoms() for _, group in result.bad_nodes_attr.my_bad_nodes.items())
+
+
+def test_malformed_rank_prefix_on_single_node_job_blames_sole_node(request, event_manager):
+    """A line that parses to neither node nor rank resolves to ANY, not an error; the sole-node pin must still apply."""
+    result = _attribute_applog(
+        request, event_manager, _job_info_on("node1"), ["[rankX]: OSError: [Errno 5] Input/output error"]
+    )
+
+    assert "IO error" in result.bad_nodes_attr.my_bad_nodes["node1"].symptoms()
+    assert "IO error" not in result.bad_nodes_attr.my_bad_nodes.job_level
+
+
+UNLABELLED_ECC_LINE = "RuntimeError: CUDA error: uncorrectable ECC error encountered"
+# NCCL's ``hostname:pid:tid [cudaDev]`` prefix names the reporting node.
+IB_RETRY_EXCEEDED_ON_NODE3 = (
+    "node3:1:2 [0] transport/net_ib.cc:2359 NCCL WARN NET/IB: Got completion from peer 192.0.2.10<10904> "
+    "with status=12 opcode=129 len=374784 vendor err 129 (Recv)"
+)
+
+
+@pytest.mark.parametrize(
+    "ecc_line", [f"node2: {UNLABELLED_ECC_LINE}", UNLABELLED_ECC_LINE], ids=["labelled", "unlabelled"]
+)
+def test_root_cause_discards_ib_cascade_labelled_or_not(request, event_manager, ecc_line):
+    """A non-IB root cause discards a peer's IB cascade whether or not its line names a node.
+
+    IBSymptomCleanup finds root causes by scanning attribution groups; the job-level
+    set must count as one, or an unlabelled ECC loses to the IB error it caused.
+    """
+    result = _attribute_applog(
+        request, event_manager, _job_info_on("node[1-3]"), [ecc_line, IB_RETRY_EXCEEDED_ON_NODE3]
+    )
+
+    assert sorted(result.symptoms.symptoms()) == ["cudaErrorECCUncorrectable"]
+    assert result.outcome_attr.value().outcome == "Fail InfraSW"
+
+
+def _node_fail_job_on(hostlist: str, failed_node: str):
+    tz = ZoneInfo("America/Los_Angeles")
+    nodes = parse_hostlist(hostlist)
+    return (
+        JobInfoBuilder(
+            id="test_job_unlabelled_node_fail",
+            node_to_ranks=make_node_to_ranks(nodes, 1),
+            framework="pytorch",
+            type="batch",
+            state="NODE_FAIL",
+            cluster="test_cluster",
+            job_start_time=datetime(2024, 1, 1, 12, 0, tzinfo=tz),
+            source_name="artifical slurm",
+            timezone=tz,
+        )
+        .srun_cmd("srun ./test_app")
+        .exit_code_signal(1)
+        .failed_node(failed_node)
+        .slurm_node_infos({node: {"state": "idle"} for node in nodes})
+        .job_end_time(datetime(2024, 1, 1, 13, 0, tzinfo=tz))
+        .build()
+    )
+
+
+DATALOADER_KILLED = (
+    "RuntimeError: DataLoader worker (pid 7) is killed by signal: Killed. Error: DataLoader worker exited"
+)
+
+
+@pytest.mark.parametrize("line", [f"node1: {DATALOADER_KILLED}", DATALOADER_KILLED], ids=["labelled", "unlabelled"])
+def test_node_failure_scrubs_dataloader_cascade_labelled_or_not(request, event_manager, line):
+    """A peer's DataLoader crash under NODE_FAIL is a cascade whether or not its line names a node.
+
+    The scrub rules drop it from every node; unlabelled output of a multi-node job
+    lands in the job-level set and must be scrubbed the same way.
+    """
+    result = _attribute_applog(request, event_manager, _node_fail_job_on("node[1-3]", "node2"), [line])
+
+    assert sorted(result.symptoms.symptoms()) == ["Node failure reported by slurm"]
+    assert "DataLoader Exception" not in result.bad_nodes_attr.my_bad_nodes.job_level
+
+
+def test_job_level_symptoms_survive_merge_and_demote_on_clear():
+    """`update` carries job-level symptoms; `clear` demotes them with the per-node ones."""
+    from attribution_lib.attr_types import JobNodeAttributions
+
+    job_info = _job_info_on("node[1-3]")
+    left, right = JobNodeAttributions(), JobNodeAttributions()
+    right.job_level.add(job_info.source_value("IO error", "unlabelled line", "test"))
+
+    left.update(right)
+    assert "IO error" in left.job_level
+
+    left.clear()
+    assert "IO error" not in left.job_level
+    assert not left.job_level.is_void()

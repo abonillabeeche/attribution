@@ -471,7 +471,7 @@ def _remove_network_cascade(symptoms, my_bad_nodes) -> None:
     """Discard cascaded network symptoms from both symptoms and per-node attributions."""
     for symptom in _NETWORK_CASCADE_SYMPTOMS:
         symptoms.discard(symptom)
-    for _node, errors in my_bad_nodes.items():
+    for _node, errors in my_bad_nodes.symptom_groups():
         for symptom in _NETWORK_CASCADE_SYMPTOMS:
             errors.discard(symptom)
 
@@ -481,7 +481,7 @@ def _remove_connection_closed_cascade(symptoms, my_bad_nodes) -> None:
     symptoms.discard("Connection closed")
     if my_bad_nodes is None:
         return
-    for _node, errors in my_bad_nodes.items():
+    for _node, errors in my_bad_nodes.symptom_groups():
         errors.discard("Connection closed")
 
 
@@ -625,68 +625,74 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
     # job carries a node-failure symptom.
     node_failure_present = any(s in my_bad_nodes[n] for n in my_bad_nodes for s in _NODE_FAILURE_SYMPTOMS)
 
-    for k in list(my_bad_nodes):
-        if "Node not responding" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+    # Job-level symptoms come from output that names no node (unlabelled APPLOG
+    # lines of a multi-node job). Scrub them with the same rules so a cascade the
+    # rules discard on a node is not kept just because its line had no prefix.
+    for k, group in my_bad_nodes.symptom_groups():
+        if "Node not responding" in group:
+            group.discard("Node unexpectedly rebooted")
 
-        if "System is powering down" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
-            my_bad_nodes[k].discard("Stopping nvidia-imex.service")
+        if "System is powering down" in group:
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
+            group.discard("Stopping nvidia-imex.service")
 
         if (
-            any("XID-" in error for error in my_bad_nodes[k].symptoms())
-            or "NMI watchdog hard LOCKUP" in my_bad_nodes[k]
-            or "general protection fault" in my_bad_nodes[k]
-            or "kernel invalid memory access" in my_bad_nodes[k]
-            or "Failed to collect nvlink status info" in my_bad_nodes[k]
+            any("XID-" in error for error in group.symptoms())
+            or "NMI watchdog hard LOCKUP" in group
+            or "general protection fault" in group
+            or "kernel invalid memory access" in group
+            or "Failed to collect nvlink status info" in group
         ):
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
 
-        if any("bad kernel stack frame pointer" in error for error in my_bad_nodes[k].symptoms()):
-            my_bad_nodes[k].discard("NMI watchdog hard LOCKUP")
-            my_bad_nodes[k].discard("general protection fault")
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+        if any("bad kernel stack frame pointer" in error for error in group.symptoms()):
+            group.discard("NMI watchdog hard LOCKUP")
+            group.discard("general protection fault")
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
 
         # An OOM kill of a system service (slurmd, slurmstepd, munged, etc.) is
         # the root cause; the node going silent or SLURM declaring NODE_FAIL
         # are downstream consequences.
-        if "OOM kill of system service" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node failure reported by slurm")
+        if "OOM kill of system service" in group:
+            group.discard("Node not responding")
+            group.discard("Node failure reported by slurm")
 
         # See cross-node precompute above — discard from every node, not just
         # the one where dataloader crashed.
         if node_failure_present:
-            my_bad_nodes[k].discard("DataLoader Exception")
+            group.discard("DataLoader Exception")
 
-        if "FalsePositive-XID-64" in my_bad_nodes[k] or "DriverBug-XID-64" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("XID-64-INFOROM_DRAM_RETIREMENT_FAILURE")
-            my_bad_nodes[k].discard("XID-92-EXCESSIVE_SBE_INTERRUPTS")
-            my_bad_nodes[k].discard("PyTorch NCCL watchdog")
+        if "FalsePositive-XID-64" in group or "DriverBug-XID-64" in group:
+            group.discard("XID-64-INFOROM_DRAM_RETIREMENT_FAILURE")
+            group.discard("XID-92-EXCESSIVE_SBE_INTERRUPTS")
+            group.discard("PyTorch NCCL watchdog")
 
-        if "DriverBug-XID-64" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("FalsePositive-XID-64")
+        if "DriverBug-XID-64" in group:
+            group.discard("FalsePositive-XID-64")
 
-        if "FalsePositive-XID-63" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("XID-63-INFOROM_DRAM_RETIREMENT_EVENT")
+        if "FalsePositive-XID-63" in group:
+            group.discard("XID-63-INFOROM_DRAM_RETIREMENT_EVENT")
 
         # Both an authentication failure and a subsequent success means
         # normal behavior — not a job interruption event.
-        if "EAP authentication recovery" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("EAP authentication failed")
-            my_bad_nodes.purge_from_node(k, "EAP authentication recovery")
-            if k not in my_bad_nodes:
-                continue
+        if "EAP authentication recovery" in group:
+            group.discard("EAP authentication failed")
+            if k is None:
+                group.discard("EAP authentication recovery", purge=True)
+            else:
+                my_bad_nodes.purge_from_node(k, "EAP authentication recovery")
+                if k not in my_bad_nodes:
+                    continue
 
-        if "Unexpected error from cudaGetDeviceCount()" in my_bad_nodes[k] and job_info.num_gpus == 0:
-            my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+        if "Unexpected error from cudaGetDeviceCount()" in group and job_info.num_gpus == 0:
+            group.discard("Unexpected error from cudaGetDeviceCount()")
 
         # Error 803 is the specific cause behind the generic device-count failure.
-        if "cudaErrorSystemDriverMismatch" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+        if "cudaErrorSystemDriverMismatch" in group:
+            group.discard("Unexpected error from cudaGetDeviceCount()")
 
 
 @refiner_def(
@@ -1086,8 +1092,8 @@ def process_completes_cleanup(context: RefinerContext):
         # attributions, so same-node DAG cascade pruning cannot demote this CSP
         # symptom there.
         if my_bad_nodes is not None:
-            for _node, node_group in my_bad_nodes.items():
-                node_group.discard(_CSP_TENANT_REPORTED)
+            for _node, group in my_bad_nodes.symptom_groups():
+                group.discard(_CSP_TENANT_REPORTED)
 
 
 @refiner_def(
@@ -1121,9 +1127,9 @@ def csp_event_precedence_and_cascades(context: RefinerContext):
     if _CSP_TENANT_REPORTED in symptoms and _CSP_TERMINATED in symptoms:
         symptoms.discard(_CSP_TERMINATED)
         if my_bad_nodes is not None:
-            for _node, node_group in my_bad_nodes.items():
-                if _CSP_TENANT_REPORTED in node_group and _CSP_TERMINATED in node_group:
-                    node_group.discard(_CSP_TERMINATED)
+            for _node, group in my_bad_nodes.symptom_groups():
+                if _CSP_TENANT_REPORTED in group and _CSP_TERMINATED in group:
+                    group.discard(_CSP_TERMINATED)
 
     if not any(symptom.startswith(_CSP_EVENT_PREFIX) for symptom in symptoms.symptoms()):
         return
@@ -1134,13 +1140,13 @@ def csp_event_precedence_and_cascades(context: RefinerContext):
     symptoms.discard_seq(cascade_targets)
 
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
+        for _node, group in my_bad_nodes.symptom_groups():
             node_cascade_targets = [
                 symptom
-                for symptom in node_group.symptoms()
+                for symptom in group.symptoms()
                 if symptom == _SYSTEM_POWERING_DOWN or "pyxis" in symptom.casefold()
             ]
-            node_group.attributions.discard_seq(node_cascade_targets)
+            group.discard_seq(node_cascade_targets)
 
 
 @singlehooks.CancelledByCleanup.set_default
@@ -1451,8 +1457,8 @@ def multicast_nv_err_suppression(context: RefinerContext):
     logger.info(f"Discarding syslog symptom due to applog multicast skip marker: {MULTICAST_RESOURCE_SYMPTOM}")
     symptoms.discard(MULTICAST_RESOURCE_SYMPTOM)
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
-            node_group.attributions.discard(MULTICAST_RESOURCE_SYMPTOM)
+        for _node, group in my_bad_nodes.symptom_groups():
+            group.discard(MULTICAST_RESOURCE_SYMPTOM)
 
 
 @singlehooks.WatchdogCancellationOverride.set_default
@@ -1606,10 +1612,11 @@ def ib_symptom_cleanup(context: RefinerContext):
     elif "link down(east-west)" in symptoms:
         _handle_link_down_time_proximity(symptoms, my_bad_nodes, es)
 
-    # Per-node: non-IB root cause → discard cascaded IB/EFA on that node
+    # Per-node: non-IB root cause → discard cascaded IB/EFA on that node. The
+    # job-level set counts as a group: an unlabelled applog line that names the
+    # root cause is still the root cause.
     substrings = [p.strip("%") for p in _NON_IB_ROOT_CAUSE_PATTERNS]
-    for _node, node_group in my_bad_nodes.items():
-        errors = node_group.attributions
+    for _node, errors in my_bad_nodes.symptom_groups():
         found_root_cause = False
         for err in list(errors.symptoms()):
             for substr in substrings:
@@ -1671,11 +1678,13 @@ def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
     if len(crashed_nodes) == 0:
         return
 
+    # Only a group with a known node can be classed as a peer. Job-level IB
+    # evidence (unlabelled applog) has no known origin, so it is preserved like
+    # the crashed node's own evidence rather than discarded as a peer report.
     discarded: set[str] = set()
-    for node, node_group in my_bad_nodes.items():
-        if node in crashed_nodes:
+    for node, errors in my_bad_nodes.symptom_groups():
+        if node is None or node in crashed_nodes:
             continue
-        errors = node_group.attributions
         if not any(_is_ib_error_12(symptom) for symptom in errors.symptoms()):
             continue
         before = set(errors.symptoms())
@@ -1685,9 +1694,7 @@ def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
     if len(discarded) == 0:
         return
 
-    surviving = {
-        symptom for _node, node_group in my_bad_nodes.items() for symptom in node_group.attributions.symptoms()
-    }
+    surviving = {symptom for _node, errors in my_bad_nodes.symptom_groups() for symptom in errors.symptoms()}
     for symptom in discarded - surviving:
         symptoms.discard(symptom)
 
@@ -1712,9 +1719,9 @@ def watchdog_gpu_cascade_cleanup(context: RefinerContext):
     for symptom in watchdog_cascade_symptoms:
         symptoms.discard(symptom)
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
+        for _node, group in my_bad_nodes.symptom_groups():
             for symptom in watchdog_cascade_symptoms:
-                node_group.attributions.discard(symptom)
+                group.discard(symptom)
 
 
 # Post-IB cascading rules
@@ -1861,8 +1868,8 @@ def python_bug_xid_cleanup(context: RefinerContext):
         symptoms.discard("Python bug")
         # Also clean up "Python bug" from bad_nodes
         if my_bad_nodes is not None:
-            for node in my_bad_nodes.attributions:
-                my_bad_nodes.attributions[node].attributions.discard("Python bug")
+            for _node, group in my_bad_nodes.symptom_groups():
+                group.discard("Python bug")
 
 
 # Node failure / NFS cleanup
@@ -1893,9 +1900,9 @@ def node_failure_nfs_cleanup(context: RefinerContext):
     # An NFS not responding failure is recoverable, but if we also see a SLURM node failure it's
     # likely the NFS server was the root cause of the node failure.
     if "Node failure reported by slurm" in symptoms and my_bad_nodes is not None:
-        for node, node_attrs in my_bad_nodes.attributions.items():
-            if "nfs not responding" in node_attrs.attributions:
-                nfs_source = node_attrs.attributions["nfs not responding"].one_source()
+        for _node, group in my_bad_nodes.symptom_groups():
+            if "nfs not responding" in group:
+                nfs_source = group["nfs not responding"].one_source()
                 symptoms.add(SourceSet.new_one("nfs server failure", nfs_source))
                 symptoms.discard("nfs not responding")
                 symptoms.discard("Node failure reported by slurm")
