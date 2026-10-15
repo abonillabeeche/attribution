@@ -778,7 +778,7 @@ class TestPoisonedGspOutcome:
         assert outcome.root_cause_symptom.startswith(f"XID-{xid}-")
 
     @pytest.mark.parametrize("indices", [(0,), (1,), (2,), (0, 1), (0, 2), (1, 2)])
-    def test_incomplete_combination_does_not_promote_to_infra_hw(self, request, sys_tst_bldr, job_info, indices):
+    def test_incomplete_combination_does_not_produce_poisoned_gsp(self, request, sys_tst_bldr, job_info, indices):
         attribution = self._attribute(
             request,
             sys_tst_bldr,
@@ -787,7 +787,6 @@ class TestPoisonedGspOutcome:
         )
 
         assert "poisoned gsp" not in attribution.symptoms
-        assert attribution.outcome_attr.value().outcome != "Fail InfraHW"
 
     @pytest.mark.parametrize("other_node_index", [0, 1, 2])
     def test_signals_on_different_nodes_do_not_combine(self, request, sys_tst_bldr, job_info, other_node_index):

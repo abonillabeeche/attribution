@@ -924,12 +924,18 @@ outcome_symptom(
     hw_cause="Driver bug",
 )
 
+# The driver returns this after a prior GPU fault left the GPU awaiting reset, so
+# later NVLink queries against that GPU fail as a consequence. Fallback prefix so
+# file-suffixed variants (e.g. "NV_ERR_RESET_REQUIRED p2p_api.c") resolve here for cascades.
+# Own tier so other NV_ERR_* codes from the same GPU cannot win the sorted tie in MEDIUM_SW.
 outcome_symptom(
     "NV_ERR_RESET_REQUIRED",
-    outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_RESET_REQUIRED,
     doc="gpu-reset-required",
-    hw_cause="Driver bug",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Failed to collect nvlink status info", "Failed to update Rx Detect Link mask!"),
+    fallback_prefix=True,
 )
 
 outcome_symptom(

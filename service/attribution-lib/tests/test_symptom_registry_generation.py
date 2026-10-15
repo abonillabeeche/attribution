@@ -278,7 +278,6 @@ def test_wandb_error_yields_to_stronger_infrastructure_symptom_in_any_order():
     ("code", "symptom"),
     [
         ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
-        ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
         ("NV_ERR_BUFFER_TOO_SMALL", "NV_ERR_BUFFER_TOO_SMALL journal.c"),
         ("NV_ERR_INVALID_OBJECT", "NV_ERR_INVALID_OBJECT mem_multicast_fabric.c"),
         ("NV_ERR_TIMEOUT", "NV_ERR_TIMEOUT nv_gpu_ops.c"),
@@ -617,6 +616,7 @@ def test_generated_registry_resolves_all_declared_fallback_families():
     dynamic_to_prefix = {
         "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0": "XID-",
         "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c": "NV_ERR_",
+        "NV_ERR_RESET_REQUIRED p2p_api.c": "NV_ERR_RESET_REQUIRED",
         "cudaErrorSomethingDynamic": "cudaError",
         "RuntimeError: dynamic message": "RuntimeError",
         "IB Error-99 something": "IB Error-",
