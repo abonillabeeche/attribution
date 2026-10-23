@@ -1205,28 +1205,33 @@ class TestIBSymptomCleanup:
     "classification",
     [None, "InfraHW", "InfraSW", "MultiCategory", "Undetermined"],
 )
-def test_kernel_panic_precedes_xid145(stream, obs_ctx, xid_node, classification):
-    """Select kernel panic while preserving same-node or peer XID evidence.
+@pytest.mark.parametrize(
+    "kernel_crash",
+    ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"],
+)
+def test_kernel_crash_precedes_xid145(stream, obs_ctx, xid_node, classification, kernel_crash):
+    """Select a kernel crash while preserving same-node or peer XID evidence.
 
     Args:
         stream: Event stream used by refiners.
         obs_ctx: Synthetic evidence context.
         xid_node: Node reporting the XID.
         classification: Optional XID-145 classification marker.
+        kernel_crash: Kernel crash symptom on node01.
     """
     xid = "XID-145-RLW_RXPIPE-8"
     xid_symptoms = [xid]
     if classification is not None:
         xid_symptoms.append(f"XID-145-{classification}")
-    node_symptoms = {"node01": ["kernel panic"]}
+    node_symptoms = {"node01": [kernel_crash]}
     node_symptoms.setdefault(xid_node, []).extend(xid_symptoms)
-    symptoms = _make_symptoms(obs_ctx, "kernel panic", *xid_symptoms)
+    symptoms = _make_symptoms(obs_ctx, kernel_crash, *xid_symptoms)
     bad_nodes = _make_bad_nodes(obs_ctx, node_symptoms)
 
     _run(stream, _job_info_with(nodes=["node01", "node02"]), symptoms, bad_nodes)
     outcome = calculate_outcome(symptoms).value()
 
-    assert outcome.root_cause_symptom == "kernel panic"
+    assert outcome.root_cause_symptom == kernel_crash
     assert outcome.outcome == "Fail InfraSW"
     assert xid in symptoms
     assert xid in bad_nodes[xid_node].attributions
@@ -1239,7 +1244,9 @@ class TestKernelCrashIbCascadeCleanup:
     def two_node_job(self):
         return _job_info_with(nodes=["node01", "node02"])
 
-    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    @pytest.mark.parametrize(
+        "crash_symptom", ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"]
+    )
     def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
         """Every kernel crash type makes a peer's IB Error-12 a cascade."""
         ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
@@ -1327,17 +1334,6 @@ class TestKernelCrashIbCascadeCleanup:
         assert ib12 in symptoms
         assert ib12 in bad_nodes["node01"].attributions
         assert ib12 not in bad_nodes["node02"].attributions
-
-    def test_soft_lockup_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
-        """A soft lockup is not one of the kernel crash signals."""
-        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
-        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", ib12)
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel soft lockup"], "node02": [ib12]})
-
-        _run(stream, two_node_job, symptoms, bad_nodes)
-
-        assert ib12 in symptoms
-        assert ib12 in bad_nodes["node02"].attributions
 
     def test_peer_without_error_12_is_unchanged(self, stream, obs_ctx, two_node_job):
         """A peer carrying only another IB error does not trigger cleanup."""
