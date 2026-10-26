@@ -365,6 +365,16 @@ class TestSyslogExtractNode:
         [
             ("Mar 15 10:30:45 hostname program[123]: message", "hostname"),
             ("Mar 15 10:30:45 hostname program: message", "hostname"),
+            # rsyslog default file format on SUSE (high-precision RFC 3339), with the printk caller ID.
+            (
+                "2026-10-05T20:22:00.863032+02:00 ampere-1 kernel: [T37810] NVRM: Xid (PCI:0000:01:00): 79, pid=1, name=x",
+                "ampere-1",
+            ),
+            ("2026-10-05T20:22:00Z gpu-01.example.internal systemd[1]: Started unit.", "gpu-01.example.internal"),
+            # journalctl -o short-iso.
+            ("2026-10-05T20:22:00+0200 gpu-01 kernel: NVRM: Xid (PCI:0000:01:00): 48,", "gpu-01"),
+            # RFC 5424 header.
+            ("<34>1 2026-10-05T20:22:00.003Z gpu-01 kernel: message", "gpu-01"),
         ],
     )
     def test_valid_syslog_formats(self, log_line, expected_hostname):
@@ -376,6 +386,8 @@ class TestSyslogExtractNode:
         [
             "This is not a syslog message",
             "",
+            # A bare date carries no time of day and does not start a syslog record.
+            "2026-10-05 gpu-01 kernel: message",
         ],
     )
     def test_invalid_formats_return_none(self, log_line):

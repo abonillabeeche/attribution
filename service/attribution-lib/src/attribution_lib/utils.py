@@ -211,11 +211,17 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     return node, rank
 
 
+# Accepts the RFC 3164 prefix ("Mar 15 10:30:45"), an RFC 3339 / ISO 8601 prefix
+# ("2026-10-05T20:22:00.863032+02:00", rsyslog's default file format on SUSE and
+# `journalctl -o short-iso`), and the RFC 5424 header ("<34>1 2026-10-05T20:22:00Z").
 SYSLOG_PATTERN = re.compile(  # this pattern came from ADI code
+    r"(?:<\d{1,3}>\d+\s+)?"
     r"(?P<datetime>"
     r"(?P<month>\w{3})\s+"
     r"(?P<day>\d{1,2})\s+"
     r"(?P<time>\d{2}:\d{2}:\d{2})"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
     r")\s+"
     r"(?P<hostname>[\w.-]+)\s+"
     r"(?P<program>[\w()./-]+)(\[(?P<pid>\d+)\])?:\s+"

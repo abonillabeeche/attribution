@@ -477,6 +477,12 @@ class TestSyslogFallbacks:
                 id="declares_two_nodes",
             ),
             pytest.param("AllJobResources", LINE_NAMING_JOB_NODE, False, id="declares_all_job_resources"),
+            pytest.param(
+                None,
+                f"2024-01-05T06:59:25.863032+00:00 {JOB_NODE} kernel: [T37810] RFC 3339 line naming a job node",
+                True,
+                id="rfc3339_line_names_a_job_node",
+            ),
             pytest.param(None, LINE_NAMING_JOB_NODE, True, id="line_names_a_job_node"),
             pytest.param(None, "Jan  5 06:59:25 kernel: no hostname field on this line", False, id="no_node_anywhere"),
         ],
