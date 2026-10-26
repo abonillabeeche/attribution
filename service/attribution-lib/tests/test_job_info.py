@@ -26,6 +26,7 @@ from attribution_lib.job_info import (
     UnknownNodeError,
     _coerce_optional_int,
     _coerce_tags,
+    _qualified_nodes_by_short_name,
     normalize_scheduler_identity,
 )
 
@@ -72,11 +73,21 @@ class TestJobInfo:
         assert job_info.verify_node("GPU-01") == "gpu-01.example.internal"
         assert job_info.syslog_extract_node(line) == "gpu-02.example.internal"
 
-    def test_verify_node_matches_fully_qualified_names_across_domains(self, simple_job_factory):
-        """A log FQDN in another domain maps to the allocation entry with the same short name."""
+    def test_verify_node_rejects_fully_qualified_name_in_another_domain(self, simple_job_factory):
+        """A log FQDN never maps to an allocation entry in a different domain."""
         job_info = simple_job_factory(nodes=["gpu-01.cluster.local"])
 
-        assert job_info.verify_node("gpu-01.example.internal") == "gpu-01.cluster.local"
+        with pytest.raises(UnknownNodeError):
+            job_info.verify_node("gpu-01.example.internal")
+
+    def test_verify_node_reuses_short_name_index_per_allocation(self, simple_job_factory):
+        """The short-name lookup is built once per allocation, not on every call."""
+        job_info = simple_job_factory(nodes=["gpu-01.example.internal", "gpu-02.example.internal"])
+        _qualified_nodes_by_short_name.cache_clear()
+
+        assert job_info.verify_node("gpu-01") == "gpu-01.example.internal"
+        assert job_info.verify_node("gpu-02") == "gpu-02.example.internal"
+        assert _qualified_nodes_by_short_name.cache_info().misses == 1
 
     def test_verify_node_raises_for_ambiguous_short_name(self, simple_job_factory):
         """A short name shared by two allocated FQDNs is not guessed."""
